@@ -1,0 +1,26 @@
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Coverage
+*.cover
+coverage.out
+coverage.txt
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Synced corpus snapshot (follow-up: offline snapshot + drift guard)
+conformance/corpus/
