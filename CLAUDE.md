@@ -42,7 +42,7 @@ Fuaran-UI sub-estate `CLAUDE.md` (`../CLAUDE.md`). Read those first.
 
 ## Language baseline
 
-Go **1.24+** (pinned in `go.mod` — the Go analogue of the workspace's F#-10 /
+Go **1.26+** (pinned in `go.mod` — the Go analogue of the workspace's F#-10 /
 .NET-10 pinning; the `fuaran-ts` / `fuaran-py` siblings pin their own runtimes the
 same way). Model the language's closed DUs (`NodeKind`, `Spec`, `TreeOp`,
 `Binding`, `Action`, …) as an **interface + one struct per `$type` case** — the
