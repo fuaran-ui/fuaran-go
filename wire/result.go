@@ -1,6 +1,7 @@
-// Package wire is the canonical Node / TreeOp codec surface of the fuaran-go
-// host. Stage-0 bootstrap: the error envelope is defined; the decode/encode
-// bodies are the roadmap floor.
+// Package wire is the canonical Node / TreeOp codec of the fuaran-go host:
+// DecodeNode / EncodeNode / DecodeOp / EncodeOp over the structural typed
+// model, byte-identical to the shared conformance corpus on round-trip and
+// surfacing the six canonical DecodeError codes for malformed input.
 package wire
 
 import "fmt"
@@ -21,11 +22,13 @@ const (
 
 // DecodeError is the structured, recoverable error a decode returns. Path is the
 // $-rooted location of the fault (e.g. "$.kind.text"); the reject corpus asserts
-// the Code plus a Path prefix.
+// the Code plus a Path prefix. ExpectedShape is an optional hint enumerating the
+// valid cases when a discriminator or bare-string enum is at fault.
 type DecodeError struct {
-	Code    DecodeErrorCode
-	Path    string
-	Message string
+	Code          DecodeErrorCode
+	Path          string
+	Message       string
+	ExpectedShape string
 }
 
 func (e *DecodeError) Error() string {

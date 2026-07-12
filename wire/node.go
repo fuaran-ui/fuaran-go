@@ -1,31 +1,29 @@
 package wire
 
-import "errors"
-
-// errNotImplemented marks the codec surface the stage-0 bootstrap declares but
-// has not yet built. The node/op codec is the roadmap "floor" tier; see CLAUDE.md
-// and the fuaran roadmap fuaran-go bootstrap phase.
-var errNotImplemented = errors.New("fuaran-go: not implemented (stage-0 bootstrap; codec is roadmap floor work)")
-
-// Node is the typed UI tree node. The stage-0 bootstrap carries only the stable
-// identity field; the closed per-kind model lands with the codec.
-//
-// NodeKind (the closed $type discriminator) will be modelled as an interface plus
-// one struct per case — the TS/Python-proven shape for a language without sum
-// types. Exhaustiveness is not enforced by the compiler here; the conformance
-// corpus and an exhaustiveness linter are the safety net (see CLAUDE.md).
+// Node is the decoded UI-node envelope (WIRE_FORMAT.md §3.1): the required
+// non-empty ID and "$type"-discriminated Kind, plus the validated optional
+// sections ("state" / "style" / "accessibility") in Extras. The wire-omitted
+// fields of §9 (motion, extra attributes) have no representation here — a
+// conformant host never reads or writes them on the wire.
 type Node struct {
-	ID string
-	// Kind NodeKind — not yet defined.
+	ID     string
+	Kind   Obj
+	Extras map[string]Value
 }
 
-// DecodeNode decodes canonical wire JSON into a Node. Stub — see errNotImplemented.
-func DecodeNode(canonicalJSON string) (Node, error) {
-	return Node{}, errNotImplemented
+func (Node) isValue() {}
+
+// DecodeNode decodes a canonical-wire Node document. Malformed input returns a
+// *DecodeError carrying one of the six canonical codes and a "$"-rooted path —
+// a structured, recoverable result, never a panic (WIRE_FORMAT.md §6).
+func DecodeNode(canonicalJSON string) (node Node, err error) {
+	defer recoverDecode(&err)
+	raw := parseJSON(canonicalJSON)
+	return decodeNodeValue(raw, "$"), nil
 }
 
-// EncodeNode re-encodes a Node to canonical wire JSON, byte-identical to the
-// shared corpus. Stub — see errNotImplemented.
+// EncodeNode re-encodes a decoded Node to canonical wire JSON, byte-identical
+// to the shared corpus (encode(decode(x)) == x for every canonical document x).
 func EncodeNode(n Node) (string, error) {
-	return "", errNotImplemented
+	return encodeValue(n)
 }
