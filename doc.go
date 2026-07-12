@@ -8,10 +8,12 @@
 // (WIRE_FORMAT.md) and certified against the shared conformance corpus. See
 // README.md and CLAUDE.md.
 //
-// Status: stage-0 bootstrap. The canonical number formatter (the canonical
-// package) is the first shipped brick; the node/op codec, apply engine, and
-// validator are roadmap work (the "floor" tier). Nothing here claims a working
-// codec yet.
+// Status: the codec floor is shipped. The wire package decodes and encodes
+// Node and TreeOp documents byte-identically to the shared conformance corpus
+// (every node/op round-trip fixture) and surfaces the six canonical decode
+// error codes with $-rooted paths (every reject fixture). The lenient-accept
+// normalisation tier, tree-op apply engine, validator, and server-side
+// emission are roadmap work.
 package fuarango
 
 // Version is the pre-release version of the fuaran-go host.

@@ -5,9 +5,11 @@ to the F# (`Fuaran.UI`), TypeScript (`@fuaran-ui/*`), and Python (`fuaran_py`)
 tiers**. Its identity is a **headless host and driver**: the canonical-JSON codec,
 a tree-op apply engine, a pre-emit validator, and server-side emission
 (static-HTML + partial-hydration + server-driven), all conformant to the shared
-wire format. What ships **today** is the floor's first brick — the canonical
-number formatter plus the corpus harness wiring; the codec, apply engine,
-validator, and server emission are roadmap work.
+wire format. What ships **today** is the codec floor — the canonical
+codec (`DecodeNode` / `EncodeNode` / `DecodeOp` / `EncodeOp`), certified
+byte-identical against the shared corpus round-trip + reject families; the
+lenient-accept tier, apply engine, validator, and server emission are roadmap
+work.
 
 **Framing — load-bearing, do not regress.** The emission surface is the
 **canonical JSON wire format, for every host**. The language tiers are
@@ -56,9 +58,9 @@ F# host — a discipline cost, not a blocker).
 ```
 fuaran-go/
 ├── doc.go                # package doc + Version
-├── canonical/            # canonical-JSON primitives — float.go (number form) shipped; key sort + escaping = floor
-├── wire/                 # Node / TreeOp codec surface + DecodeError six-code envelope (bodies = floor)
-├── conformance/          # shared-corpus certification harness (smoke leg shipped)
+├── canonical/            # canonical-JSON primitives — number form (float.go) + string escaping (escape.go)
+├── wire/                 # Node / TreeOp codec: structural model + canonical encoder + decoders + DecodeError envelope
+├── conformance/          # shared-corpus certification: round-trip + reject + exhaustiveness legs
 ├── go.mod
 ├── run.ps1               # Stage-0 entry point — gofmt check + go vet + go build + go test
 ├── LICENSE               # Apache 2.0 + Diametrical Ltd copyright
@@ -93,12 +95,23 @@ coupling rule** (`WIRE_FORMAT.md` §11) means a new `NodeKind` / `Spec` / `TreeO
 / `Binding` / `Action` case must move every host in one change — `fuaran-go` is now
 one of those hosts.
 
-### Conformance coverage (stage-0 bootstrap)
+### Conformance coverage (codec floor)
 
-Shipped: the canonical number formatter (`canonical.FormatFiniteDouble`, pinned to
-the corpus `metric-float-*` divergence-zone vectors) and the corpus harness wiring
-(`conformance` locates `../wire-format-fixtures/` and skips when absent). The
-node/op round-trip + reject legs land with the codec floor.
+The codec runs the corpus **round-trip + reject families green**: every
+`node-round-trip` / `op-round-trip` fixture re-encodes byte-identically, and
+every `reject` fixture fails with the canonical code + `$`-rooted path prefix
+(fixture counts drift as the corpus grows — `../wire-format-fixtures/manifest.json`
+is the authoritative enumeration). The decoder is the strict canonical tier
+plus the legacy container decode-upgrades (`Stack` / `GridLayout` / `Dashboard`
+/ `Card` → `Box`; `Table` → static `DataGrid`) the reject contract exercises;
+typed field-level validation covers the common kinds, and
+recognised-but-not-yet-typed kinds decode structurally (still byte-exact on
+round-trip). The **exhaustiveness guard** (`conformance.TestDiscriminatorExhaustiveness`)
+is the no-compile-time-totality mitigation: it walks the corpus and fails
+naming any kind/op discriminator the decoder tables do not recognise. The
+`lenient-accept`, envelope, and elicitation families land with their own
+roadmap tiers (`conformance` locates `../wire-format-fixtures/` and skips when
+absent).
 
 ## Interactivity — server-friendly delivery for a headless host
 
