@@ -64,6 +64,9 @@ func referenceRendererFiles(corpus string) []string {
 		filepath.Join(estate, "fuaran", "src", "Fuaran.UI.Renderer.Server", "Render.fs"),
 		filepath.Join(estate, "fuaran", "src", "Fuaran.UI.Renderer", "Render.fs"),
 		filepath.Join(estate, "fuaran", "src", "Fuaran.UI.Renderer.Core", "Theme.fs"),
+		// The canonical inline-SVG builder — the source of the fuaran-drawing*
+		// class vocabulary (both F# renderers call into it).
+		filepath.Join(estate, "fuaran", "src", "Fuaran.UI.Renderer.Core", "DrawingSvg.fs"),
 	}
 }
 

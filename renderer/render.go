@@ -207,6 +207,8 @@ func (r *renderer) renderKind(node wire.Node) string {
 		return r.codeBlock(fields)
 	case "Math":
 		return r.math(fields)
+	case "Drawing":
+		return r.drawing(fields)
 	case "Button":
 		return r.button(fields)
 	case "Select":

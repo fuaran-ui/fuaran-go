@@ -311,6 +311,12 @@ var (
 	boxRoleCases           = newCaseSet("Group", "Card", "Dashboard", "Separator")
 	boxLayoutCases         = newCaseSet("Flex", "Grid", "Auto")
 	channelDirectionCases  = newCaseSet("OutOnly", "TwoWay")
+	textAnchorCases        = newCaseSet("Start", "Middle", "End")
+
+	// Drawing (Phase 524) — the closed Shape / CurveCommand DUs. An unrecognised
+	// discriminator is UNKNOWN_DU_CASE (the typed-surface default-deny).
+	shapeCases        = newCaseSet("Group", "Rectangle", "Line", "Polyline", "Polygon", "Curve", "Circle", "Ellipse", "Label")
+	curveCommandCases = newCaseSet("MoveTo", "LineTo", "CubicTo", "QuadraticTo", "Close")
 
 	textSourceCases = newCaseSet("Literal", "Bound", "I18n")
 	// The binding vocabulary includes the compute-layer cases (Transform / Data /
@@ -340,7 +346,7 @@ var knownKinds = newCaseSet(
 	"Dashboard", "Stack", "GridLayout", "Card", "Table",
 	// Display
 	"Heading", "Markdown", "Metric", "Badge", "Sparkline", "Callout", "Progress", "Skeleton",
-	"LabelValueRow", "Link", "Image", "List", "Toast", "CodeBlock", "Math",
+	"LabelValueRow", "Link", "Image", "List", "Toast", "CodeBlock", "Math", "Drawing",
 	// Input
 	"Form", "Button", "FileUpload", "Select", "Filters",
 	// Visualisation
@@ -623,6 +629,177 @@ func decodeIntArray(raw any, path string) Value {
 	return out
 }
 
+// ── Drawing (Phase 524) — closed Shape / CurveCommand DUs ───────────────────
+//
+// Geometry is static numbers (a Drawing is a resolved artefact); only DrawStyle
+// carries Bindings. The Shape and CurveCommand DUs are closed + typed — an
+// unrecognised discriminator is UNKNOWN_DU_CASE (the typed-surface default-deny).
+// Array positions use [i] bracket paths to match the reference reject paths
+// ($.kind.shapes[0].$type / $.kind.shapes[0].commands[0].$type).
+
+func decodeViewBox(raw any, path string) Value {
+	obj := expectObject(raw, path)
+	return Obj{Fields: map[string]Value{
+		"height": expectNumber(require(obj, "height", path), path+".height"),
+		"minX":   expectNumber(require(obj, "minX", path), path+".minX"),
+		"minY":   expectNumber(require(obj, "minY", path), path+".minY"),
+		"width":  expectNumber(require(obj, "width", path), path+".width"),
+	}}
+}
+
+func decodeDrawPoint(raw any, path string) Value {
+	obj := expectObject(raw, path)
+	return Obj{Fields: map[string]Value{
+		"x": expectNumber(require(obj, "x", path), path+".x"),
+		"y": expectNumber(require(obj, "y", path), path+".y"),
+	}}
+}
+
+func decodeDrawPointArray(raw any, path string) Value {
+	arr := expectArray(raw, path)
+	out := make(Arr, len(arr))
+	for i, item := range arr {
+		out[i] = decodeDrawPoint(item, path+"["+strconv.Itoa(i)+"]")
+	}
+	return out
+}
+
+// decodeDrawStyle — every field optional, emitted only when present (byte-exact
+// {} for an unstyled shape). fill/opacity/stroke/strokeWidth are Bindings; the
+// text-only fields (Label) are bare enum / number / string.
+func decodeDrawStyle(raw any, path string) Value {
+	obj := expectObject(raw, path)
+	fields := map[string]Value{}
+	for _, key := range []string{"fill", "opacity", "stroke", "strokeWidth"} {
+		if v, ok := obj[key]; ok {
+			fields[key] = decodeBinding(v, path+"."+key)
+		}
+	}
+	if v, ok := obj["textAnchor"]; ok {
+		fields["textAnchor"] = Str(enumStr(v, path+".textAnchor", textAnchorCases, "textAnchor"))
+	}
+	if v, ok := obj["fontSize"]; ok {
+		fields["fontSize"] = expectNumber(v, path+".fontSize")
+	}
+	if v, ok := obj["emphasis"]; ok {
+		fields["emphasis"] = Str(enumStr(v, path+".emphasis", emphasisCases, "emphasis"))
+	}
+	if v, ok := obj["fontFamily"]; ok {
+		fields["fontFamily"] = Str(expectString(v, path+".fontFamily"))
+	}
+	return Obj{Fields: fields}
+}
+
+func decodeCurveCommand(raw any, path string) Value {
+	obj := expectObject(raw, path)
+	tag := dispatch(obj, path, curveCommandCases, CodeUnknownDUCase)
+	switch tag {
+	case "MoveTo", "LineTo":
+		return Obj{Tag: tag, Fields: map[string]Value{
+			"to": decodeDrawPoint(require(obj, "to", path), path+".to"),
+		}}
+	case "CubicTo":
+		return Obj{Tag: tag, Fields: map[string]Value{
+			"control1": decodeDrawPoint(require(obj, "control1", path), path+".control1"),
+			"control2": decodeDrawPoint(require(obj, "control2", path), path+".control2"),
+			"to":       decodeDrawPoint(require(obj, "to", path), path+".to"),
+		}}
+	case "QuadraticTo":
+		return Obj{Tag: tag, Fields: map[string]Value{
+			"control": decodeDrawPoint(require(obj, "control", path), path+".control"),
+			"to":      decodeDrawPoint(require(obj, "to", path), path+".to"),
+		}}
+	default: // Close
+		return Obj{Tag: "Close", Fields: map[string]Value{}}
+	}
+}
+
+func decodeCurveCommandArray(raw any, path string) Value {
+	arr := expectArray(raw, path)
+	out := make(Arr, len(arr))
+	for i, item := range arr {
+		out[i] = decodeCurveCommand(item, path+"["+strconv.Itoa(i)+"]")
+	}
+	return out
+}
+
+func decodeShape(raw any, path string) Value {
+	obj := expectObject(raw, path)
+	tag := dispatch(obj, path, shapeCases, CodeUnknownDUCase)
+	var style Value = Obj{Fields: map[string]Value{}}
+	if v, ok := obj["style"]; ok {
+		style = decodeDrawStyle(v, path+".style")
+	}
+	switch tag {
+	case "Group":
+		return Obj{Tag: tag, Fields: map[string]Value{
+			"children": decodeShapeArray(require(obj, "children", path), path+".children"),
+			"style":    style,
+		}}
+	case "Rectangle":
+		fields := map[string]Value{
+			"height": expectNumber(require(obj, "height", path), path+".height"),
+			"style":  style,
+			"width":  expectNumber(require(obj, "width", path), path+".width"),
+			"x":      expectNumber(require(obj, "x", path), path+".x"),
+			"y":      expectNumber(require(obj, "y", path), path+".y"),
+		}
+		if v, ok := obj["cornerRadius"]; ok {
+			fields["cornerRadius"] = expectNumber(v, path+".cornerRadius")
+		}
+		return Obj{Tag: tag, Fields: fields}
+	case "Line":
+		return Obj{Tag: tag, Fields: map[string]Value{
+			"style": style,
+			"x1":    expectNumber(require(obj, "x1", path), path+".x1"),
+			"x2":    expectNumber(require(obj, "x2", path), path+".x2"),
+			"y1":    expectNumber(require(obj, "y1", path), path+".y1"),
+			"y2":    expectNumber(require(obj, "y2", path), path+".y2"),
+		}}
+	case "Polyline", "Polygon":
+		return Obj{Tag: tag, Fields: map[string]Value{
+			"points": decodeDrawPointArray(require(obj, "points", path), path+".points"),
+			"style":  style,
+		}}
+	case "Curve":
+		return Obj{Tag: tag, Fields: map[string]Value{
+			"commands": decodeCurveCommandArray(require(obj, "commands", path), path+".commands"),
+			"style":    style,
+		}}
+	case "Circle":
+		return Obj{Tag: tag, Fields: map[string]Value{
+			"cx":    expectNumber(require(obj, "cx", path), path+".cx"),
+			"cy":    expectNumber(require(obj, "cy", path), path+".cy"),
+			"r":     expectNumber(require(obj, "r", path), path+".r"),
+			"style": style,
+		}}
+	case "Ellipse":
+		return Obj{Tag: tag, Fields: map[string]Value{
+			"cx":    expectNumber(require(obj, "cx", path), path+".cx"),
+			"cy":    expectNumber(require(obj, "cy", path), path+".cy"),
+			"rx":    expectNumber(require(obj, "rx", path), path+".rx"),
+			"ry":    expectNumber(require(obj, "ry", path), path+".ry"),
+			"style": style,
+		}}
+	default: // Label
+		return Obj{Tag: tag, Fields: map[string]Value{
+			"style": style,
+			"text":  decodeTextSource(require(obj, "text", path), path+".text"),
+			"x":     expectNumber(require(obj, "x", path), path+".x"),
+			"y":     expectNumber(require(obj, "y", path), path+".y"),
+		}}
+	}
+}
+
+func decodeShapeArray(raw any, path string) Value {
+	arr := expectArray(raw, path)
+	out := make(Arr, len(arr))
+	for i, item := range arr {
+		out[i] = decodeShape(item, path+"["+strconv.Itoa(i)+"]")
+	}
+	return out
+}
+
 // ── Per-kind field schemas ──────────────────────────────────────────────────
 
 type fieldDecoder func(raw any, path string) Value
@@ -735,6 +912,15 @@ func init() {
 		"Math": {
 			{"display", true, enumDecoder(mathDisplayCases, "display")},
 			{"source", true, decodeString},
+		},
+		// Phase 524 — geometry static; the closed Shape / CurveCommand DUs
+		// default-deny an unknown discriminator; DrawStyle carries the bindings.
+		"Drawing": {
+			{"description", false, decodeTextSource},
+			{"shapes", true, decodeShapeArray},
+			{"style", true, decodeDrawStyle},
+			{"title", false, decodeTextSource},
+			{"viewBox", true, decodeViewBox},
 		},
 		// The handler fields are OPTIONAL: omitted on the wire when the control is
 		// declarative (an omitted handler arms the renderer's write-back default);
