@@ -12,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -54,6 +55,7 @@ type manifestFixture struct {
 
 type corpusManifest struct {
 	Version  int               `json:"version"`
+	Kinds    []string          `json:"kinds"`
 	Fixtures []manifestFixture `json:"fixtures"`
 }
 
@@ -77,6 +79,49 @@ func loadCorpus(t *testing.T) (string, corpusManifest) {
 		t.Fatal("corpus manifest declares no fixtures")
 	}
 	return corpus, m
+}
+
+// TestNodeKindSetMatchesManifest is the Phase 548 kind-set attestation pin: the
+// go decoder's emittable NodeKind vocabulary (CanonicalNodeKinds) must equal the
+// generated manifest `kinds` enumeration. A vocabulary commit that skips this
+// host fails here with a *named* missing kind ("go decoder lacks Drawing"), so
+// the drift class dies at the host's next test run rather than at a later audit.
+func TestNodeKindSetMatchesManifest(t *testing.T) {
+	_, m := loadCorpus(t)
+	if len(m.Kinds) == 0 {
+		t.Fatal("manifest declares no 'kinds' array — regenerate the corpus with --emit-corpus")
+	}
+
+	manifest := make(map[string]bool, len(m.Kinds))
+	for _, k := range m.Kinds {
+		manifest[k] = true
+	}
+
+	decoder := make(map[string]bool)
+	for _, k := range wire.CanonicalNodeKinds() {
+		decoder[k] = true
+	}
+
+	var missing, extra []string
+	for k := range manifest {
+		if !decoder[k] {
+			missing = append(missing, k)
+		}
+	}
+	for k := range decoder {
+		if !manifest[k] {
+			extra = append(extra, k)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(extra)
+
+	if len(missing) > 0 {
+		t.Errorf("manifest kinds the go decoder lacks (add the decoder arm): %v", missing)
+	}
+	if len(extra) > 0 {
+		t.Errorf("go decoder kinds the manifest omits (regenerate with --emit-corpus): %v", extra)
+	}
 }
 
 // readFixture reads a fixture payload, trimming at most one trailing newline

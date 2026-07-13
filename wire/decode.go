@@ -361,6 +361,26 @@ func KnownNodeKinds() []string {
 	return append([]string(nil), knownKinds.names...)
 }
 
+// CanonicalNodeKinds returns the emittable NodeKind vocabulary — the recognised
+// kinds MINUS the legacy container tags (Dashboard/Stack/GridLayout/Card, which
+// decode-upgrade to Box) and "Table" (decode-upgrades to DataGrid). Those legacy
+// tags never appear as a canonical node's kind.$type, so they are absent from the
+// wire-format-fixtures manifest's `kinds` enumeration — the Phase 548 cross-host
+// kind-set attestation anchor this set is pinned against.
+func CanonicalNodeKinds() []string {
+	out := make([]string, 0, len(knownKinds.names))
+
+	for _, k := range knownKinds.names {
+		if legacyContainerTags[k] || k == "Table" {
+			continue
+		}
+
+		out = append(out, k)
+	}
+
+	return out
+}
+
 // ── Nested-position decoders ────────────────────────────────────────────────
 
 func decodeTextSource(raw any, path string) Value {
