@@ -5,11 +5,11 @@ to the F# (`Fuaran.UI`), TypeScript (`@fuaran-ui/*`), and Python (`fuaran_py`)
 tiers**. Its identity is a **headless host and driver**: the canonical-JSON codec,
 a tree-op apply engine, a pre-emit validator, and server-side emission
 (static-HTML + partial-hydration + server-driven), all conformant to the shared
-wire format. What ships **today** is the codec floor — the canonical
-codec (`DecodeNode` / `EncodeNode` / `DecodeOp` / `EncodeOp`), certified
-byte-identical against the shared corpus round-trip + reject families; the
-lenient-accept tier, apply engine, validator, and server emission are roadmap
-work.
+wire format. What ships **today**: the canonical codec (round-trip +
+reject + lenient-accept certified), the tree-op apply engine (`ops.Apply` /
+`ops.CanApply`), the pre-emit validator, and the server-HTML renderer with
+islands partial-hydration emission (class-vocabulary + reference-CSS + markdown
+corpus parity-locked); the server-driven driver is roadmap work.
 
 **Framing — load-bearing, do not regress.** The emission surface is the
 **canonical JSON wire format, for every host**. The language tiers are
@@ -60,7 +60,10 @@ fuaran-go/
 ├── doc.go                # package doc + Version
 ├── canonical/            # canonical-JSON primitives — number form (float.go) + string escaping (escape.go)
 ├── wire/                 # Node / TreeOp codec: structural model + canonical encoder + decoders + DecodeError envelope
-├── conformance/          # shared-corpus certification: round-trip + reject + exhaustiveness legs
+├── ops/                  # tree-op apply engine — Apply / CanApply, typed ApplyError, §3.4 nested paths
+├── validator/            # pre-emit default-deny structural validator (shared codes + $-rooted paths)
+├── renderer/             # server-HTML + GFM markdown + sanitiser + islands emission + reference-CSS byte-copy
+├── conformance/          # shared-corpus certification: all fixture legs + parity locks
 ├── go.mod
 ├── run.ps1               # Stage-0 entry point — gofmt check + go vet + go build + go test
 ├── LICENSE               # Apache 2.0 + Diametrical Ltd copyright
@@ -95,23 +98,28 @@ coupling rule** (`WIRE_FORMAT.md` §11) means a new `NodeKind` / `Spec` / `TreeO
 / `Binding` / `Action` case must move every host in one change — `fuaran-go` is now
 one of those hosts.
 
-### Conformance coverage (codec floor)
+### Conformance coverage
 
-The codec runs the corpus **round-trip + reject families green**: every
-`node-round-trip` / `op-round-trip` fixture re-encodes byte-identically, and
-every `reject` fixture fails with the canonical code + `$`-rooted path prefix
-(fixture counts drift as the corpus grows — `../wire-format-fixtures/manifest.json`
-is the authoritative enumeration). The decoder is the strict canonical tier
-plus the legacy container decode-upgrades (`Stack` / `GridLayout` / `Dashboard`
-/ `Card` → `Box`; `Table` → static `DataGrid`) the reject contract exercises;
-typed field-level validation covers the common kinds, and
+The codec runs the corpus **round-trip + reject + lenient-accept families
+green**: every `node-round-trip` / `op-round-trip` fixture re-encodes
+byte-identically, every `reject` fixture fails with the canonical code +
+`$`-rooted path prefix, and every `lenient-accept` shorthand (bare-string
+TextSource, legacy container tags, the pre-typed opaque/null Static forms)
+normalises to its verbose canonical bytes (fixture counts drift as the corpus
+grows — `../wire-format-fixtures/manifest.json` is the authoritative
+enumeration). Typed field-level validation covers the common kinds;
 recognised-but-not-yet-typed kinds decode structurally (still byte-exact on
 round-trip). The **exhaustiveness guard** (`conformance.TestDiscriminatorExhaustiveness`)
 is the no-compile-time-totality mitigation: it walks the corpus and fails
-naming any kind/op discriminator the decoder tables do not recognise. The
-`lenient-accept`, envelope, and elicitation families land with their own
-roadmap tiers (`conformance` locates `../wire-format-fixtures/` and skips when
-absent).
+naming any kind/op discriminator the decoder tables do not recognise. Beyond
+the wire families, the conformance package also runs the **apply-envelope**
+leg (corpus op fixtures folded over base trees + the canApply ≡ apply-success
+law), the **markdown corpus** (`markdown/corpus.json`, byte-pinned), and the
+**renderer parity locks** (emitted class vocabulary ⊆ the reference renderer
+source; the shipped reference CSS byte-equal to the canonical artefact — both
+skip on a standalone checkout). The envelope and elicitation families land
+with their own roadmap tiers (`conformance` locates `../wire-format-fixtures/`
+and skips when absent).
 
 ## Interactivity — server-friendly delivery for a headless host
 

@@ -28,7 +28,7 @@ Two server-friendly delivery modes fit a Go host especially well:
 In both, Go stays runtime-free on rendering: it produces and drives; the browser
 paints.
 
-## Status — codec floor shipped
+## Status — codec + apply + validator + renderer shipped
 
 Shipped:
 
@@ -38,17 +38,31 @@ Shipped:
 - **`wire`** — the Node / TreeOp codec: `DecodeNode` / `EncodeNode` /
   `DecodeOp` / `EncodeOp` over a structural typed model with per-kind typed
   field schemas, a hand-written canonical encoder (Ordinal key sort, canonical
-  number layout — never `encoding/json`), and the six-code decode-error
-  envelope with `$`-rooted paths.
-- **`conformance`** — the corpus certification legs: every node and TreeOp
-  round-trip fixture re-encodes **byte-identically**, every reject fixture
-  fails with the canonical code + path prefix, and a corpus-driven
-  exhaustiveness guard names any discriminator the decoder does not recognise
-  (the mitigation for Go's lack of compile-time totality over closed `$type`
-  vocabularies). The harness skips cleanly when the repo is checked out alone.
+  number layout — never `encoding/json`), the six-code decode-error envelope
+  with `$`-rooted paths, the §16 lenient AI-ingest shorthands, and the legacy
+  container decode-upgrades.
+- **`ops`** — the tree-op apply engine: `Apply(op, tree)` over the full 11-op
+  algebra with typed, recoverable `ApplyError`s (never a panic), the §3.4
+  nested `UpdateProp` path surface, and the `CanApply` dry-run
+  (canApply ≡ apply success by construction).
+- **`validator`** — the pre-emit, default-deny-by-shape structural validator:
+  empty/duplicate ids, unrecognised kinds, missing wire-required slots, and
+  the bounded-primitive advisory, with structured findings at `$`-rooted paths.
+- **`renderer`** — the headless server-HTML renderer: a body-fragment HTML
+  walk emitting the reference `fuaran-*` class vocabulary (parity-locked to
+  the reference renderer, styled by the byte-copied reference CSS), the
+  deterministic GFM markdown renderer (byte-pinned by the shared markdown
+  corpus), the URL/markdown sanitiser floor, and **islands partial-hydration
+  emission** (`RenderWithIslands`: per-island boundary wrappers + scoped
+  hydrate payloads; zero islands ⇒ byte-identical to a plain render).
+- **`conformance`** — the corpus certification legs: node/op round-trips
+  byte-identical, rejects with the canonical code + path prefix,
+  lenient-accept normalisation, apply-envelope conformance, the markdown
+  corpus, class-vocabulary + reference-CSS parity, and the corpus-driven
+  discriminator exhaustiveness guard. The harness skips cleanly when the repo
+  is checked out alone.
 
-The lenient-accept normalisation tier, tree-op apply engine, validator, and
-server-HTML / hydration emission are roadmap work.
+The server-driven driver (the second interactivity tier) is roadmap work.
 
 ## Layout
 
@@ -58,7 +72,10 @@ fuaran-go/
 ├── doc.go             # package doc + Version
 ├── canonical/         # canonical-JSON primitives — number form + string escaping
 ├── wire/              # Node / TreeOp codec + structural model + DecodeError envelope
-├── conformance/       # shared-corpus certification: round-trip + reject + exhaustiveness legs
+├── ops/               # tree-op apply engine — Apply / CanApply + typed ApplyError
+├── validator/         # pre-emit default-deny structural validator
+├── renderer/          # server-HTML + markdown + sanitiser + islands emission + reference CSS
+├── conformance/       # shared-corpus certification: all fixture legs + parity locks
 ├── run.ps1            # gofmt check -> go vet -> go build -> go test
 ├── LICENSE            # Apache-2.0
 ├── README.md
