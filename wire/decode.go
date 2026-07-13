@@ -17,10 +17,14 @@ import (
 // typed validation is filled in incrementally. An unrecognised kind is a
 // WRONG_NODE_KIND.
 //
-// The §16 lenient AI-ingest shorthands (bare-string TextSource) and the §5
-// legacy Static-payload normalisations land with the lenient-accept
-// conformance leg; the decoder here is the strict canonical tier plus the
-// legacy container decode-upgrades the reject contract already exercises.
+// The decoder also implements the two normative decode-only tolerance tiers:
+// the §16 lenient AI-ingest shorthand (a bare JSON string in any TextSource
+// position IS TextSource.Literal) and the §5 legacy Static-payload read-compat
+// (a typed Static position still accepts the pre-typed "<opaque>" sentinel and
+// boxes-to-null forms, normalising each to its typed shape on re-encode). Both
+// are pinned by the corpus lenient-accept family; the legacy container
+// decode-upgrades (Stack / GridLayout / Dashboard / Card → Box, Table →
+// DataGrid) are pinned by the same family plus the reject contract.
 
 // opaqueSentinel is the reserved §5 marker for a Binding.Static payload the
 // encoder could not decompose; closureSentinel is the §4 marker for a
@@ -354,6 +358,13 @@ func KnownNodeKinds() []string {
 // ── Nested-position decoders ────────────────────────────────────────────────
 
 func decodeTextSource(raw any, path string) Value {
+	// §16.1 lenient shorthand (normative — a conformant decoder MUST accept):
+	// a bare JSON string in any TextSource position IS TextSource.Literal. It
+	// decodes to exactly the value the verbose form denotes and re-encodes to
+	// the verbose canonical bytes (the corpus lenient-accept family pins this).
+	if s, ok := raw.(string); ok {
+		return Obj{Tag: "Literal", Fields: map[string]Value{"text": Str(s)}}
+	}
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, textSourceCases, CodeUnknownDUCase)
 	switch tag {
@@ -387,11 +398,13 @@ func decodeBinding(raw any, path string) Value {
 // typedStaticBinding decodes a Binding whose Static payload is one of the §5
 // typed positions (a SelectOption list, a scalar string option, a string list,
 // a float series, a marker list). The two legacy payload forms such a position
-// may still carry — the "<opaque>" sentinel and the boxes-to-null empty — pass
-// through structurally here; their normalisation to the typed form is the
-// lenient-accept tier. Every other binding case passes through structurally
+// may still carry — the pre-typed "<opaque>" sentinel and the boxes-to-null
+// empty — NORMALISE per position (read-compat, indefinite): onOpaque / onNull
+// are the §5-pinned replacement values, so a legacy input re-encodes in the
+// typed form (the corpus lenient-opaque-static-* / lenient-null-static-*
+// fixtures pin each). Every other binding case passes through structurally
 // with a validated discriminator, exactly as decodeBinding.
-func typedStaticBinding(raw any, path string, onTyped func(any, string) Value) Value {
+func typedStaticBinding(raw any, path string, onTyped func(any, string) Value, onOpaque, onNull Value) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, bindingCases, CodeUnknownDUCase)
 	if tag != "Static" {
@@ -402,9 +415,12 @@ func typedStaticBinding(raw any, path string, onTyped func(any, string) Value) V
 		fail(CodeMissingField, path+".value", "Static binding missing value")
 	}
 	var payload Value
-	if s, isStr := v.(string); v == nil || (isStr && s == opaqueSentinel) {
-		payload = fromJSON(v)
-	} else {
+	switch {
+	case v == nil:
+		payload = onNull
+	case v == any(opaqueSentinel):
+		payload = onOpaque
+	default:
 		payload = onTyped(v, path+".value")
 	}
 	return Obj{Tag: "Static", Fields: map[string]Value{"value": payload}}
@@ -427,13 +443,19 @@ func decodeSelectOptionArray(raw any, path string) Value {
 }
 
 func decodeBindingSelectOptions(raw any, path string) Value {
-	return typedStaticBinding(raw, path, decodeSelectOptionArray)
+	// "<opaque>" → a tagged one-element placeholder; null → the empty typed array.
+	opaquePlaceholder := Arr{Obj{Fields: map[string]Value{
+		"label": Obj{Tag: "Literal", Fields: map[string]Value{"text": Str(opaqueSentinel)}},
+		"value": Str(opaqueSentinel),
+	}}}
+	return typedStaticBinding(raw, path, decodeSelectOptionArray, opaquePlaceholder, Arr{})
 }
 
 func decodeBindingStringOpt(raw any, path string) Value {
+	// "<opaque>" → the scalar sentinel string; null → null (a genuine None option).
 	return typedStaticBinding(raw, path, func(v any, p string) Value {
 		return Str(expectString(v, p))
-	})
+	}, Str(opaqueSentinel), Null{})
 }
 
 func decodeStringArray(raw any, path string) Value {
@@ -446,7 +468,8 @@ func decodeStringArray(raw any, path string) Value {
 }
 
 func decodeBindingStringList(raw any, path string) Value {
-	return typedStaticBinding(raw, path, decodeStringArray)
+	// "<opaque>" → a one-element placeholder list; null → the empty typed array.
+	return typedStaticBinding(raw, path, decodeStringArray, Arr{Str(opaqueSentinel)}, Arr{})
 }
 
 func decodeFloatArray(raw any, path string) Value {
@@ -459,7 +482,8 @@ func decodeFloatArray(raw any, path string) Value {
 }
 
 func decodeBindingFloatSeq(raw any, path string) Value {
-	return typedStaticBinding(raw, path, decodeFloatArray)
+	// Both "<opaque>" and null → the empty typed array (a seq has no placeholder element).
+	return typedStaticBinding(raw, path, decodeFloatArray, Arr{}, Arr{})
 }
 
 func decodeMapMarker(raw any, path string) Value {
@@ -480,7 +504,8 @@ func decodeMarkerArray(raw any, path string) Value {
 }
 
 func decodeBindingMarkerSeq(raw any, path string) Value {
-	return typedStaticBinding(raw, path, decodeMarkerArray)
+	// Both "<opaque>" and null → the empty typed array.
+	return typedStaticBinding(raw, path, decodeMarkerArray, Arr{}, Arr{})
 }
 
 func decodeCellFormat(raw any, path string) Value {

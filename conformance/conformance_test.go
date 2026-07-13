@@ -1,9 +1,10 @@
 // Package conformance certifies the fuaran-go host against the shared
 // wire-format-fixtures corpus: every node-round-trip / op-round-trip fixture
-// must re-encode byte-identically, and every reject fixture must fail decode
-// with the canonical code + a $-rooted path prefix. The remaining fixture
-// families (lenient-accept, envelope, elicitation) land with their own
-// roadmap tiers and are not run here yet.
+// must re-encode byte-identically, every reject fixture must fail decode with
+// the canonical code + a $-rooted path prefix, and every lenient-accept
+// fixture must normalise to its verbose canonical form (WIRE_FORMAT §16). The
+// envelope and elicitation families land with their own roadmap tiers and are
+// not run here yet.
 package conformance
 
 import (
@@ -159,6 +160,36 @@ func TestRoundTrip(t *testing.T) {
 	}
 	if ran == 0 {
 		t.Fatal("manifest declares no round-trip fixtures")
+	}
+}
+
+// TestLenientAccept runs every lenient-accept fixture (WIRE_FORMAT §16,
+// normative): the SHORTHAND input MUST decode and MUST re-encode to the
+// verbose canonical expected file — the same decode → encode → byte-compare
+// leg as a round-trip fixture, with inputFile ≠ expectedFile. A host that
+// rejects a shorthand, or decodes it to different bytes, is non-conformant.
+func TestLenientAccept(t *testing.T) {
+	corpus, m := loadCorpus(t)
+	ran := 0
+	for _, fx := range m.Fixtures {
+		if fx.Kind != "lenient-accept" {
+			continue
+		}
+		ran++
+		t.Run(fx.ID, func(t *testing.T) {
+			input := readFixture(t, corpus, fx.InputFile)
+			got, err := decodeReencode(fx.Decoder, input)
+			if err != nil {
+				t.Fatalf("expected decode to succeed, got %v", err)
+			}
+			want := readFixture(t, corpus, fx.ExpectedFile)
+			if got != want {
+				t.Errorf("did not normalise to the canonical form: %s", firstDiff(got, want))
+			}
+		})
+	}
+	if ran == 0 {
+		t.Fatal("manifest declares no lenient-accept fixtures")
 	}
 }
 
