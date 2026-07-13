@@ -5,11 +5,14 @@ to the F# (`Fuaran.UI`), TypeScript (`@fuaran-ui/*`), and Python (`fuaran_py`)
 tiers**. Its identity is a **headless host and driver**: the canonical-JSON codec,
 a tree-op apply engine, a pre-emit validator, and server-side emission
 (static-HTML + partial-hydration + server-driven), all conformant to the shared
-wire format. What ships **today**: the canonical codec (round-trip +
-reject + lenient-accept certified), the tree-op apply engine (`ops.Apply` /
-`ops.CanApply`), the pre-emit validator, and the server-HTML renderer with
-islands partial-hydration emission (class-vocabulary + reference-CSS + markdown
-corpus parity-locked); the server-driven driver is roadmap work.
+wire format. What ships **today** is the full stack: the canonical codec
+(round-trip + reject + lenient-accept certified), the tree-op apply engine
+(`ops.Apply` / `ops.CanApply`), the pre-emit validator, the server-HTML
+renderer with islands partial-hydration emission (class-vocabulary +
+reference-CSS + markdown corpus parity-locked), and the server-driven driver
+(`serverdriven` — a transport-neutral live channel over SSE + a stdlib-only
+WebSocket backend, carrying canonical TreeOp frames with per-frame `Seq` +
+reconnect-replay).
 
 **Framing — load-bearing, do not regress.** The emission surface is the
 **canonical JSON wire format, for every host**. The language tiers are
@@ -63,6 +66,7 @@ fuaran-go/
 ├── ops/                  # tree-op apply engine — Apply / CanApply, typed ApplyError, §3.4 nested paths
 ├── validator/            # pre-emit default-deny structural validator (shared codes + $-rooted paths)
 ├── renderer/             # server-HTML + GFM markdown + sanitiser + islands emission + reference-CSS byte-copy
+├── serverdriven/         # server-driven driver + transport-neutral Channel (in-memory / SSE / stdlib WebSocket) + reconnect-replay
 ├── conformance/          # shared-corpus certification: all fixture legs + parity locks
 ├── go.mod
 ├── run.ps1               # Stage-0 entry point — gofmt check + go vet + go build + go test
@@ -136,9 +140,22 @@ keep the browser client generic (the Go program authors no client code):
   thin generic client; interactions round-trip to Go. The server side is
   render-runtime-free.
 
-Both are beyond the stage-0 floor (they need the codec + apply engine + a Go
-server-HTML emitter / a channel transport) but are the headline reason a Go host
-earns its place — see `README.md`.
+Both are shipped. **Server-driven frame contract — a Go-host divergence worth
+knowing:** where the F# host lowers each step to browser DOM patches (it owns a
+server-side HTML-fragment renderer keyed to `data-fuaran-node-id`), the Go
+`serverdriven` frame carries the **canonical `TreeOp` list itself**
+(`{"ops":[…],"seq":N}`), not lowered DOM patches. A conformant client
+re-renders by applying those ops with the same apply engine every host ships —
+so "the generic client already exists" holds and the Go host authors no client
+code (true to the headless identity + the phase's dependency note). The
+transport is behind the `Channel` seam (the `IFuaranLiveChannel` analogue); the
+per-frame `Seq` + bounded replay buffer + `Resync(lastSeq)` are the
+reconnect-replay contract, transport-agnostic across the in-memory / SSE /
+stdlib-WebSocket backends. **stdlib-only WebSocket:** the RFC 6455 handshake
+(SHA-1 + base64) and the text/close/ping/pong frame codec are hand-written in
+`wsframe.go` — the no-third-party mandate rules out `gorilla`/`x/net/websocket`,
+and the codec is small + unit-tested (incl. the RFC accept-key vector + the
+client-mask unmask path).
 
 ## Cross-repo dependencies
 

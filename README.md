@@ -28,7 +28,7 @@ Two server-friendly delivery modes fit a Go host especially well:
 In both, Go stays runtime-free on rendering: it produces and drives; the browser
 paints.
 
-## Status — codec + apply + validator + renderer shipped
+## Status — full headless host stack shipped
 
 Shipped:
 
@@ -55,6 +55,17 @@ Shipped:
   corpus), the URL/markdown sanitiser floor, and **islands partial-hydration
   emission** (`RenderWithIslands`: per-island boundary wrappers + scoped
   hydrate payloads; zero islands ⇒ byte-identical to a plain render).
+- **`serverdriven`** — the server-driven interactivity tier: a driver that
+  holds the tree + state, validates each client event default-deny by shape,
+  runs the host handler for the TreeOps, applies them (Phase-415 apply) to keep
+  the tree authoritative, and pushes the applied ops as a canonical **TreeOp
+  frame** over the transport-neutral `Channel` seam. Ships an in-memory
+  reference channel, an SSE backend, and a **stdlib-only WebSocket backend**
+  (hand-written RFC 6455 handshake + frame codec — no third-party module). Each
+  frame carries a per-connection `Seq`; a bounded replay buffer re-pushes
+  frames newer than the client's last-applied `Seq` on reconnect
+  (`Resync`). A conformant client re-renders by applying the frame's TreeOps —
+  the Go host authors no client code.
 - **`conformance`** — the corpus certification legs: node/op round-trips
   byte-identical, rejects with the canonical code + path prefix,
   lenient-accept normalisation, apply-envelope conformance, the markdown
@@ -62,7 +73,8 @@ Shipped:
   discriminator exhaustiveness guard. The harness skips cleanly when the repo
   is checked out alone.
 
-The server-driven driver (the second interactivity tier) is roadmap work.
+Every roadmap tier for this host (codec → apply → validator → renderer →
+server-driven driver) is now shipped.
 
 ## Layout
 
@@ -75,6 +87,7 @@ fuaran-go/
 ├── ops/               # tree-op apply engine — Apply / CanApply + typed ApplyError
 ├── validator/         # pre-emit default-deny structural validator
 ├── renderer/          # server-HTML + markdown + sanitiser + islands emission + reference CSS
+├── serverdriven/      # server-driven driver + transport-neutral channel (SSE + stdlib WebSocket)
 ├── conformance/       # shared-corpus certification: all fixture legs + parity locks
 ├── run.ps1            # gofmt check -> go vet -> go build -> go test
 ├── LICENSE            # Apache-2.0
