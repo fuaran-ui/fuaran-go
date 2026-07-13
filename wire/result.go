@@ -18,6 +18,11 @@ const (
 	CodeUnknownDUCase DecodeErrorCode = "UNKNOWN_DU_CASE"
 	CodeWrongNodeKind DecodeErrorCode = "WRONG_NODE_KIND"
 	CodeEmptyNodeID   DecodeErrorCode = "EMPTY_NODE_ID"
+
+	// CodeForeignProfile is the §15 versioning-envelope refusal — deliberately
+	// OUT of the core six (like §18's elicitation codes): a Foreign profile (a
+	// different namespace or major version) is hard-refused, never mis-decoded.
+	CodeForeignProfile DecodeErrorCode = "FOREIGN_PROFILE"
 )
 
 // DecodeError is the structured, recoverable error a decode returns. Path is the

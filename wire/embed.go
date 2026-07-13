@@ -35,3 +35,12 @@ func DecodeNodeValue(raw any) (node Node, err error) {
 	defer recoverDecode(&err)
 	return decodeNodeValue(raw, "$"), nil
 }
+
+// ValueFromParsed converts an already-parsed JSON value (from ParseCanonical)
+// into a structural wire Value, tolerantly (unknown shapes preserved
+// verbatim, null-lenient). Used for the §15 must-ignore-but-preserve carrier:
+// a behind consumer preserves an unknown-kind payload's exact bytes by
+// re-encoding this Value.
+func ValueFromParsed(raw any) Value {
+	return fromJSON(raw)
+}
