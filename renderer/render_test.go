@@ -75,6 +75,40 @@ func TestUnresolvedBindingPlaceholdersAndSourcesResolve(t *testing.T) {
 	}
 }
 
+// TestChartRequiresPreLoweredPosture pins the Phase 551 chart-lowering posture
+// for the go host: REQUIRE-PRE-LOWERED. A raw Chart at the headless SSR boundary is
+// a documented typed passthrough (a marked client-hydration placeholder), never
+// lowered in-host to a Drawing and never a silent empty region. If a future change
+// makes go lower Chart→Drawing in-host, this test must be revisited deliberately —
+// the posture is contract, not accident.
+func TestChartRequiresPreLoweredPosture(t *testing.T) {
+	node := mustDecode(t, `{"id":"chart-1","kind":{"$type":"Chart","kind":"Line","source":{"$type":"Static","value":"<opaque>"},"stacked":true,"title":{"$type":"Literal","text":"Channel mix"},"xField":"month","yFields":["revenue","cost"]}}`)
+	html := RenderHTML(node, nil)
+
+	// The passthrough is a MARKED placeholder — the documented typed outcome.
+	for _, want := range []string{
+		`data-fuaran-ssr-placeholder="Chart"`, // the typed passthrough marker
+		`class="fuaran-chart fuaran-chart-ssr-placeholder"`,
+		`hydrates client-side`, // the visible, non-empty fallback text
+		`Channel mix`,          // the title survives so the region is never blank
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("chart passthrough missing %q:\n%s", want, html)
+		}
+	}
+
+	// NOT lowered in-host: a raw Chart must never emit inline Drawing SVG on this
+	// headless host (that is the fuaran-rs lower-in-host posture, not go's).
+	for _, forbidden := range []string{
+		`<svg`,           // no inline SVG
+		`fuaran-drawing`, // no Drawing class vocabulary
+	} {
+		if strings.Contains(html, forbidden) {
+			t.Errorf("require-pre-lowered posture violated — found %q:\n%s", forbidden, html)
+		}
+	}
+}
+
 func TestStaticDataGridRendersSemanticTable(t *testing.T) {
 	node := mustDecode(t, `{"id":"t","kind":{"$type":"DataGrid","columns":[],"editable":false,"source":{"$type":"Static","value":"<opaque>"},"staticRows":{"headers":[{"$type":"Literal","text":"Term"}],"rows":[[{"$type":"Literal","text":"MVU"}]]}}}`)
 	html := RenderHTML(node, nil)

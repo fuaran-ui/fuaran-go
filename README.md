@@ -76,6 +76,26 @@ Shipped:
 Every roadmap tier for this host (codec → apply → validator → renderer →
 server-driven driver) is now shipped.
 
+## Chart-lowering posture — require-pre-lowered
+
+A resolved `Drawing` node renders as first-party inline SVG on every host, this
+headless one included. A raw `Chart` node is a *semantic* wire kind that must be
+*lowered* to a `Drawing` before it can paint. `fuaran-go` takes the
+**require-pre-lowered** posture: it does **not** lower `Chart → Drawing` in-host.
+A `Chart` reaching the SSR boundary renders a **documented typed passthrough** — a
+marked client-hydration placeholder (`fuaran-chart-ssr-placeholder` carrying
+`data-fuaran-ssr-placeholder="Chart"`, a `data-fuaran-row-count`, and a visible
+`[Chart: N rows — hydrates client-side]` fallback), **never a silent empty region**.
+
+A go SSR consumer that wants a *rendered* chart either pre-lowers the `Chart` to a
+`Drawing` upstream (which this renderer then paints as inline SVG), or lets a
+conformant client render the emitted wire. This is the cheap posture and it fits the
+host's headless-orchestrator role: go renders nothing itself, so in-host lowering
+would earn no pixel here — unlike the `fuaran-rs` WASM client, which *does* lower
+in-host so its browser renderer reaches chart parity. The posture is contract, not
+accident: it is pinned by `TestChartRequiresPreLoweredPosture` (`renderer/render_test.go`).
+Demand-gated — revisit only if a go SSR consumer needs in-host lowering.
+
 ## Layout
 
 ```

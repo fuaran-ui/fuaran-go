@@ -883,6 +883,20 @@ func (r *renderer) dataGrid(fields map[string]wire.Value) string {
 	}, "[Grid: "+strconv.Itoa(count)+" rows "+emDash+" hydrates client-side]")
 }
 
+// chart is the go host's Chart arm. Chart-lowering posture (Phase 551):
+// fuaran-go is REQUIRE-PRE-LOWERED. A raw Chart node reaching this headless SSR
+// boundary is NOT lowered in-host to a Drawing; it renders a documented typed
+// passthrough — a marked client-hydration placeholder (a fuaran-chart-ssr-placeholder
+// div carrying data-fuaran-ssr-placeholder="Chart" + a data-fuaran-row-count and a
+// visible "[Chart: N rows — hydrates client-side]" fallback), never a silent empty
+// region. The contract: a go SSR consumer that wants a rendered chart pre-lowers the
+// Chart to a Drawing (which this renderer DOES lower — see drawing()), or a conformant
+// client renders the emitted wire. This is the cheap posture, justified by the host's
+// headless-orchestrator role: go renders nothing itself, so in-host Chart→Drawing
+// lowering earns no rendered pixel here (unlike the fuaran-rs WASM client, which
+// lowers in-host so its browser renderer reaches chart parity). Demand-gated per the
+// phase: revisit if a go SSR consumer needs in-host lowering. Pinned by
+// TestChartRequiresPreLoweredPosture in render_test.go.
 func (r *renderer) chart(fields map[string]wire.Value) string {
 	count := seqLen(resolveBinding(fields["source"], r.sources))
 	titleHTML := ""
