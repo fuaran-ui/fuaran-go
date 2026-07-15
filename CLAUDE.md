@@ -22,11 +22,8 @@ and *drives* wire trees, and a conformant client renders them. Go having no good
 native way to produce dynamic UI is a reason this host is *valuable*, not a reason
 to make it a lesser artefact than the other tiers.
 
-This repo sits under the Fuaran-UI sub-estate at `../`, alongside the `fuaran`,
-`fuaran-ts`, and `fuaran-py` tiers. Cross-repo conventions (port allocation, Sync
-All, the formatting mandate, the language-baseline pinning, the OSS publication
-boundary) live in the workspace `CLAUDE.md` (`../../../CLAUDE.md`) and the
-Fuaran-UI sub-estate `CLAUDE.md` (`../CLAUDE.md`). Read those first.
+This repo sits alongside the `fuaran`, `fuaran-ts`, and `fuaran-py` tiers as a co-equal
+conformant host. Cross-repo development conventions (port allocation, formatting, language-baseline pinning) live at the maintainers' workspace level and are not shipped here.
 
 ## Posture
 
