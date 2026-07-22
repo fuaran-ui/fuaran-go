@@ -9,6 +9,36 @@ other host: it is built to the language-neutral wire-format specification
 (`WIRE_FORMAT.md`) and certified against the shared conformance corpus.
 Conformance to the spec is the contract; idiomatic Go is the deliverable.
 
+## Get started
+
+```sh
+go get github.com/fuaran-ui/fuaran-go
+```
+
+Author a UI tree as typed data, then encode it byte-identically to every host:
+
+```go
+import "github.com/fuaran-ui/fuaran-go/wire"
+
+tree := wire.Node{
+	ID: "root",
+	Kind: wire.Obj{Tag: "Box", Fields: map[string]wire.Value{
+		"children": wire.Arr{
+			wire.Node{ID: "title", Kind: wire.Obj{Tag: "Heading", Fields: map[string]wire.Value{
+				"level": wire.Int(2), "text": wire.Str("Channel performance"), "variant": wire.Str("Standard"),
+			}}},
+		},
+		"layout": wire.Obj{Tag: "Auto"},
+		"role":   wire.Str("Dashboard"),
+	}},
+}
+
+wireJSON, _ := wire.EncodeNode(tree)   // canonical wire JSON, byte-identical to every host
+```
+
+Render it server-side with `renderer.RenderHTML(tree, nil)`. Full walkthrough —
+author → encode → render → playground: <https://fuaran-ui.io/get-started/go>.
+
 ## Why a Go host
 
 Go is a first-class language for backends and, increasingly, AI agents — but it
