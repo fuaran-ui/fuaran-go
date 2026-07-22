@@ -104,11 +104,13 @@ one of those hosts.
 The codec runs the corpus **round-trip + reject + lenient-accept families
 green**: every `node-round-trip` / `op-round-trip` fixture re-encodes
 byte-identically, every `reject` fixture fails with the canonical code +
-`$`-rooted path prefix, and every `lenient-accept` shorthand (bare-string
-TextSource, legacy container tags, the pre-typed opaque/null Static forms)
-normalises to its verbose canonical bytes (fixture counts drift as the corpus
-grows — `../wire-format-fixtures/manifest.json` is the authoritative
-enumeration). Typed field-level validation covers the common kinds;
+`$`-rooted path prefix, and every `lenient-accept` shorthand (the verbose
+`Literal` envelope — since 0.2.0 the bare string IS the canonical form — the
+value/field-name aliases, the shape coercions, the omitted-when-default
+explicit forms, legacy container tags, the pre-typed opaque/null Static
+forms, the Transform frame/pipeline/expr shorthands) normalises to its
+canonical bytes (fixture counts drift as the corpus grows —
+`../wire-format-fixtures/manifest.json` is the authoritative enumeration). Typed field-level validation covers the common kinds;
 recognised-but-not-yet-typed kinds decode structurally (still byte-exact on
 round-trip). The **exhaustiveness guard** (`conformance.TestDiscriminatorExhaustiveness`)
 is the no-compile-time-totality mitigation: it walks the corpus and fails
