@@ -203,13 +203,7 @@ func diffGoldenNode(t *testing.T, raw any, what string) wire.Node {
 	t.Helper()
 	node, err := wire.DecodeNodeValue(raw)
 	if err != nil {
-		// Several shared diff goldens still carry pre-0.2.0 canonical bytes
-		// (Metric `source`, verbose Literal envelopes, explicit stylistic
-		// defaults) that the 0.2.0 clean break hard-rejects on every current
-		// host. Until the golden family is regenerated on 0.2.0 bytes,
-		// skipping (loudly) is the honest posture — the leg self-revives the
-		// moment the corpus updates.
-		t.Skipf("golden %s carries pre-0.2.0 wire bytes the current contract rejects (%v) — regenerate diff/goldens.json", what, err)
+		t.Fatalf("decoding golden %s: %v", what, err)
 	}
 	return node
 }
