@@ -18,9 +18,17 @@ reconnect-replay).
 **canonical JSON wire format, for every host**. The language tiers are
 **human-developer authoring surfaces** that produce that JSON; Go's role is
 primarily a **headless backend/orchestrator host** — a Go service reads, writes,
-and *drives* wire trees, and a conformant client renders them. Go having no good
-native way to produce dynamic UI is a reason this host is *valuable*, not a reason
-to make it a lesser artefact than the other tiers.
+and *drives* wire trees. Post-651 charter wording (operator decision 2026-07-22):
+**go emits complete static output** — its static-HTML and islands emission
+resolve compute (`Transform` bindings, `Selection.defaultValue`) at render time
+(Phase 651), so a page's computed values are correct before any JS runs (and
+genuinely no-JS surfaces — email digests, ops reports — are complete). **Live
+interactivity stays client-side** (islands hydration, or the server-driven
+driver's thin client). The line that does NOT move: go stays a **library, not a
+runtime** — `render(tree, data) → bytes` is a pure function; no UI session state,
+no server-side interaction handling, no lifecycle. Go having no good native way
+to produce dynamic UI is a reason this host is *valuable*, not a reason to make it
+a lesser artefact than the other tiers.
 
 This repo sits alongside the `fuaran`, `fuaran-ts`, and `fuaran-py` tiers as a co-equal
 conformant host. Cross-repo development conventions (port allocation, formatting, language-baseline pinning) live at the maintainers' workspace level and are not shipped here.
@@ -126,14 +134,19 @@ and skips when absent).
 
 ## Interactivity — server-friendly delivery for a headless host
 
-A Go host does not render UI itself; it *produces* and *drives* wire trees that a
-conformant client renders. Two client tiers suit a Go server especially well and
-keep the browser client generic (the Go program authors no client code):
+A Go host emits **complete static output** — the static-HTML and islands paths
+resolve compute at render time (Phase 651), so computed values are correct before
+any JS runs — and *drives* wire trees that a conformant client then makes live.
+Live interactivity stays client-side; the Go program authors no client code and
+holds no per-user UI state between calls (`render(tree, data) → bytes` is pure).
+Two client tiers suit a Go server especially well and keep the browser client
+generic:
 
-- **Static + partial hydration** — Go emits a mostly-static HTML page; per
-  interactive region it emits a boundary marker + a per-region hydrate payload
-  (a wire subtree the codec produces); a small generic client hydrates only those
-  regions. Interactions then run client-side.
+- **Static + partial hydration** — Go emits a mostly-static HTML page whose
+  values are already resolved (correct-before-hydration; hydration may re-resolve,
+  never first-fill); per interactive region it emits a boundary marker + a
+  per-region hydrate payload (a wire subtree the codec produces); a small generic
+  client hydrates only those regions. Interactions then run client-side.
 - **Server-driven** — Go holds the tree + state, applies tree-ops in response to
   client events, and streams frame diffs over a transport-neutral channel to a
   thin generic client; interactions round-trip to Go. The server side is

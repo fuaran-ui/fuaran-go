@@ -15,18 +15,24 @@ Go is a first-class language for backends and, increasingly, AI agents — but i
 has no idiomatic way to *produce* rich, dynamic UI without adopting a separate
 JavaScript frontend. `fuaran-go` lets a Go service or orchestrator emit and
 manipulate UI **as typed data**: the canonical wire tree. That tree is rendered
-by any conformant client, so the interactivity lives server-side (or in a thin,
-generic browser client) and the Go program never owns a frontend codebase.
+by any conformant client, and **go emits complete static output** — its
+static-HTML and islands emission resolve compute (`Transform` bindings, a
+preselected `Selection`'s default) at render time (Phase 651), so a page's
+computed values are correct before any JS runs. **Live interactivity stays
+client-side** (islands hydration, or a thin generic client for the server-driven
+mode); the Go program never owns a frontend codebase.
 
 Two server-friendly delivery modes fit a Go host especially well:
 
-- **Static + partial hydration** — emit a mostly-static HTML page and hydrate
-  only the interactive regions with a small, generic client bundle.
+- **Static + partial hydration** — emit a mostly-static HTML page whose values
+  are already resolved (correct-before-hydration), and hydrate only the
+  interactive regions with a small, generic client bundle.
 - **Server-driven** — hold the tree and its state in Go, stream tree-op diffs to
   a thin generic client, and let interactions round-trip to the server.
 
-In both, Go stays runtime-free on rendering: it produces and drives; the browser
-paints.
+In both, Go emits complete static output and drives; live interactivity is the
+client's. `render(tree, data) → bytes` stays a pure function — no UI session
+state, no server-side interaction handling.
 
 ## Status — full headless host stack shipped
 
@@ -90,7 +96,8 @@ marked client-hydration placeholder (`fuaran-chart-ssr-placeholder` carrying
 A go SSR consumer that wants a *rendered* chart either pre-lowers the `Chart` to a
 `Drawing` upstream (which this renderer then paints as inline SVG), or lets a
 conformant client render the emitted wire. This is the cheap posture and it fits the
-host's headless-orchestrator role: go renders nothing itself, so in-host lowering
+host's headless-orchestrator role: go emits static output but paints no client-library
+visualisation in-host (a chart hydrates client-side), so in-host lowering
 would earn no pixel here — unlike the `fuaran-rs` WASM client, which *does* lower
 in-host so its browser renderer reaches chart parity. The posture is contract, not
 accident: it is pinned by `TestChartRequiresPreLoweredPosture` (`renderer/render_test.go`).
