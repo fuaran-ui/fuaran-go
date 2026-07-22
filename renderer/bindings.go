@@ -32,10 +32,13 @@ func renderText(text wire.Value, sources BindingSources) string {
 		case "Literal":
 			return strValue(t.Fields["text"])
 		case "Bound":
-			if key, ok := t.Fields["key"].(wire.Str); ok {
-				if v, found := sources[string(key)]; found {
-					return displayString(v)
-				}
+			// Phase 632/651 — a text slot resolves through the scalar path, so a
+			// `Bound` `Transform` yields its 1×1 result cell (never the rows
+			// list) and a `Selection.defaultValue` renders resolved (Phase 629);
+			// any other binding resolves exactly as before. Both the static and
+			// islands surfaces share this dispatch.
+			if s, ok := resolveScalarText(t.Fields["binding"], sources); ok {
+				return s
 			}
 			return ""
 		case "I18n":
@@ -46,8 +49,9 @@ func renderText(text wire.Value, sources BindingSources) string {
 }
 
 // resolveBinding resolves a decoded binding to its value, or nil when not
-// resolvable: Static → its embedded value; every keyed case → the host
-// sources map when the key is present, else nil (the "NotResolved" branch).
+// resolvable: Static → its embedded value; every keyed case → the host sources
+// map when the identity key is present; an unwritten Selection / Filter → its
+// declared defaultValue (Phase 629); otherwise nil (the "NotResolved" branch).
 func resolveBinding(binding wire.Value, sources BindingSources) wire.Value {
 	obj, ok := binding.(wire.Obj)
 	if !ok {
@@ -56,12 +60,32 @@ func resolveBinding(binding wire.Value, sources BindingSources) wire.Value {
 	if obj.Tag == "Static" {
 		return obj.Fields["value"]
 	}
-	if key, ok := obj.Fields["key"].(wire.Str); ok {
-		if v, found := sources[string(key)]; found {
+	if key, ok := bindingKey(obj); ok {
+		if v, found := sources[key]; found {
 			return v
 		}
 	}
+	// Phase 629 — an unwritten Selection / Filter resolves to its declared
+	// defaultValue (resolution-time defaulting IS the preselected mechanism, so
+	// preselected master-detail renders resolved without any store seeding).
+	// State keeps the go host's established em-dash-until-resolved posture.
+	if obj.Tag == "Selection" || obj.Tag == "Filter" {
+		if dv, ok := obj.Fields["defaultValue"]; ok {
+			return dv
+		}
+	}
 	return nil
+}
+
+// bindingKey returns the host-sources lookup key for a decoded binding: State
+// keys on `key`, Query / Filter on `name`, Selection on `nodeId`.
+func bindingKey(obj wire.Obj) (string, bool) {
+	for _, field := range []string{"key", "name", "nodeId"} {
+		if k, ok := obj.Fields[field].(wire.Str); ok {
+			return string(k), true
+		}
+	}
+	return "", false
 }
 
 // displayString renders a resolved value for text interpolation.

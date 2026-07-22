@@ -537,7 +537,7 @@ func (r *renderer) markdown(fields map[string]wire.Value) string {
 }
 
 func (r *renderer) metric(node wire.Node, fields map[string]wire.Value) string {
-	value := resolveBinding(fields["value"], r.sources)
+	value := resolveScalarNumber(fields["value"], r.sources)
 	if value == nil {
 		if loading, ok := r.stateLoading(node); ok {
 			return r.renderNode(loading)
@@ -647,7 +647,7 @@ func (r *renderer) labelValueRow(fields map[string]wire.Value) string {
 	if v, ok := fields["emphasis"].(wire.Bool); ok && bool(v) {
 		emphasis = " fuaran-label-value-row-emphasis"
 	}
-	value := resolveBinding(fields["value"], r.sources)
+	value := resolveScalarNumber(fields["value"], r.sources)
 	valueText := emDash
 	if value != nil {
 		valueText = formatNumber(fields["format"], value)
@@ -900,7 +900,7 @@ func (r *renderer) dataGrid(fields map[string]wire.Value) string {
 	if staticRows, ok := fields["staticRows"].(wire.Obj); ok {
 		return r.staticTable(staticRows.Fields)
 	}
-	count := seqLen(resolveBinding(fields["source"], r.sources))
+	count := seqLen(resolveSource(fields["source"], r.sources))
 	return textElement("div", []attr{
 		{"class", "fuaran-grid fuaran-grid-ssr-placeholder"},
 		{"data-fuaran-ssr-placeholder", "DataGrid"},
@@ -917,13 +917,14 @@ func (r *renderer) dataGrid(fields map[string]wire.Value) string {
 // region. The contract: a go SSR consumer that wants a rendered chart pre-lowers the
 // Chart to a Drawing (which this renderer DOES lower — see drawing()), or a conformant
 // client renders the emitted wire. This is the cheap posture, justified by the host's
-// headless-orchestrator role: go renders nothing itself, so in-host Chart→Drawing
+// headless-orchestrator role: go emits static output but paints no client-library
+// visualisation in-host (a chart hydrates client-side), so in-host Chart→Drawing
 // lowering earns no rendered pixel here (unlike the fuaran-rs WASM client, which
 // lowers in-host so its browser renderer reaches chart parity). Demand-gated per the
 // phase: revisit if a go SSR consumer needs in-host lowering. Pinned by
 // TestChartRequiresPreLoweredPosture in render_test.go.
 func (r *renderer) chart(fields map[string]wire.Value) string {
-	count := seqLen(resolveBinding(fields["source"], r.sources))
+	count := seqLen(resolveSource(fields["source"], r.sources))
 	titleHTML := ""
 	if title, ok := fields["title"]; ok {
 		titleHTML = textElement("div", []attr{{"class", "fuaran-chart-title"}}, r.text(title))
@@ -938,7 +939,7 @@ func (r *renderer) chart(fields map[string]wire.Value) string {
 }
 
 func (r *renderer) mapVis(fields map[string]wire.Value) string {
-	count := seqLen(resolveBinding(fields["source"], r.sources))
+	count := seqLen(resolveSource(fields["source"], r.sources))
 	return textElement("div", []attr{
 		{"class", "fuaran-map fuaran-map-ssr-placeholder"},
 		{"data-fuaran-ssr-placeholder", "Map"},
