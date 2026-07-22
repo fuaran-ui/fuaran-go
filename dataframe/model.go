@@ -141,6 +141,26 @@ type ApplyFn struct {
 }
 type Param struct{ Name string }
 
+// InList is SQL three-valued membership over a literal-expression list:
+// subject null => null; any equal item => true; no match having seen a null
+// item => null; else false. Wire: {"$type":"in","expr":…,"items":[…]}.
+type InList struct {
+	Subject ColExpr
+	Items   []ColExpr
+}
+
+// InParam is the LIST-valued named-parameter membership test (the multi-select
+// binding). Wire: the same "in" tag with "param" in place of "items" (exactly
+// one of the two). One that reaches evaluation unbound is a strict
+// UnboundParam, matching the scalar Param posture.
+type InParam struct {
+	Subject ColExpr
+	Name    string
+}
+
+// IsNull is the honest presence test — total: always Bool, never null.
+type IsNull struct{ Expr ColExpr }
+
 func (Col) isColExpr()      {}
 func (Lit) isColExpr()      {}
 func (Binary) isColExpr()   {}
@@ -150,14 +170,27 @@ func (Case) isColExpr()     {}
 func (Cast) isColExpr()     {}
 func (ApplyFn) isColExpr()  {}
 func (Param) isColExpr()    {}
+func (InList) isColExpr()   {}
+func (InParam) isColExpr()  {}
+func (IsNull) isColExpr()   {}
 
-// Closed vocabularies (wire tags) — additive only.
+// Closed vocabularies (wire tags) — additive only. The string predicates
+// (contains / startsWith / endsWith) and the string/date scalar fns (concat /
+// trim / replace / dateDiffDays) joined the algebra with the string-predicate
+// wave; `cumulSum` is the canonical window tag (the legacy `cumSum` spelling
+// decodes as an alias and normalises on re-encode).
 var (
-	binOps    = set("add", "sub", "mul", "div", "mod", "eq", "ne", "lt", "le", "gt", "ge", "and", "or")
-	scalarFns = set("abs", "round", "floor", "ceil", "length", "lower", "upper", "substr", "datePart")
+	binOps = set(
+		"add", "sub", "mul", "div", "mod", "eq", "ne", "lt", "le", "gt", "ge", "and", "or",
+		"contains", "startsWith", "endsWith",
+	)
+	scalarFns = set(
+		"abs", "round", "floor", "ceil", "length", "lower", "upper", "substr", "datePart",
+		"concat", "trim", "replace", "dateDiffDays",
+	)
 	aggFns    = set("sum", "mean", "min", "max", "count", "median", "stddev", "first", "last")
 	joinKinds = set("inner", "left", "right", "outer")
-	windowFns = set("rowNumber", "rank", "lag", "lead", "cumSum", "rollingMean")
+	windowFns = set("rowNumber", "rank", "lag", "lead", "cumulSum", "rollingMean")
 	sortDirs  = set("asc", "desc")
 )
 

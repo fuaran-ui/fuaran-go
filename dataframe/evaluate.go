@@ -4,6 +4,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/fuaran-ui/fuaran-go/canonical"
 )
@@ -284,6 +285,72 @@ func logical(op string, a, b Cell) (Cell, *EvalError) {
 	return Cell{}, evalErr(TypeError, "not a logical operator")
 }
 
+// stringPred is the ordinal substring predicates (contains / startsWith /
+// endsWith). Null propagates (matching comparison); a non-string operand is a
+// typed error. Ordinal byte-wise matching is the cross-host pin.
+func stringPred(op string, a, b Cell) (Cell, *EvalError) {
+	if isNull(a) || isNull(b) {
+		return Null, nil
+	}
+	if a.Kind != TypeString || b.Kind != TypeString {
+		return Cell{}, evalErr(TypeError, "string predicate on a non-string operand")
+	}
+	s := a.Value.(string)
+	t := b.Value.(string)
+	var r bool
+	switch op {
+	case "contains":
+		r = strings.Contains(s, t)
+	case "startsWith":
+		r = strings.HasPrefix(s, t)
+	case "endsWith":
+		r = strings.HasSuffix(s, t)
+	}
+	return CellBool(r), nil
+}
+
+// civilDays is days since the civil epoch (1970-01-01 = 0) for the first 10
+// chars (YYYY-MM-DD) of a date-like cell — days-from-civil as pure integer
+// math (dateDiffDays). No host date library: determinism across hosts.
+func civilDays(c Cell) (int64, *EvalError) {
+	var s string
+	switch c.Kind {
+	case TypeDate, TypeTimestamp, TypeString:
+		s = c.Value.(string)
+	default:
+		return 0, evalErr(TypeError, "dateDiffDays expects date/timestamp/string operands")
+	}
+	bad := func() (int64, *EvalError) {
+		return 0, evalErr(TypeError, "dateDiffDays: '"+s+"' is not YYYY-MM-DD[...]")
+	}
+	if len(s) < 10 || s[4] != '-' || s[7] != '-' {
+		return bad()
+	}
+	part := func(lo, ln int) (int64, bool) {
+		v, err := strconv.ParseInt(s[lo:lo+ln], 10, 64)
+		return v, err == nil
+	}
+	y, ok1 := part(0, 4)
+	m, ok2 := part(5, 2)
+	d, ok3 := part(8, 2)
+	if !ok1 || !ok2 || !ok3 {
+		return bad()
+	}
+	if m <= 2 {
+		y--
+	}
+	era := y
+	if y < 0 {
+		era = y - 399
+	}
+	era /= 400
+	yoe := y - era*400
+	mp := (m + 9) % 12
+	doy := (153*mp+2)/5 + d - 1
+	doe := yoe*365 + yoe/4 - yoe/100 + doy
+	return era*146097 + doe - 719468, nil
+}
+
 func castCell(ty string, c Cell) (Cell, *EvalError) {
 	if isNull(c) {
 		return Null, nil
@@ -453,6 +520,69 @@ func applyScalar(fn string, args []Cell) (Cell, *EvalError) {
 			return Cell{}, evalErr(TypeError, "datePart: too short")
 		}
 		return Cell{}, evalErr(TypeError, "datePart expects (string part, date/timestamp/string)")
+	case "concat":
+		// Variadic; any null arg propagates (compose coalesce for
+		// treat-as-empty). Non-string args stringify via the same rendering
+		// as a cast to string.
+		if len(args) == 0 {
+			return Cell{}, evalErr(ArityError, "function 'concat' expects at least 1 arg, got 0")
+		}
+		var sb strings.Builder
+		for _, c := range args {
+			if isNull(c) {
+				return Null, nil
+			}
+			sb.WriteString(cellString(c))
+		}
+		return CellStr(sb.String()), nil
+	case "trim":
+		if e := arity(1); e != nil {
+			return Cell{}, e
+		}
+		c := args[0]
+		if isNull(c) {
+			return Null, nil
+		}
+		if c.Kind != TypeString {
+			return Cell{}, evalErr(TypeError, "trim of a non-string")
+		}
+		// Pinned ASCII set — NOT the full Unicode whitespace class, which
+		// diverges between hosts (U+0085 et al.).
+		return CellStr(strings.Trim(c.Value.(string), " \t\r\n")), nil
+	case "replace":
+		if e := arity(3); e != nil {
+			return Cell{}, e
+		}
+		if isNull(args[0]) || isNull(args[1]) || isNull(args[2]) {
+			return Null, nil
+		}
+		if args[0].Kind != TypeString || args[1].Kind != TypeString || args[2].Kind != TypeString {
+			return Cell{}, evalErr(TypeError, "replace expects (string, string, string)")
+		}
+		subj := args[0].Value.(string)
+		find := args[1].Value.(string)
+		repl := args[2].Value.(string)
+		// Pinned: empty `find` returns the subject unchanged.
+		if find == "" {
+			return CellStr(subj), nil
+		}
+		return CellStr(strings.ReplaceAll(subj, find, repl)), nil
+	case "dateDiffDays":
+		if e := arity(2); e != nil {
+			return Cell{}, e
+		}
+		if isNull(args[0]) || isNull(args[1]) {
+			return Null, nil
+		}
+		da, ea := civilDays(args[0])
+		if ea != nil {
+			return Cell{}, ea
+		}
+		db, eb := civilDays(args[1])
+		if eb != nil {
+			return Cell{}, eb
+		}
+		return CellInt(db - da), nil
 	}
 	return Cell{}, evalErr(TypeError, "unknown scalar fn "+fn)
 }
@@ -491,6 +621,8 @@ func evalExpr(cols Schema, r row, e ColExpr) (Cell, *EvalError) {
 			return arith(x.Op, a, b)
 		case "eq", "ne", "lt", "le", "gt", "ge":
 			return comparison(x.Op, a, b)
+		case "contains", "startsWith", "endsWith":
+			return stringPred(x.Op, a, b)
 		default:
 			return logical(x.Op, a, b)
 		}
@@ -545,6 +677,48 @@ func evalExpr(cols Schema, r row, e ColExpr) (Cell, *EvalError) {
 		}
 		return applyScalar(x.Fn, argv)
 	case Param:
+		return Cell{}, evalErr(UnboundParam, "unbound parameter '"+x.Name+"'")
+	case InList:
+		sv, ce := evalExpr(cols, r, x.Subject)
+		if ce != nil {
+			return Cell{}, ce
+		}
+		if isNull(sv) {
+			return Null, nil
+		}
+		// SQL three-valued membership: any equal => true; no match having
+		// seen a null item => null; else false.
+		sawNull := false
+		for _, it := range x.Items {
+			iv, ce := evalExpr(cols, r, it)
+			if ce != nil {
+				return Cell{}, ce
+			}
+			if isNull(iv) {
+				sawNull = true
+				continue
+			}
+			c, ok := compareCells(sv, iv)
+			if !ok {
+				return Cell{}, evalErr(TypeError, "in: comparison between incompatible types")
+			}
+			if c == 0 {
+				return CellBool(true), nil
+			}
+		}
+		if sawNull {
+			return Null, nil
+		}
+		return CellBool(false), nil
+	case IsNull:
+		v, ce := evalExpr(cols, r, x.Expr)
+		if ce != nil {
+			return Cell{}, ce
+		}
+		return CellBool(isNull(v)), nil
+	case InParam:
+		// List params resolve by substitution before evaluation — one that
+		// reaches the evaluator is unbound, same strictness as a scalar Param.
 		return Cell{}, evalErr(UnboundParam, "unbound parameter '"+x.Name+"'")
 	}
 	return Cell{}, evalErr(TypeError, "unknown ColExpr")

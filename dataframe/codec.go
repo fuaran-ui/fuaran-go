@@ -2,6 +2,9 @@ package dataframe
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
+	"sort"
 	"strings"
 
 	"github.com/fuaran-ui/fuaran-go/wire"
@@ -138,6 +141,16 @@ func EncodeExprValue(e ColExpr) wire.Value {
 		return typed("apply", map[string]wire.Value{"fn": wire.Str(x.Fn), "args": args})
 	case Param:
 		return typed("param", map[string]wire.Value{"name": wire.Str(x.Name)})
+	case InList:
+		items := make(wire.Arr, len(x.Items))
+		for i, it := range x.Items {
+			items[i] = EncodeExprValue(it)
+		}
+		return typed("in", map[string]wire.Value{"expr": EncodeExprValue(x.Subject), "items": items})
+	case InParam:
+		return typed("in", map[string]wire.Value{"expr": EncodeExprValue(x.Subject), "param": wire.Str(x.Name)})
+	case IsNull:
+		return typed("isNull", map[string]wire.Value{"expr": EncodeExprValue(x.Expr)})
 	}
 	return wire.Null{}
 }
@@ -248,6 +261,32 @@ func field(obj any, key string) (any, *ColumnError) {
 	return v, nil
 }
 
+func tryF(obj any, key string) (any, bool) {
+	m, ok := obj.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	v, ok := m[key]
+	return v, ok
+}
+
+// fieldAliased accepts exactly one of the canonical field or its observed
+// alias (the SQL/pandas prior); both present is ambiguous (didactic), neither
+// reports the canonical name.
+func fieldAliased(obj any, canonical, alias string) (any, *ColumnError) {
+	cv, cok := tryF(obj, canonical)
+	av, aok := tryF(obj, alias)
+	switch {
+	case cok && aok:
+		return nil, cerr(MalformedShape, "give \""+canonical+"\" (canonical) or \""+alias+"\" (alias), not both")
+	case cok:
+		return cv, nil
+	case aok:
+		return av, nil
+	}
+	return nil, cerr(MissingField, canonical)
+}
+
 func kindOf(obj any) (string, *ColumnError) {
 	v, e := field(obj, "$type")
 	if e != nil {
@@ -258,6 +297,48 @@ func kindOf(obj any) (string, *ColumnError) {
 		return "", cerr(MalformedShape, "$type must be a string")
 	}
 	return s, nil
+}
+
+// isoOfEpochSeconds renders an epoch-seconds instant as the canonical ISO-8601
+// UTC timestamp string. Pure integer arithmetic (civil-from-days), so it is
+// clock-free and deterministic; negative epochs (pre-1970) are handled.
+func isoOfEpochSeconds(secs int64) string {
+	days := secs / 86400
+	if secs%86400 < 0 {
+		days--
+	}
+	sod := secs - days*86400
+	z := days + 719468
+	era := z
+	if z < 0 {
+		era = z - 146096
+	}
+	era /= 146097
+	doe := z - era*146097
+	yoe := (doe - doe/1460 + doe/36524 - doe/146096) / 365
+	doy := doe - (365*yoe + yoe/4 - yoe/100)
+	mp := (5*doy + 2) / 153
+	day := doy - (153*mp+2)/5 + 1
+	month := mp + 3
+	if mp >= 10 {
+		month = mp - 9
+	}
+	year := yoe + era*400
+	if month <= 2 {
+		year++
+	}
+	return fmt.Sprintf("%04d-%02d-%02dT%02d:%02d:%02dZ", year, month, day, sod/3600, sod%3600/60, sod%60)
+}
+
+// epochToIso maps an epoch number to the canonical ISO instant — unit by
+// magnitude: >= 1e11 means milliseconds, else seconds (epoch-seconds stay
+// below 1e11 until year 5138).
+func epochToIso(i int64) Cell {
+	secs := i
+	if i >= 100_000_000_000 || i <= -100_000_000_000 {
+		secs = i / 1000
+	}
+	return CellTimestamp(isoOfEpochSeconds(secs))
 }
 
 func decodeCellValue(col, ty string, v any) (Cell, *ColumnError) {
@@ -287,6 +368,17 @@ func decodeCellValue(col, ty string, v any) (Cell, *ColumnError) {
 	case TypeTimestamp:
 		if s, ok := v.(string); ok {
 			return CellTimestamp(s), nil
+		}
+		// Lenient-ingest: a timestamp column accepts an epoch number (models
+		// emit epoch instants against their own correct "timestamp" schema).
+		if n, ok := v.(json.Number); ok {
+			if isIntToken(n) {
+				i, _ := n.Int64()
+				return epochToIso(i), nil
+			}
+			if f, err := n.Float64(); err == nil && f == math.Floor(f) && math.Abs(f) < 9e15 {
+				return epochToIso(int64(f)), nil
+			}
 		}
 	}
 	return Cell{}, cerr(TypeMismatch, "column '"+col+"': expected "+ty+" value")
@@ -320,6 +412,43 @@ func decodeSchema(el any) (Schema, *ColumnError) {
 	return out, nil
 }
 
+// columnParts reads one column's (values, validity) with the lenient-ingest
+// shorthands: a BARE array is the "just the data" form (all-present validity —
+// the wire has no JSON null, so a bare array can only mean every cell
+// present); a wrapped object carrying values but NO validity mask is the same
+// all-present statement. Absent cells still require the full wrapped form,
+// which stays canonical.
+func columnParts(name string, colEl any) ([]any, []any, *ColumnError) {
+	if arr, ok := colEl.([]any); ok {
+		validity := make([]any, len(arr))
+		for i := range validity {
+			validity[i] = true
+		}
+		return arr, validity, nil
+	}
+	valuesV, e := field(colEl, "values")
+	if e != nil {
+		return nil, nil, e
+	}
+	values, ok := valuesV.([]any)
+	if !ok {
+		return nil, nil, cerr(MalformedShape, name+".values: expected array")
+	}
+	validityV, hasValidity := tryF(colEl, "validity")
+	if !hasValidity {
+		validity := make([]any, len(values))
+		for i := range validity {
+			validity[i] = true
+		}
+		return values, validity, nil
+	}
+	validity, ok := validityV.([]any)
+	if !ok {
+		return nil, nil, cerr(MalformedShape, name+".validity: expected array")
+	}
+	return values, validity, nil
+}
+
 func decodeColumn(columnsObj any, name, ty string) (Column, *ColumnError) {
 	m, ok := columnsObj.(map[string]any)
 	if !ok {
@@ -329,21 +458,9 @@ func decodeColumn(columnsObj any, name, ty string) (Column, *ColumnError) {
 	if !ok {
 		return Column{}, cerr(MissingField, "columns."+name)
 	}
-	valuesV, e := field(colEl, "values")
+	values, validity, e := columnParts(name, colEl)
 	if e != nil {
 		return Column{}, e
-	}
-	validityV, e := field(colEl, "validity")
-	if e != nil {
-		return Column{}, e
-	}
-	values, ok1 := valuesV.([]any)
-	validity, ok2 := validityV.([]any)
-	if !ok1 {
-		return Column{}, cerr(MalformedShape, name+".values: expected array")
-	}
-	if !ok2 {
-		return Column{}, cerr(MalformedShape, name+".validity: expected array")
 	}
 	if len(values) != len(validity) {
 		return Column{}, cerr(LengthMismatch, "column '"+name+"': values/validity length mismatch")
@@ -367,27 +484,95 @@ func decodeColumn(columnsObj any, name, ty string) (Column, *ColumnError) {
 	return Column{Name: name, Type: ty, Cells: cells}, nil
 }
 
-func decodeSourceJSON(el any) (DataSource, *ColumnError) {
-	schemaV, e := field(el, "schema")
-	if e != nil {
-		return nil, e
+// inferColumnType infers one column's type from its present cells. PINNED
+// deterministic rules: all-int numerics => int, any fractional => float,
+// all-bool => bool, all-string => string — never date/timestamp (temporal
+// types require a declared schema). An empty column, or mixed kinds, is a
+// didactic reject naming the explicit-schema remedy.
+func inferColumnType(name string, values []any) (string, *ColumnError) {
+	if len(values) == 0 {
+		return "", cerr(MalformedShape,
+			name+": cannot infer a column type from an empty / all-null column — declare it in an explicit \"schema\" array")
 	}
-	schema, e := decodeSchema(schemaV)
-	if e != nil {
-		return nil, e
-	}
-	if m, ok := el.(map[string]any); ok {
-		if refV, ok := m["ref"]; ok {
-			ref, ok := refV.(string)
-			if !ok {
-				return nil, cerr(MalformedShape, "ref: expected string")
+	seen := map[string]bool{}
+	for _, v := range values {
+		switch t := v.(type) {
+		case json.Number:
+			if isIntToken(t) {
+				seen["int"] = true
+			} else {
+				seen["float"] = true
 			}
-			return Ref{Name: ref}, nil
+		case bool:
+			seen["bool"] = true
+		case string:
+			seen["string"] = true
+		default:
+			seen["other"] = true
 		}
+	}
+	switch {
+	case len(seen) == 1 && seen["int"]:
+		return TypeInt, nil
+	case (len(seen) == 1 && seen["float"]) || (len(seen) == 2 && seen["int"] && seen["float"]):
+		return TypeFloat, nil
+	case len(seen) == 1 && seen["bool"]:
+		return TypeBool, nil
+	case len(seen) == 1 && seen["string"]:
+		return TypeString, nil
+	}
+	return "", cerr(MalformedShape,
+		name+": cannot infer a single column type from mixed cell kinds — declare it in an explicit \"schema\" array")
+}
+
+func decodeSourceJSON(el any) (DataSource, *ColumnError) {
+	var schema Schema
+	var haveSchema bool
+	if schemaV, ok := tryF(el, "schema"); ok {
+		s, e := decodeSchema(schemaV)
+		if e != nil {
+			return nil, e
+		}
+		schema = s
+		haveSchema = true
+	}
+	if refV, ok := tryF(el, "ref"); ok {
+		if !haveSchema {
+			return nil, cerr(MalformedShape,
+				"a ref source requires an explicit \"schema\" array — there are no cells to infer column types from")
+		}
+		ref, ok := refV.(string)
+		if !ok {
+			return nil, cerr(MalformedShape, "ref: expected string")
+		}
+		return Ref{Name: ref}, nil
 	}
 	columnsV, e := field(el, "columns")
 	if e != nil {
 		return nil, e
+	}
+	if !haveSchema {
+		// Infer from the columns object, Ordinal key order.
+		m, ok := columnsV.(map[string]any)
+		if !ok {
+			return nil, cerr(MalformedShape, "columns: expected object")
+		}
+		names := make([]string, 0, len(m))
+		for k := range m {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			values, _, ce := columnParts(name, m[name])
+			if ce != nil {
+				return nil, ce
+			}
+			ty, ce := inferColumnType(name, values)
+			if ce != nil {
+				return nil, ce
+			}
+			schema = append(schema, SchemaEntry{Name: name, Type: ty})
+		}
 	}
 	cols := make([]Column, 0, len(schema))
 	for _, se := range schema {
@@ -580,7 +765,9 @@ func DecodeExpr(el any) (ColExpr, *ColumnError) {
 			return nil, ce
 		}
 		return Cast{Type: ty, Expr: inner}, nil
-	case "apply":
+	// "call" and "fn" are lenient-ingest spellings of "apply" (same fn/args
+	// fields); canonical stays "apply" — they normalise on re-encode.
+	case "apply", "call", "fn":
 		fnV, e := field(el, "fn")
 		if e != nil {
 			return nil, e
@@ -608,9 +795,126 @@ func DecodeExpr(el any) (ColExpr, *ColumnError) {
 			return nil, cerr(MalformedShape, "param.name: expected string")
 		}
 		return Param{Name: s}, nil
+	case "in":
+		// Exactly one of `items` (literal list) / `param` (a bound
+		// multi-select list param).
+		exprV, e := field(el, "expr")
+		if e != nil {
+			return nil, e
+		}
+		subject, ce := DecodeExpr(exprV)
+		if ce != nil {
+			return nil, ce
+		}
+		itemsV, hasItems := tryF(el, "items")
+		paramV, hasParam := tryF(el, "param")
+		switch {
+		case hasItems && hasParam:
+			return nil, cerr(MalformedShape,
+				"in: give exactly ONE of \"items\" (a literal list) or \"param\" (a multi-select list param), not both")
+		case hasItems:
+			items, ce := decodeExprList(itemsV)
+			if ce != nil {
+				return nil, ce
+			}
+			return InList{Subject: subject, Items: items}, nil
+		case hasParam:
+			p, ok := paramV.(string)
+			if !ok {
+				return nil, cerr(MalformedShape, "in.param: expected string")
+			}
+			return InParam{Subject: subject, Name: p}, nil
+		}
+		return nil, cerr(MissingField, "items")
+	case "isNull":
+		v, e := field(el, "expr")
+		if e != nil {
+			return nil, e
+		}
+		inner, ce := DecodeExpr(v)
+		if ce != nil {
+			return nil, ce
+		}
+		return IsNull{Expr: inner}, nil
+	// Expression-level string-predicate spellings:
+	// {"$type":"contains","expr":X,"other":Y} (also left/right) denotes
+	// exactly Binary(contains, X, Y); same for startsWith/endsWith. Canonical
+	// stays the "binary" form — these normalise on re-encode.
+	case "contains", "startsWith", "endsWith":
+		return flatBinary(el, k)
+	// Flat logical spellings: {"$type":"or","exprs":[e1,e2,…]} (variadic —
+	// left-folds into the nested canonical form) or {"$type":"and","left":X,
+	// "right":Y}. Canonical stays "binary".
+	case "and", "or":
+		if exprsV, ok := tryF(el, "exprs"); ok {
+			xs, ce := decodeExprList(exprsV)
+			if ce != nil {
+				return nil, ce
+			}
+			switch len(xs) {
+			case 0:
+				return nil, cerr(MalformedShape, k+".exprs: expected a non-empty array")
+			case 1:
+				return xs[0], nil
+			}
+			acc := xs[0]
+			for _, x := range xs[1:] {
+				acc = Binary{Op: k, Left: acc, Right: x}
+			}
+			return acc, nil
+		}
+		return flatBinary(el, k)
+	// Flat comparison spellings: {"$type":"eq","left":X,"right":Y} denotes
+	// exactly Binary(eq, X, Y); same for ne/lt/le/gt/ge.
+	case "eq", "ne", "lt", "le", "gt", "ge":
+		return flatBinary(el, k)
 	}
 	_ = m
+	// Flat scalar-fn spellings: {"$type":"lower","expr":X} /
+	// {"$type":"concat","args":[…]} denote ApplyFn(fn, args). The scalar-fn
+	// name vocabulary is disjoint from the expr tags, so the mapping is
+	// one-to-one; canonical stays "apply".
+	if scalarFns[k] {
+		if argsV, ok := tryF(el, "args"); ok {
+			xs, ce := decodeExprList(argsV)
+			if ce != nil {
+				return nil, ce
+			}
+			return ApplyFn{Fn: k, Args: xs}, nil
+		}
+		v, e := field(el, "expr")
+		if e != nil {
+			return nil, e
+		}
+		inner, ce := DecodeExpr(v)
+		if ce != nil {
+			return nil, ce
+		}
+		return ApplyFn{Fn: k, Args: []ColExpr{inner}}, nil
+	}
 	return nil, cerr(UnknownType, "unknown ColExpr '"+k+"'")
+}
+
+// flatBinary decodes the flat two-operand spelling ({left|expr, right|other})
+// into the canonical nested Binary.
+func flatBinary(el any, op string) (ColExpr, *ColumnError) {
+	leftV, e := fieldAliased(el, "left", "expr")
+	if e != nil {
+		return nil, e
+	}
+	left, ce := DecodeExpr(leftV)
+	if ce != nil {
+		return nil, ce
+	}
+	rightV, e := fieldAliased(el, "right", "other")
+	if e != nil {
+		return nil, e
+	}
+	right, ce := DecodeExpr(rightV)
+	if ce != nil {
+		return nil, ce
+	}
+	return Binary{Op: op, Left: left, Right: right}, nil
 }
 
 func decodeExprList(el any) ([]ColExpr, *ColumnError) {
@@ -663,23 +967,52 @@ func pairOf(el any) (Pair, *ColumnError) {
 }
 
 func orderOf(el any) (OrderKey, *ColumnError) {
-	colV, e := field(el, "col")
+	// Sort-key aliases: `column` for `col`; ONE of `dir` (canonical),
+	// `descending` (alias boolean), or `direction` (alias) — a directionless
+	// entry is the SQL default (asc).
+	colV, e := fieldAliased(el, "col", "column")
 	if e != nil {
 		return OrderKey{}, e
-	}
-	dirV, e := field(el, "dir")
-	if e != nil {
-		return OrderKey{}, e
-	}
-	dir, _ := dirV.(string)
-	if !sortDirs[dir] {
-		dir = "asc"
 	}
 	col, ok := colV.(string)
 	if !ok {
 		return OrderKey{}, cerr(MalformedShape, "order.col: expected string")
 	}
-	return OrderKey{Col: col, Dir: dir}, nil
+	dirV, hasDir := tryF(el, "dir")
+	descV, hasDesc := tryF(el, "descending")
+	directionV, hasDirection := tryF(el, "direction")
+	count := 0
+	for _, h := range []bool{hasDir, hasDesc, hasDirection} {
+		if h {
+			count++
+		}
+	}
+	if count > 1 {
+		return OrderKey{}, cerr(MalformedShape,
+			"give ONE of \"dir\" (canonical: asc|desc), \"descending\" (alias boolean), or \"direction\" (alias: asc|desc)")
+	}
+	switch {
+	case hasDir, hasDirection:
+		v := dirV
+		if hasDirection {
+			v = directionV
+		}
+		dir, _ := v.(string)
+		if !sortDirs[dir] {
+			dir = "asc"
+		}
+		return OrderKey{Col: col, Dir: dir}, nil
+	case hasDesc:
+		b, ok := descV.(bool)
+		if !ok {
+			return OrderKey{}, cerr(MalformedShape, "\"descending\" must be a JSON boolean")
+		}
+		if b {
+			return OrderKey{Col: col, Dir: "desc"}, nil
+		}
+		return OrderKey{Col: col, Dir: "asc"}, nil
+	}
+	return OrderKey{Col: col, Dir: "asc"}, nil
 }
 
 func pairList(el any, ctx string) ([]Pair, *ColumnError) {
@@ -715,19 +1048,25 @@ func orderList(el any, ctx string) ([]OrderKey, *ColumnError) {
 }
 
 func aggOf(el any) (Agg, *ColumnError) {
-	nameV, e := field(el, "name")
+	// Aggregate-entry aliases: `as` for `name`, `op` for `fn`, `column` for
+	// `of`; `avg` is the SQL-prior alias for `mean` (canonical encode stays
+	// "mean").
+	nameV, e := fieldAliased(el, "name", "as")
 	if e != nil {
 		return Agg{}, e
 	}
-	fnV, e := field(el, "fn")
+	fnV, e := fieldAliased(el, "fn", "op")
 	if e != nil {
 		return Agg{}, e
 	}
-	ofV, e := field(el, "of")
+	ofV, e := fieldAliased(el, "of", "column")
 	if e != nil {
 		return Agg{}, e
 	}
 	fn, _ := fnV.(string)
+	if fn == "avg" {
+		fn = "mean"
+	}
 	if !aggFns[fn] {
 		return Agg{}, cerr(UnknownType, "unknown agg fn '"+fn+"'")
 	}
@@ -747,15 +1086,74 @@ func DecodeTransform(el any) (Transform, *ColumnError) {
 	}
 	switch k {
 	case "filter":
-		v, e := field(el, "pred")
-		if e != nil {
-			return nil, e
+		// `predicate` aliases `pred`; the FLAT filter-step prior
+		// {"$type":"filter","column":C,"op":O,"param":P|"value":V} coerces to
+		// the canonical nested predicate — exactly one canonical value, so the
+		// coercion is admitted. `pred` present takes the canonical path.
+		predV, hasPred := tryF(el, "pred")
+		predicateV, hasPredicate := tryF(el, "predicate")
+		switch {
+		case hasPred && hasPredicate:
+			return nil, cerr(MalformedShape, "give \"pred\" (canonical) or \"predicate\" (alias), not both")
+		case hasPred, hasPredicate:
+			v := predV
+			if hasPredicate {
+				v = predicateV
+			}
+			pred, ce := DecodeExpr(v)
+			if ce != nil {
+				return nil, ce
+			}
+			return Filter{Pred: pred}, nil
 		}
-		pred, ce := DecodeExpr(v)
-		if ce != nil {
-			return nil, ce
+		colV, hasCol := tryF(el, "column")
+		opV, hasOp := tryF(el, "op")
+		if !hasCol || !hasOp {
+			return nil, cerr(MalformedShape,
+				"a filter step carries \"pred\" (a $type-discriminated expression) — or the flat short form {\"column\":…,\"op\":…,\"param\":…|\"value\":…}")
 		}
-		return Filter{Pred: pred}, nil
+		col, ok := colV.(string)
+		if !ok {
+			return nil, cerr(MalformedShape, "flat filter step: \"column\" must be a string")
+		}
+		op, _ := opV.(string)
+		if !binOps[op] {
+			return nil, cerr(UnknownType, "unknown binary op '"+op+"'")
+		}
+		paramV, hasParam := tryF(el, "param")
+		valueV, hasValue := tryF(el, "value")
+		switch {
+		case hasParam && hasValue:
+			return nil, cerr(MalformedShape,
+				"flat filter step: give exactly ONE of \"param\" (a pipeline param name) or \"value\" (a scalar literal), not both")
+		case hasParam:
+			p, ok := paramV.(string)
+			if !ok {
+				return nil, cerr(MalformedShape, "flat filter step: \"param\" must be a string")
+			}
+			return Filter{Pred: Binary{Op: op, Left: Col{Name: col}, Right: Param{Name: p}}}, nil
+		case hasValue:
+			var cell Cell
+			switch t := valueV.(type) {
+			case string:
+				cell = CellStr(t)
+			case bool:
+				cell = CellBool(t)
+			case json.Number:
+				if isIntToken(t) {
+					i, _ := t.Int64()
+					cell = CellInt(i)
+				} else {
+					f, _ := t.Float64()
+					cell = CellFloat(f)
+				}
+			default:
+				return nil, cerr(MalformedShape, "flat filter step: \"value\" must be a scalar (string/int/float/bool)")
+			}
+			return Filter{Pred: Binary{Op: op, Left: Col{Name: col}, Right: Lit{Cell: cell}}}, nil
+		}
+		return nil, cerr(MalformedShape,
+			"flat filter step: {column, op} needs \"param\" (a pipeline param name) or \"value\" (a scalar literal) as the right-hand side")
 	case "project":
 		v, e := field(el, "cols")
 		if e != nil {
@@ -785,7 +1183,8 @@ func DecodeTransform(el any) (Transform, *ColumnError) {
 		}
 		return Derive{Name: name, Expr: expr}, nil
 	case "groupBy":
-		keysV, e := field(el, "keys")
+		// `by` (pandas prior) aliases `keys`; `aggregations` aliases `aggs`.
+		keysV, e := fieldAliased(el, "keys", "by")
 		if e != nil {
 			return nil, e
 		}
@@ -793,7 +1192,7 @@ func DecodeTransform(el any) (Transform, *ColumnError) {
 		if ce != nil {
 			return nil, ce
 		}
-		aggsV, e := field(el, "aggs")
+		aggsV, e := fieldAliased(el, "aggs", "aggregations")
 		if e != nil {
 			return nil, e
 		}
@@ -858,6 +1257,10 @@ func DecodeTransform(el any) (Transform, *ColumnError) {
 			return nil, e
 		}
 		fn, _ := fnV.(string)
+		if fn == "cumSum" {
+			// Legacy alias — the pre-rename wire tag; normalises on re-encode.
+			fn = "cumulSum"
+		}
 		if !windowFns[fn] {
 			return nil, cerr(UnknownType, "unknown window fn '"+fn+"'")
 		}
@@ -892,6 +1295,9 @@ func DecodeTransform(el any) (Transform, *ColumnError) {
 			return nil, e
 		}
 		agg, _ := aggV.(string)
+		if agg == "avg" {
+			agg = "mean"
+		}
 		if !aggFns[agg] {
 			return nil, cerr(UnknownType, "unknown agg fn '"+agg+"'")
 		}
@@ -915,7 +1321,8 @@ func DecodeTransform(el any) (Transform, *ColumnError) {
 		}
 		return Unpivot{IDVars: idv, ValueVars: vv}, nil
 	case "sort":
-		v, e := field(el, "by")
+		// `keys` (SQL ORDER-BY-list prior) aliases `by`.
+		v, e := fieldAliased(el, "by", "keys")
 		if e != nil {
 			return nil, e
 		}
@@ -927,18 +1334,22 @@ func DecodeTransform(el any) (Transform, *ColumnError) {
 	case "distinct":
 		return Distinct{}, nil
 	case "limit":
-		nV, e := field(el, "n")
+		// `count` aliases `n`; an absent `offset` is unambiguously 0.
+		nV, e := fieldAliased(el, "n", "count")
 		if e != nil {
 			return nil, e
 		}
-		offV, e := field(el, "offset")
-		if e != nil {
-			return nil, e
-		}
-		n, ok1 := intToken(nV)
-		off, ok2 := intToken(offV)
-		if !ok1 || !ok2 {
+		n, ok := intToken(nV)
+		if !ok {
 			return nil, cerr(MalformedShape, "limit: expected ints")
+		}
+		off := int64(0)
+		if offV, hasOff := tryF(el, "offset"); hasOff {
+			o, ok := intToken(offV)
+			if !ok {
+				return nil, cerr(MalformedShape, "limit: expected ints")
+			}
+			off = o
 		}
 		return Limit{N: int(n), Offset: int(off)}, nil
 	case "union":

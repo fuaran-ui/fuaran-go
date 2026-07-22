@@ -350,7 +350,7 @@ func evalWindow(f Frame, spec WindowSpec) (Frame, *EvalError) {
 			if n > 0 {
 				outs[n-1] = Null
 			}
-		case "cumSum":
+		case "cumulSum":
 			total := 0.0
 			for i, v := range vals {
 				if x, ok := asNum(v); ok {
@@ -389,7 +389,7 @@ func evalWindow(f Frame, spec WindowSpec) (Frame, *EvalError) {
 	switch spec.Fn {
 	case "rowNumber", "rank":
 		ty = TypeInt
-	case "cumSum", "rollingMean":
+	case "cumulSum", "rollingMean":
 		ty = TypeFloat
 	default:
 		ty = colType(f.Cols, spec.Of)
