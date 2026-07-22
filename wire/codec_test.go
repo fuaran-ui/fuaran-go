@@ -60,7 +60,9 @@ func TestObjKeysSortedTypeFirst(t *testing.T) {
 }
 
 func TestSmallNodeRoundTrip(t *testing.T) {
-	in := `{"id":"m1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"héllo"}}}`
+	// 0.2.0 — the bare string IS the canonical Literal form; the verbose
+	// envelope decodes (read-compat) and normalises to the bare string.
+	in := `{"id":"m1","kind":{"$type":"Markdown","text":"héllo"}}`
 	node, err := DecodeNode(in)
 	if err != nil {
 		t.Fatalf("DecodeNode: %v", err)
@@ -71,6 +73,19 @@ func TestSmallNodeRoundTrip(t *testing.T) {
 	}
 	if out != in {
 		t.Errorf("round trip diverged:\n got %s\nwant %s", out, in)
+	}
+
+	verbose := `{"id":"m1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"héllo"}}}`
+	node, err = DecodeNode(verbose)
+	if err != nil {
+		t.Fatalf("DecodeNode (verbose Literal): %v", err)
+	}
+	out, err = EncodeNode(node)
+	if err != nil {
+		t.Fatalf("EncodeNode: %v", err)
+	}
+	if out != in {
+		t.Errorf("verbose Literal did not normalise:\n got %s\nwant %s", out, in)
 	}
 }
 
@@ -135,16 +150,22 @@ func TestOpRejectsSentinelValue(t *testing.T) {
 	}
 }
 
-// Every kind with a typed field schema must be a recognised kind, and the
-// special-cased builders (Box, the legacy containers, Table) must not also
-// carry a schema — a schema for an unroutable kind would be dead code.
+// Every kind with a typed decoder must be a recognised kind, and the
+// special-cased handlers (Box, the legacy containers, Table) must not also
+// carry a builder — a builder for an unroutable kind would be dead code. The
+// validator's required-fields registry must likewise name only routable kinds.
 func TestKindSchemasAreRegistered(t *testing.T) {
-	for kind := range kindSchemas {
+	for kind := range kindBuilders {
 		if !knownKinds.has(kind) {
-			t.Errorf("kindSchemas[%q] is not in knownKinds", kind)
+			t.Errorf("kindBuilders[%q] is not in knownKinds", kind)
 		}
 		if kind == "Box" || kind == "Table" || legacyContainerTags[kind] {
-			t.Errorf("kindSchemas[%q] is shadowed by a dedicated builder", kind)
+			t.Errorf("kindBuilders[%q] is shadowed by a dedicated handler", kind)
+		}
+	}
+	for kind := range requiredKindFields {
+		if !knownKinds.has(kind) {
+			t.Errorf("requiredKindFields[%q] is not in knownKinds", kind)
 		}
 	}
 	for op := range opSchemas {

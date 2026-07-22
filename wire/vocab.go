@@ -39,18 +39,9 @@ func HeadingVariants() []string { return append([]string(nil), headingVariantCas
 // input). The validator uses it to catch a CONSTRUCTED tree that would fail
 // decode on any conformant host. Kinds without a typed schema are absent.
 func RequiredKindFields() map[string][]string {
-	out := make(map[string][]string, len(kindSchemas)+1)
-	for kind, schema := range kindSchemas {
-		var required []string
-		for _, fs := range schema {
-			if fs.required {
-				required = append(required, fs.name)
-			}
-		}
-		out[kind] = required
+	out := make(map[string][]string, len(requiredKindFields))
+	for kind, required := range requiredKindFields {
+		out[kind] = append([]string(nil), required...)
 	}
-	// Box is built by a dedicated decoder rather than a schema; its required
-	// set is pinned by the same wire contract.
-	out["Box"] = []string{"children", "layout", "role"}
 	return out
 }

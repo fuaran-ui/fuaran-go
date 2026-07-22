@@ -61,8 +61,8 @@ func assertRoundTrip(t *testing.T, a, b wire.Node) []wire.Obj {
 
 func card(title, metricLabel string) string {
 	return `{"id":"card","kind":{"$type":"Box","children":[` +
-		`{"id":"h","kind":{"$type":"Heading","level":1,"text":{"$type":"Literal","text":"` + title + `"},"variant":"Standard"}},` +
-		`{"id":"m","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"` + metricLabel + `"},"source":{"$type":"Static","value":1},"tone":"Default","weight":"Standard"}}` +
+		`{"id":"h","kind":{"$type":"Heading","level":1,"text":"` + title + `","variant":"Standard"}},` +
+		`{"id":"m","kind":{"$type":"Metric","label":"` + metricLabel + `","value":{"$type":"Static","value":1}}}` +
 		`],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Card"}}`
 }
 
@@ -102,7 +102,7 @@ func TestChangedHeadingReplaysExactly(t *testing.T) {
 
 func TestDifferentRootIDReplacesWholeTree(t *testing.T) {
 	a := decode(t, card("Sales", "Revenue"))
-	b := decode(t, `{"id":"other","kind":{"$type":"Heading","level":1,"text":{"$type":"Literal","text":"Hi"},"variant":"Standard"}}`)
+	b := decode(t, `{"id":"other","kind":{"$type":"Heading","level":1,"text":"Hi","variant":"Standard"}}`)
 	script := assertRoundTrip(t, a, b)
 	if len(script) != 1 || script[0].Tag != "ReplaceRoot" {
 		t.Errorf("different root id: expected a single ReplaceRoot, got %s", opTags(script))
@@ -113,7 +113,7 @@ func TestRemovedChildReplaysExactly(t *testing.T) {
 	a := decode(t, card("Sales", "Revenue"))
 	// b drops the metric child, keeping only the heading.
 	b := decode(t, `{"id":"card","kind":{"$type":"Box","children":[`+
-		`{"id":"h","kind":{"$type":"Heading","level":1,"text":{"$type":"Literal","text":"Sales"},"variant":"Standard"}}`+
+		`{"id":"h","kind":{"$type":"Heading","level":1,"text":"Sales","variant":"Standard"}}`+
 		`],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Card"}}`)
 	assertRoundTrip(t, a, b)
 }
@@ -122,7 +122,7 @@ func TestInsertedChildReplaysExactly(t *testing.T) {
 	// a has only the heading; b adds the metric — the child-id lists differ,
 	// so the parent escalates to a whole-node replace (still round-trips).
 	a := decode(t, `{"id":"card","kind":{"$type":"Box","children":[`+
-		`{"id":"h","kind":{"$type":"Heading","level":1,"text":{"$type":"Literal","text":"Sales"},"variant":"Standard"}}`+
+		`{"id":"h","kind":{"$type":"Heading","level":1,"text":"Sales","variant":"Standard"}}`+
 		`],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Card"}}`)
 	b := decode(t, card("Sales", "Revenue"))
 	assertRoundTrip(t, a, b)
@@ -132,8 +132,8 @@ func TestReorderedChildrenReplaysExactly(t *testing.T) {
 	a := decode(t, card("Sales", "Revenue"))
 	// b swaps the two children (same ids, different order).
 	b := decode(t, `{"id":"card","kind":{"$type":"Box","children":[`+
-		`{"id":"m","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Revenue"},"source":{"$type":"Static","value":1},"tone":"Default","weight":"Standard"}},`+
-		`{"id":"h","kind":{"$type":"Heading","level":1,"text":{"$type":"Literal","text":"Sales"},"variant":"Standard"}}`+
+		`{"id":"m","kind":{"$type":"Metric","label":"Revenue","value":{"$type":"Static","value":1}}},`+
+		`{"id":"h","kind":{"$type":"Heading","level":1,"text":"Sales","variant":"Standard"}}`+
 		`],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Card"}}`)
 	assertRoundTrip(t, a, b)
 }
@@ -143,7 +143,7 @@ func TestNestedLayoutRecursesPerSeat(t *testing.T) {
 	// must recurse through both layout levels rather than replacing the root.
 	inner := func(label string) string {
 		return `{"id":"inner","kind":{"$type":"Box","children":[` +
-			`{"id":"m","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"` + label + `"},"source":{"$type":"Static","value":1},"tone":"Default","weight":"Standard"}}` +
+			`{"id":"m","kind":{"$type":"Metric","label":"` + label + `","value":{"$type":"Static","value":1}}}` +
 			`],"layout":{"$type":"Auto"},"role":"Group"}}`
 	}
 	root := func(label string) string {
@@ -215,10 +215,10 @@ func genTree(rng *rand.Rand, id string, depth int) wire.Node {
 func genLeaf(rng *rand.Rand, id string) wire.Node {
 	switch rng.Intn(3) {
 	case 0:
-		return decodeMust(`{"id":"` + id + `","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"` + word(rng) + `"}}}`)
+		return decodeMust(`{"id":"` + id + `","kind":{"$type":"Markdown","text":"` + word(rng) + `"}}`)
 	case 1:
 		return decodeMust(`{"id":"` + id + `","kind":{"$type":"Heading","level":` +
-			fmt.Sprint(1+rng.Intn(3)) + `,"text":{"$type":"Literal","text":"` + word(rng) + `"},"variant":"Standard"}}`)
+			fmt.Sprint(1+rng.Intn(3)) + `,"text":"` + word(rng) + `","variant":"Standard"}}`)
 	default:
 		return decodeMust(`{"id":"` + id + `","kind":{"$type":"Skeleton","rows":` + fmt.Sprint(1+rng.Intn(4)) + `}}`)
 	}
@@ -307,7 +307,7 @@ func TestCrossHostGoldens(t *testing.T) {
 		{
 			name:     "root-id-changed",
 			before:   card("Sales", "Revenue"),
-			after:    `{"id":"other","kind":{"$type":"Heading","level":1,"text":{"$type":"Literal","text":"Hi"},"variant":"Standard"}}`,
+			after:    `{"id":"other","kind":{"$type":"Heading","level":1,"text":"Hi","variant":"Standard"}}`,
 			wantRoot: true,
 		},
 	}
@@ -329,7 +329,7 @@ func TestCrossHostGoldens(t *testing.T) {
 			if c.name == "leaf-metric-relabelled" {
 				wantScript := []string{
 					`{"$type":"RemoveNode","target":"m"}`,
-					`{"$type":"InsertChild","child":{"id":"m","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Profit"},"source":{"$type":"Static","value":1},"tone":"Default","weight":"Standard"}},"parentId":"card","position":1}`,
+					`{"$type":"InsertChild","child":{"id":"m","kind":{"$type":"Metric","label":"Profit","value":{"$type":"Static","value":1}}},"parentId":"card","position":1}`,
 				}
 				assertGoldenBytes(t, script, wantScript)
 			}

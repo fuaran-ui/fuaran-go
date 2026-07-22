@@ -14,8 +14,8 @@ import (
 // frame path.
 
 const counterTreeJSON = `{"id":"root","kind":{"$type":"Box","children":[` +
-	`{"id":"count","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Count"},"source":{"$type":"Static","value":0},"tone":"Default","weight":"Standard"}},` +
-	`{"id":"inc","kind":{"$type":"Button","label":{"$type":"Literal","text":"+"},"onClick":{"$type":"Navigate","route":"/noop"},"variant":"Primary"}}` +
+	`{"id":"count","kind":{"$type":"Metric","label":"Count","value":{"$type":"Static","value":0}}},` +
+	`{"id":"inc","kind":{"$type":"Button","label":"+","onClick":{"$type":"Navigate","route":"/noop"},"variant":"Primary"}}` +
 	`],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}`
 
 func mustDecodeNode(t *testing.T, canonicalJSON string) wire.Node {
@@ -37,7 +37,7 @@ func counterHandler() Handler {
 		}
 		count++
 		return []wire.Obj{{Tag: "UpdateProp", Fields: map[string]wire.Value{
-			"path":   wire.Str("Source"),
+			"path":   wire.Str("Value"),
 			"target": wire.Str("count"),
 			"value":  wire.Int(int64(count)),
 		}}}, nil
@@ -60,9 +60,9 @@ func metricValue(t *testing.T, s *Session) int64 {
 	if !ok {
 		t.Fatal("count node missing")
 	}
-	src, ok := metric.Kind.Fields["source"].(wire.Obj)
+	src, ok := metric.Kind.Fields["value"].(wire.Obj)
 	if !ok {
-		t.Fatalf("source not an Obj: %+v", metric.Kind.Fields["source"])
+		t.Fatalf("value not an Obj: %+v", metric.Kind.Fields["value"])
 	}
 	v, ok := src.Fields["value"].(wire.Int)
 	if !ok {

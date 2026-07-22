@@ -280,20 +280,27 @@ func mergeStyle(conflicts *[]Conflict, res resolution, nodeID string, base, a, b
 	role := pickField(conflicts, res, nodeID, "style.role", styleField(base, "role"), styleField(a, "role"), styleField(b, "role"))
 	voice := pickField(conflicts, res, nodeID, "style.voice", styleField(base, "voice"), styleField(a, "voice"), styleField(b, "voice"))
 
-	// Absent ⟺ all-default: omit the whole style facet so it encodes identically.
-	if deref(tone) == "Default" && deref(weight) == "Standard" && deref(emphasis) == "Normal" && role == nil && voice == nil {
-		return nil
+	// §3.6 omit-when-default on the merged facet too: every field is emitted
+	// only when non-default, and an all-default style omits the whole facet —
+	// so the merged tree carries the same canonical bytes the codec produces.
+	fields := map[string]wire.Value{}
+	if v := deref(emphasis); v != "" && v != "Normal" {
+		fields["emphasis"] = wire.Str(v)
 	}
-	fields := map[string]wire.Value{
-		"emphasis": wire.Str(deref(emphasis)),
-		"tone":     wire.Str(deref(tone)),
-		"weight":   wire.Str(deref(weight)),
+	if v := deref(tone); v != "" && v != "Default" {
+		fields["tone"] = wire.Str(v)
 	}
-	if role != nil {
+	if v := deref(weight); v != "" && v != "Standard" {
+		fields["weight"] = wire.Str(v)
+	}
+	if role != nil && *role != "None" {
 		fields["role"] = wire.Str(*role)
 	}
-	if voice != nil {
+	if voice != nil && *voice != "Default" {
 		fields["voice"] = wire.Str(*voice)
+	}
+	if len(fields) == 0 {
+		return nil
 	}
 	return wire.Obj{Fields: fields}
 }

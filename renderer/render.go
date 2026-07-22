@@ -183,6 +183,8 @@ func (r *renderer) renderKind(node wire.Node) string {
 		return r.markdown(fields)
 	case "Metric":
 		return r.metric(node, fields)
+	case "Fact":
+		return r.fact(fields)
 	case "Badge":
 		return r.badge(fields)
 	case "Callout":
@@ -535,7 +537,7 @@ func (r *renderer) markdown(fields map[string]wire.Value) string {
 }
 
 func (r *renderer) metric(node wire.Node, fields map[string]wire.Value) string {
-	value := resolveBinding(fields["source"], r.sources)
+	value := resolveBinding(fields["value"], r.sources)
 	if value == nil {
 		if loading, ok := r.stateLoading(node); ok {
 			return r.renderNode(loading)
@@ -553,6 +555,29 @@ func (r *renderer) metric(node wire.Node, fields map[string]wire.Value) string {
 		parts.WriteString(textElement("div", []attr{{"class", "fuaran-metric-subtext"}}, r.text(subtext)))
 	}
 	return element("div", []attr{{"class", "fuaran-metric fuaran-metric-" + tone}}, parts.String())
+}
+
+// fact — the labeled TEXT fact tile ("Patient: Alice Smith"). Mirrors the
+// reference server renderer's markup: label + value (with optional icon span)
+// + optional help, tone class suffix, emphasis modifier.
+func (r *renderer) fact(fields map[string]wire.Value) string {
+	tone := lowerEnum(fields["tone"], "Default")
+	emphasis := ""
+	if v, ok := fields["emphasis"].(wire.Bool); ok && bool(v) {
+		emphasis = " fuaran-fact-emphasis"
+	}
+	var value strings.Builder
+	if icon, ok := fields["icon"].(wire.Str); ok {
+		value.WriteString(textElement("span", []attr{{"class", "fuaran-fact-icon"}}, string(icon)))
+	}
+	value.WriteString(textElement("span", nil, r.text(fields["value"])))
+	var parts strings.Builder
+	parts.WriteString(textElement("div", []attr{{"class", "fuaran-fact-label"}}, r.text(fields["label"])))
+	parts.WriteString(element("div", []attr{{"class", "fuaran-fact-value"}}, value.String()))
+	if help, ok := fields["help"]; ok {
+		parts.WriteString(textElement("div", []attr{{"class", "fuaran-fact-help"}}, r.text(help)))
+	}
+	return element("div", []attr{{"class", "fuaran-fact fuaran-fact-" + tone + emphasis}}, parts.String())
 }
 
 func lowerEnum(v wire.Value, def string) string {
@@ -622,7 +647,7 @@ func (r *renderer) labelValueRow(fields map[string]wire.Value) string {
 	if v, ok := fields["emphasis"].(wire.Bool); ok && bool(v) {
 		emphasis = " fuaran-label-value-row-emphasis"
 	}
-	value := resolveBinding(fields["source"], r.sources)
+	value := resolveBinding(fields["value"], r.sources)
 	valueText := emDash
 	if value != nil {
 		valueText = formatNumber(fields["format"], value)

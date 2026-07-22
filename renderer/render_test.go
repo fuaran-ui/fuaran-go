@@ -17,7 +17,7 @@ func mustDecode(t *testing.T, canonicalJSON string) wire.Node {
 }
 
 func TestHeadingRendersLevelAndClassVocabulary(t *testing.T) {
-	node := mustDecode(t, `{"id":"h1","kind":{"$type":"Heading","level":2,"text":{"$type":"Literal","text":"Revenue & Cost"},"variant":"Standard"}}`)
+	node := mustDecode(t, `{"id":"h1","kind":{"$type":"Heading","level":2,"text":"Revenue & Cost","variant":"Standard"}}`)
 	html := RenderHTML(node, nil)
 	for _, want := range []string{
 		`<div id="h1" data-fuaran-node-id="h1" class="fuaran-kind-heading fuaran-node fuaran-tone-default fuaran-weight-standard fuaran-emphasis-normal">`,
@@ -30,19 +30,19 @@ func TestHeadingRendersLevelAndClassVocabulary(t *testing.T) {
 }
 
 func TestLinkSanitisesScriptScheme(t *testing.T) {
-	node := mustDecode(t, `{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"javascript:alert(1)"},"label":{"$type":"Literal","text":"Click"}}}`)
+	node := mustDecode(t, `{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"javascript:alert(1)"},"label":"Click"}}`)
 	html := RenderHTML(node, nil)
 	if !strings.Contains(html, `href="about:blank"`) {
 		t.Errorf("script-scheme href not neutralised:\n%s", html)
 	}
-	safe := mustDecode(t, `{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"https://example.org/x"},"label":{"$type":"Literal","text":"Click"}}}`)
+	safe := mustDecode(t, `{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"https://example.org/x"},"label":"Click"}}`)
 	if !strings.Contains(RenderHTML(safe, nil), `href="https://example.org/x"`) {
 		t.Error("https href was not preserved")
 	}
 }
 
 func TestButtonRendersInert(t *testing.T) {
-	node := mustDecode(t, `{"id":"b","kind":{"$type":"Button","label":{"$type":"Literal","text":"Go"},"onClick":{"$type":"Navigate","route":"/x"},"variant":"Primary"}}`)
+	node := mustDecode(t, `{"id":"b","kind":{"$type":"Button","label":"Go","onClick":{"$type":"Navigate","route":"/x"},"variant":"Primary"}}`)
 	html := RenderHTML(node, nil)
 	if !strings.Contains(html, `<button class="fuaran-button fuaran-button-primary">Go</button>`) {
 		t.Errorf("button did not render inert:\n%s", html)
@@ -64,7 +64,7 @@ func TestModalClosedCarriesHiddenAttribute(t *testing.T) {
 }
 
 func TestUnresolvedBindingPlaceholdersAndSourcesResolve(t *testing.T) {
-	tree := `{"id":"m1","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Users"},"source":{"$type":"State","defaultValue":0,"key":"users"},"tone":"Default","weight":"Standard"}}`
+	tree := `{"id":"m1","kind":{"$type":"Metric","label":"Users","value":{"$type":"State","defaultValue":0,"key":"users"}}}`
 	bare := RenderHTML(mustDecode(t, tree), nil)
 	if !strings.Contains(bare, `<div class="fuaran-metric-value">—</div>`) {
 		t.Errorf("unresolved binding must placeholder to the em-dash:\n%s", bare)
@@ -124,7 +124,7 @@ func TestStaticDataGridRendersSemanticTable(t *testing.T) {
 }
 
 func TestSwitchRendersMatchingCaseFromSources(t *testing.T) {
-	tree := `{"id":"sw","kind":{"$type":"Switch","cases":[{"child":{"id":"a","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"case A"}}},"match":"a"}],"default":{"id":"d","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"default"}}},"stateKey":"view"}}`
+	tree := `{"id":"sw","kind":{"$type":"Switch","cases":[{"child":{"id":"a","kind":{"$type":"Markdown","text":"case A"}},"match":"a"}],"default":{"id":"d","kind":{"$type":"Markdown","text":"default"}},"stateKey":"view"}}`
 	withDefault := RenderHTML(mustDecode(t, tree), nil)
 	if !strings.Contains(withDefault, "default") || strings.Contains(withDefault, "case A") {
 		t.Errorf("unset state must render the default:\n%s", withDefault)
@@ -136,7 +136,7 @@ func TestSwitchRendersMatchingCaseFromSources(t *testing.T) {
 }
 
 func TestFragmentRefResolvesDeclaredBody(t *testing.T) {
-	tree := `{"id":"root","kind":{"$type":"Box","children":[{"id":"decl","kind":{"$type":"FragmentDecl","body":{"id":"body-md","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"template body"}}},"name":"tpl"}},{"id":"use","kind":{"$type":"FragmentRef","name":"tpl"}}],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}`
+	tree := `{"id":"root","kind":{"$type":"Box","children":[{"id":"decl","kind":{"$type":"FragmentDecl","body":{"id":"body-md","kind":{"$type":"Markdown","text":"template body"}},"name":"tpl"}},{"id":"use","kind":{"$type":"FragmentRef","name":"tpl"}}],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}`
 	html := RenderHTML(mustDecode(t, tree), nil)
 	if !strings.Contains(html, "template body") {
 		t.Errorf("fragment ref did not resolve the declared body:\n%s", html)

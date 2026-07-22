@@ -15,9 +15,8 @@ func decode(t *testing.T, s string) wire.Node {
 	return n
 }
 
-const stateMetric = `{"id":"m","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},` +
-	`"label":{"$type":"Literal","text":"Users"},"source":{"$type":"State","defaultValue":0,"key":"users"},` +
-	`"tone":"Default","weight":"Standard"}}`
+const stateMetric = `{"id":"m","kind":{"$type":"Metric","label":"Users",` +
+	`"value":{"$type":"State","defaultValue":0,"key":"users"}}}`
 
 func stackOf(children ...string) string {
 	body := ""
@@ -32,22 +31,22 @@ func stackOf(children ...string) string {
 }
 
 func md(id, text string) string {
-	return `{"id":"` + id + `","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"` + text + `"}}}`
+	return `{"id":"` + id + `","kind":{"$type":"Markdown","text":"` + text + `"}}`
 }
 
 func TestBindingClassification(t *testing.T) {
 	slots := BindingSlots(decode(t, stateMetric))
 	found := false
 	for _, s := range slots {
-		if s.Slot == "source" {
+		if s.Slot == "value" {
 			found = true
 			if s.Source != "State" || s.Expression != "$state.users" {
-				t.Errorf("source slot = %+v, want State/$state.users", s)
+				t.Errorf("value slot = %+v, want State/$state.users", s)
 			}
 		}
 	}
 	if !found {
-		t.Errorf("no source binding slot found: %+v", slots)
+		t.Errorf("no value binding slot found: %+v", slots)
 	}
 }
 

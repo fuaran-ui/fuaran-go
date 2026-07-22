@@ -15,8 +15,8 @@ import (
 // hosts produce. The canApply ≡ apply-success law is asserted on every case.
 
 const (
-	metricFull = `{"id":"metric-1","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"Currency","code":"GBP"},"icon":"trending-up","label":{"$type":"Literal","text":"Revenue"},"source":{"$type":"Static","value":1234.5},"subtext":{"$type":"Literal","text":"vs last month"},"tone":"Brand","trend":{"$type":"Static","value":0.07},"trendFormat":{"$type":"Percent","decimals":1},"weight":"Standard"}}`
-	markdown1  = `{"id":"markdown-1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"Updated hourly."}}}`
+	metricFull = `{"id":"metric-1","kind":{"$type":"Metric","format":{"$type":"Currency","code":"GBP"},"icon":"trending-up","label":"Revenue","subtext":"vs last month","tone":"Brand","trend":{"$type":"Static","value":0.07},"trendFormat":{"$type":"Percent","decimals":1},"value":{"$type":"Static","value":1234.5}}}`
+	markdown1  = `{"id":"markdown-1","kind":{"$type":"Markdown","text":"Updated hourly."}}`
 )
 
 func dashRoot(children ...string) string {
@@ -41,22 +41,26 @@ func withNodeExtra(nodeJSON, extra string) string {
 }
 
 func gridColumn(label string) string {
-	return `{"format":{"$type":"None"},"kind":{"$type":"Text"},"label":"` + label +
-		`","value":"<closure>","width":{"$type":"Auto"}}`
+	return `{"kind":{"$type":"Text"},"label":"` + label + `","value":"<closure>"}`
+}
+
+// gridColumnFmt is gridColumn with a non-default (kept-on-the-wire) format.
+func gridColumnFmt(label, format string) string {
+	return `{"format":` + format + `,"kind":{"$type":"Text"},"label":"` + label + `","value":"<closure>"}`
 }
 
 func gridBase(columns ...string) string {
 	return `{"id":"grid-1","kind":{"$type":"DataGrid","columns":[` + strings.Join(columns, ",") +
-		`],"editable":false,"rowKey":"<closure>","source":{"$type":"Static","value":"<opaque>"}}}`
+		`],"rowKey":"<closure>","source":{"$type":"Static","value":"<opaque>"}}}`
 }
 
-const chartBase = `{"id":"chart-1","kind":{"$type":"Chart","source":{"$type":"Static","value":"<opaque>"},"xField":"month","yFields":["revenue","cost"]}}`
+const chartBase = `{"id":"chart-1","kind":{"$type":"Chart","kind":"Bar","source":{"$type":"Static","value":"<opaque>"},"stacked":false,"xField":"month","yFields":["revenue","cost"]}}`
 
 func formBase(nameRequired, ageRequired string) string {
 	return `{"id":"form-1","kind":{"$type":"Form","fields":[` +
-		`{"id":"name","kind":{"$type":"Text","value":{"$type":"Static","value":""}},"label":{"$type":"Literal","text":"Name"},"required":` + nameRequired + `},` +
-		`{"id":"age","kind":{"$type":"Number","value":{"$type":"Static","value":0}},"label":{"$type":"Literal","text":"Age"},"required":` + ageRequired + `}` +
-		`],"onSubmit":"<closure>"}}`
+		`{"id":"name","kind":{"$type":"Text","value":{"$type":"Static","value":""}},"label":"Name","required":` + nameRequired + `},` +
+		`{"id":"age","kind":{"$type":"Number","value":{"$type":"Static","value":0}},"label":"Age","required":` + ageRequired + `}` +
+		`],"onSubmit":{"$type":"Chain","ops":[]},"submitLabel":"Save"}}`
 }
 
 func decodeOpFixture(t *testing.T, corpus, name string) wire.Obj {
@@ -91,13 +95,13 @@ func encodeTree(t *testing.T, n wire.Node) string {
 func TestApplyCorpusFixtures(t *testing.T) {
 	corpus, _ := loadCorpus(t)
 
-	metricEdited := `{"id":"metric-1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"Edited"}}}`
+	metricEdited := `{"id":"metric-1","kind":{"$type":"Markdown","text":"Edited"}}`
 	metricRelabelled := strings.Replace(metricFull,
-		`"label":{"$type":"Literal","text":"Revenue"}`,
-		`"label":{"$type":"Literal","text":"Updated revenue"}`, 1)
+		`"label":"Revenue"`,
+		`"label":"Updated revenue"`, 1)
 	metricRebound := strings.Replace(metricFull,
-		`"source":{"$type":"Static","value":1234.5}`,
-		`"source":{"$type":"Static","value":99.5}`, 1)
+		`"value":{"$type":"Static","value":1234.5}`,
+		`"value":{"$type":"Static","value":99.5}`, 1)
 	metricStyled := withNodeExtra(metricFull, `"style":{"emphasis":"Loud","tone":"Success","weight":"Spacious"}`)
 	metricLoading := withNodeExtra(metricFull, `"state":{"onLoading":{"id":"skel-1","kind":{"$type":"Skeleton","rows":3}}}`)
 
@@ -131,7 +135,7 @@ func TestApplyCorpusFixtures(t *testing.T) {
 			gridBase(gridColumn("Channel"), gridColumn("Spend (GBP)"))},
 		{"op-updateprop-nested-object-value",
 			gridBase(gridColumn("Channel"), gridColumn("Spend")),
-			gridBase(strings.Replace(gridColumn("Channel"), `"format":{"$type":"None"}`, `"format":{"$type":"Currency","code":"GBP"}`, 1), gridColumn("Spend"))},
+			gridBase(gridColumnFmt("Channel", `{"$type":"Currency","code":"GBP"}`), gridColumn("Spend"))},
 		{"op-updateprop-nested-yfield0", chartBase, strings.Replace(chartBase, `"revenue"`, `"sales"`, 1)},
 		{"op-updateprop-nested-yfield1", chartBase, strings.Replace(chartBase, `"cost"`, `"profit"`, 1)},
 		{"op-updateprop-nested-field0-required", formBase("false", "false"), formBase("true", "false")},

@@ -44,10 +44,19 @@ type coerced struct {
 type coercer func(wire.Value) coerced
 
 func coerceTextSource(v wire.Value) coerced {
+	// 0.2.0 — the bare string IS the canonical Literal form. Both op-value
+	// spellings decode to the same typed value at apply time (hosts MUST
+	// accept both); the verbose Literal envelope collapses so the applied
+	// tree re-encodes canonical.
 	if s, ok := v.(wire.Str); ok {
-		return coerced{ok: true, value: wire.Obj{Tag: "Literal", Fields: map[string]wire.Value{"text": s}}}
+		return coerced{ok: true, value: s}
 	}
 	if o, ok := v.(wire.Obj); ok && textSourceSet[o.Tag] {
+		if o.Tag == "Literal" {
+			if t, ok := o.Fields["text"].(wire.Str); ok {
+				return coerced{ok: true, value: t}
+			}
+		}
 		return coerced{ok: true, value: o}
 	}
 	return coerced{detail: "expected a string or TextSource"}
@@ -161,8 +170,12 @@ var (
 // the nested layout object and is layout-mode-sensitive (updateBox).
 var propFields = map[string]map[string]fieldEntry{
 	"Metric": {
-		"Label":       {wireKey: "label", coerce: coerceTextSource},
-		"Source":      {wireKey: "source", coerce: coerceBindingNumber},
+		"Label": {wireKey: "label", coerce: coerceTextSource},
+		// 0.2.0 rename law — the scalar displayed value is `value`; the
+		// pre-rename "Source" path stays accepted (read-compat: persisted op
+		// logs replay), targeting the same slot.
+		"Value":       {wireKey: "value", coerce: coerceBindingNumber},
+		"Source":      {wireKey: "value", coerce: coerceBindingNumber},
 		"Format":      {wireKey: "format", coerce: coerceCellFormat},
 		"Tone":        {wireKey: "tone", coerce: coerceTone},
 		"Weight":      {wireKey: "weight", coerce: coerceWeight},
@@ -202,8 +215,10 @@ var propFields = map[string]map[string]fieldEntry{
 		"Caveat":        {wireKey: "caveat", coerce: coerceTextSource},
 	},
 	"LabelValueRow": {
-		"Label":    {wireKey: "label", coerce: coerceTextSource},
-		"Source":   {wireKey: "source", coerce: coerceBindingNumber},
+		"Label": {wireKey: "label", coerce: coerceTextSource},
+		// 0.2.0 rename law — see Metric above.
+		"Value":    {wireKey: "value", coerce: coerceBindingNumber},
+		"Source":   {wireKey: "value", coerce: coerceBindingNumber},
 		"Format":   {wireKey: "format", coerce: coerceCellFormat},
 		"Emphasis": {wireKey: "emphasis", coerce: coerceBool},
 		"Help":     {wireKey: "help", coerce: coerceTextSource},
@@ -594,11 +609,16 @@ type bindingSlot struct {
 
 // bindingSlots maps (kind tag, op slot) -> the camelCase binding-bearing key.
 var bindingSlots = map[bindingSlot]string{
-	{"Metric", "Source"}:        "source",
+	// 0.2.0 rename law — Metric / LabelValueRow bind their scalar `value`
+	// slot; the pre-rename "Source" slot name stays accepted (read-compat:
+	// persisted op logs replay), targeting the same wire key.
+	{"Metric", "Value"}:         "value",
+	{"Metric", "Source"}:        "value",
 	{"Metric", "Trend"}:         "trend",
 	{"Sparkline", "Source"}:     "source",
 	{"Progress", "Fraction"}:    "fraction",
-	{"LabelValueRow", "Source"}: "source",
+	{"LabelValueRow", "Value"}:  "value",
+	{"LabelValueRow", "Source"}: "value",
 	{"Stepper", "ActiveStep"}:   "activeStep",
 	{"Button", "Disabled"}:      "disabled",
 	{"Select", "Disabled"}:      "disabled",

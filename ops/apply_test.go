@@ -38,7 +38,7 @@ func stackOf(id string, children ...string) string {
 }
 
 func markdownOf(id, text string) string {
-	return `{"id":"` + id + `","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"` + text + `"}}}`
+	return `{"id":"` + id + `","kind":{"$type":"Markdown","text":"` + text + `"}}`
 }
 
 func applyErrCode(t *testing.T, op wire.Obj, tree wire.Node) ApplyErrorCode {
@@ -64,7 +64,7 @@ func TestErrorPaths(t *testing.T) {
 	stackA := mustDecode(t, stackOf("s", markdownOf("a", "x")))
 	stackDup := mustDecode(t, stackOf("s", markdownOf("dup", "x")))
 	stackAB := mustDecode(t, stackOf("s", markdownOf("a", "x"), markdownOf("b", "y")))
-	heading := mustDecode(t, `{"id":"h","kind":{"$type":"Heading","level":2,"text":{"$type":"Literal","text":"Title"},"variant":"Standard"}}`)
+	heading := mustDecode(t, `{"id":"h","kind":{"$type":"Heading","level":2,"text":"Title","variant":"Standard"}}`)
 	nested := mustDecode(t, stackOf("outer", stackOf("inner", markdownOf("leaf", "x"))))
 	child := mustDecode(t, markdownOf("new", "y"))
 	dupChild := mustDecode(t, markdownOf("dup", "y"))
@@ -150,7 +150,7 @@ func TestNestedTabHeaderLabel(t *testing.T) {
 	tabs := func(second string) string {
 		return `{"id":"analysis-tabs","kind":{"$type":"Tabs","children":[` +
 			markdownOf("tab-a", "A") + `,` + markdownOf("tab-b", "B") +
-			`],"tabHeaders":[{"label":{"$type":"Literal","text":"Overview"}},{"label":{"$type":"Literal","text":"` + second + `"}}]}}`
+			`],"tabHeaders":[{"label":"Overview"},{"label":"` + second + `"}]}}`
 	}
 	op := wire.Obj{Tag: "UpdateProp", Fields: map[string]wire.Value{
 		"path":   wire.Str("TabHeaders[1].Label"),
@@ -183,7 +183,7 @@ func TestNestedTabHeadersAbsentIsOutOfRange(t *testing.T) {
 
 // State-surface traversal: a node inside state.onLoading is addressable.
 func TestApplyReachesStateSurfaces(t *testing.T) {
-	base := mustDecode(t, `{"id":"m","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"body"}},"state":{"onLoading":{"id":"skel","kind":{"$type":"Skeleton","rows":3}}}}`)
+	base := mustDecode(t, `{"id":"m","kind":{"$type":"Markdown","text":"body"},"state":{"onLoading":{"id":"skel","kind":{"$type":"Skeleton","rows":3}}}}`)
 	op := wire.Obj{Tag: "UpdateProp", Fields: map[string]wire.Value{
 		"path": wire.Str("Rows"), "target": wire.Str("skel"), "value": wire.Int(5),
 	}}
@@ -191,7 +191,7 @@ func TestApplyReachesStateSurfaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	want := `{"id":"m","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"body"}},"state":{"onLoading":{"id":"skel","kind":{"$type":"Skeleton","rows":5}}}}`
+	want := `{"id":"m","kind":{"$type":"Markdown","text":"body"},"state":{"onLoading":{"id":"skel","kind":{"$type":"Skeleton","rows":5}}}}`
 	if got := mustEncode(t, after); got != want {
 		t.Errorf("state-surface apply diverged:\n got %s\nwant %s", got, want)
 	}

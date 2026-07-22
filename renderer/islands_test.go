@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	islandChildA = `{"id":"md-a","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"Static prose."}}}`
+	islandChildA = `{"id":"md-a","kind":{"$type":"Markdown","text":"Static prose."}}`
 	islandChildB = `{"id":"spark-b","kind":{"$type":"Sparkline","source":{"$type":"Static","value":[1,2,3]}}}`
 )
 
@@ -71,7 +71,7 @@ func TestIslandsEmitBoundariesAndScopedPayloads(t *testing.T) {
 }
 
 func TestIslandPayloadEscapesScriptBreakout(t *testing.T) {
-	node := mustDecode(t, `{"id":"md","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"</script><b>x</b>"}}}`)
+	node := mustDecode(t, `{"id":"md","kind":{"$type":"Markdown","text":"</script><b>x</b>"}}`)
 	html, err := RenderWithIslands(node, nil, map[string]string{"md": "prose"})
 	if err != nil {
 		t.Fatalf("RenderWithIslands: %v", err)

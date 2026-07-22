@@ -15,17 +15,17 @@ func TestStepAppliesOpsAndAdvancesTree(t *testing.T) {
 	if len(opsList) != 1 || opsList[0].Tag != "UpdateProp" {
 		t.Fatalf("expected one UpdateProp op, got %+v", opsList)
 	}
-	// The server tree advanced: the metric source is now Static 1.
+	// The server tree advanced: the metric value is now Static 1.
 	metric, ok := findNode(s.Tree(), "count")
 	if !ok {
 		t.Fatal("count node missing after step")
 	}
-	src, ok := metric.Kind.Fields["source"].(wire.Obj)
+	src, ok := metric.Kind.Fields["value"].(wire.Obj)
 	if !ok || src.Tag != "Static" {
-		t.Fatalf("source not a Static binding: %+v", metric.Kind.Fields["source"])
+		t.Fatalf("value not a Static binding: %+v", metric.Kind.Fields["value"])
 	}
 	if v, ok := src.Fields["value"].(wire.Int); !ok || v != 1 {
-		t.Errorf("metric source = %v, want Static 1", src.Fields["value"])
+		t.Errorf("metric value = %v, want Static 1", src.Fields["value"])
 	}
 
 	// A second click advances to 2 — state persists across steps.
@@ -33,9 +33,9 @@ func TestStepAppliesOpsAndAdvancesTree(t *testing.T) {
 		t.Fatalf("second click rejected: %+v", reject)
 	}
 	metric, _ = findNode(s.Tree(), "count")
-	src, _ = metric.Kind.Fields["source"].(wire.Obj)
+	src, _ = metric.Kind.Fields["value"].(wire.Obj)
 	if v, _ := src.Fields["value"].(wire.Int); v != 2 {
-		t.Errorf("after two clicks source = %v, want 2", src.Fields["value"])
+		t.Errorf("after two clicks value = %v, want 2", src.Fields["value"])
 	}
 }
 
