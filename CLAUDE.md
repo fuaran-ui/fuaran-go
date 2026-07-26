@@ -38,7 +38,7 @@ conformant host. Cross-repo development conventions (port allocation, formatting
 - **Apache 2.0 from day one** — same posture as `fuaran-ts` / `fuaran-py`, to make
   the reference-implementation claim unambiguous.
 - **Sibling reference implementation, not a transpile.** `fuaran-go` is built to
-  the language-neutral wire-format spec (`../fuaran/docs/WIRE_FORMAT.md`) + the
+  the language-neutral wire-format spec (`../fuaran-dotnet/docs/WIRE_FORMAT.md`) + the
   conformance corpus (`../wire-format-fixtures/`), not generated from any other
   tier. There is no Go transpile path (the F# host's Fable backend targets JS /
   Python, not Go) and none is wanted — the hard part (the canonical number form)
@@ -99,7 +99,7 @@ changed files. The `run.ps1` gate is `gofmt -l .` (any listed file fails the gat
 ## Wire format
 
 The canonical wire format is owned by the F# `fuaran` tier
-(`../fuaran/docs/WIRE_FORMAT.md`) with the workspace-level
+(`../fuaran-dotnet/docs/WIRE_FORMAT.md`) with the workspace-level
 `../wire-format-fixtures/` corpus as the executable conformance suite. `fuaran-go`
 is one conformant host: it must round-trip the corpus byte-for-byte and surface
 the canonical reject code + path for every malformed fixture. The **forward-
