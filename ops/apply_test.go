@@ -82,13 +82,16 @@ func TestErrorPaths(t *testing.T) {
 		{"node not found", obj("RemoveNode", map[string]wire.Value{"target": wire.Str("ghost")}), markdown, CodeNodeNotFound},
 		{"remove root", obj("RemoveNode", map[string]wire.Value{"target": wire.Str("root")}), rootMD, CodeKindMismatch},
 		{"insert into childless kind", obj("InsertChild", map[string]wire.Value{
-			"child": child, "parentId": wire.Str("a"), "position": wire.Int(0),
+			"child": child, "parentId": wire.Str("a"),
 		}), stackA, CodeChildlessKind},
-		{"insert position out of range", obj("InsertChild", map[string]wire.Value{
-			"child": child, "parentId": wire.Str("s"), "position": wire.Int(5),
-		}), stackA, CodePositionOutOfRange},
+		// 0.4.0 removed the ordinal, so there is no out-of-range insert to
+		// reject. What replaces it: order is stated by naming ids, and a list
+		// that is not an exact permutation of the parent's children fails loudly.
+		{"reorder that is not an exact permutation", obj("ReorderChildren", map[string]wire.Value{
+			"parentId": wire.Str("s"), "newOrder": wire.Arr{wire.Str("a")},
+		}), stackAB, CodeOrderingMismatch},
 		{"insert duplicate id", obj("InsertChild", map[string]wire.Value{
-			"child": dupChild, "parentId": wire.Str("s"), "position": wire.Int(0),
+			"child": dupChild, "parentId": wire.Str("s"),
 		}), stackDup, CodeDuplicateNodeID},
 		{"unknown field", obj("UpdateProp", map[string]wire.Value{
 			"path": wire.Str("Nope"), "target": wire.Str("a"), "value": wire.Str("v"),
@@ -107,7 +110,7 @@ func TestErrorPaths(t *testing.T) {
 			"newOrder": wire.Arr{wire.Str("a"), wire.Str("z")}, "parentId": wire.Str("s"),
 		}), stackAB, CodeOrderingMismatch},
 		{"move into own descendant", obj("MoveNode", map[string]wire.Value{
-			"newParentId": wire.Str("inner"), "newPosition": wire.Int(0), "target": wire.Str("outer"),
+			"newParentId": wire.Str("inner"), "target": wire.Str("outer"),
 		}), nested, CodeKindMismatch},
 		{"list segment without index", obj("UpdateProp", map[string]wire.Value{
 			"path": wire.Str("Columns.Label"), "target": wire.Str("g"), "value": wire.Str("X"),

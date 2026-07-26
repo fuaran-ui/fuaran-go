@@ -162,9 +162,8 @@ func applyOne(op wire.Obj, root wire.Node) (wire.Node, *ApplyError) {
 
 	case "InsertChild":
 		parentID, parentOK := asStr(fields["parentId"])
-		position, posOK := asInt(fields["position"])
 		child, childOK := fields["child"].(wire.Node)
-		if !parentOK || !posOK || !childOK {
+		if !parentOK || !childOK {
 			return root, errBadShape
 		}
 		parent, found := findNode(parentID, root)
@@ -177,10 +176,6 @@ func applyOne(op wire.Obj, root wire.Node) (wire.Node, *ApplyError) {
 				"Node '%s' (kind=%s) has no children field — only layout kinds accept structural child ops.",
 				parentID, parent.Kind.Tag))
 		}
-		if position < 0 || position > len(children) {
-			return root, apErr(CodePositionOutOfRange, fmt.Sprintf(
-				"Position %d is out of range for parent '%s' (valid: 0..%d).", position, parentID, len(children)))
-		}
 		existing := make(map[string]bool)
 		for _, id := range allIDs(root) {
 			existing[id] = true
@@ -191,10 +186,11 @@ func applyOne(op wire.Obj, root wire.Node) (wire.Node, *ApplyError) {
 					"NodeId '%s' is already present in the tree; ids must be unique.", id))
 			}
 		}
+		// 0.4.0: InsertChild APPENDS. Placing a node anywhere else is
+		// Batch [InsertChild, ReorderChildren] — order is stated by naming ids.
 		newChildren := make([]wire.Node, 0, len(children)+1)
-		newChildren = append(newChildren, children[:position]...)
+		newChildren = append(newChildren, children...)
 		newChildren = append(newChildren, child)
-		newChildren = append(newChildren, children[position:]...)
 		tree, _ := mapNode(parentID, func(n wire.Node) wire.Node {
 			return withLayoutChildren(n, newChildren)
 		}, root)
@@ -227,8 +223,7 @@ func applyOne(op wire.Obj, root wire.Node) (wire.Node, *ApplyError) {
 	case "MoveNode":
 		target, targetOK := asStr(fields["target"])
 		newParentID, parentOK := asStr(fields["newParentId"])
-		newPosition, posOK := asInt(fields["newPosition"])
-		if !targetOK || !parentOK || !posOK {
+		if !targetOK || !parentOK {
 			return root, errBadShape
 		}
 		if target == newParentID {
@@ -258,7 +253,6 @@ func applyOne(op wire.Obj, root wire.Node) (wire.Node, *ApplyError) {
 		return applyOne(wire.Obj{Tag: "InsertChild", Fields: map[string]wire.Value{
 			"child":    moving,
 			"parentId": wire.Str(newParentID),
-			"position": wire.Int(newPosition),
 		}}, afterRemove)
 
 	case "ReorderChildren":

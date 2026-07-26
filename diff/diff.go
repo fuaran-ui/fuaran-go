@@ -118,19 +118,32 @@ func removeNode(target string) wire.Obj {
 	return wire.Obj{Tag: "RemoveNode", Fields: map[string]wire.Value{"target": wire.Str(target)}}
 }
 
-func insertChild(parentID string, position int, child wire.Node) wire.Obj {
+func insertChild(parentID string, child wire.Node) wire.Obj {
 	return wire.Obj{Tag: "InsertChild", Fields: map[string]wire.Value{
 		"parentId": wire.Str(parentID),
-		"position": wire.Int(position),
 		"child":    child,
 	}}
 }
 
-// seat is a node's position in its parent's structural child list — the target
-// of a RemoveNode + InsertChild whole-node replace.
+func reorderChildren(parentID string, ids []string) wire.Obj {
+	arr := make(wire.Arr, 0, len(ids))
+	for _, id := range ids {
+		arr = append(arr, wire.Str(id))
+	}
+	return wire.Obj{Tag: "ReorderChildren", Fields: map[string]wire.Value{
+		"parentId": wire.Str(parentID),
+		"newOrder": arr,
+	}}
+}
+
+// seat is a node's place in its parent's structural child list — the target of
+// a RemoveNode + InsertChild whole-node replace. siblingIDs is the parent's
+// full ordered child id list, needed because 0.4.0's InsertChild APPENDS: the
+// re-inserted node lands last, so the original order has to be restated.
 type seat struct {
-	parentID string
-	position int
+	parentID   string
+	position   int
+	siblingIDs []string
 }
 
 // diffNode recurses a pair of nodes sharing an id. parent, when non-nil, is the
@@ -148,7 +161,7 @@ func diffNode(a, b wire.Node, parent *seat, script *[]wire.Obj) {
 	// escalates to a whole-node replace at this seat.
 	if aOK && bOK && ownContentSame(a, b) && sameChildIDs(ak, bk) {
 		for i := range ak {
-			child := seat{parentID: a.ID, position: i}
+			child := seat{parentID: a.ID, position: i, siblingIDs: childIDs(bk)}
 			diffNode(ak[i], bk[i], &child, script)
 		}
 		return
@@ -157,11 +170,15 @@ func diffNode(a, b wire.Node, parent *seat, script *[]wire.Obj) {
 		*script = append(*script, replaceRoot(b))
 		return
 	}
-	// Remove the old node, re-insert the new one at the same seat — one
-	// net-zero length change that preserves sibling positions (both share the
-	// same id, so no duplicate-id collision).
+	// Remove the old node and re-insert it (same id, so no duplicate-id
+	// collision). 0.4.0's InsertChild appends, so unless the seat was already
+	// last, restate the parent's order — an exact permutation, since the
+	// remove+insert pair leaves the id SET unchanged.
 	*script = append(*script, removeNode(a.ID))
-	*script = append(*script, insertChild(parent.parentID, parent.position, b))
+	*script = append(*script, insertChild(parent.parentID, b))
+	if parent.position != len(parent.siblingIDs)-1 {
+		*script = append(*script, reorderChildren(parent.parentID, parent.siblingIDs))
+	}
 }
 
 // Diff derives the TreeOp script (as decoded wire.Obj ops) transforming before
@@ -192,4 +209,14 @@ func DiffBatched(before, after wire.Node) []wire.Obj {
 		return []wire.Obj{{Tag: "Batch", Fields: map[string]wire.Value{"ops": inner}}}
 	}
 	return script
+}
+
+// childIDs is the ordered id list of a structural child slice — the exact
+// permutation a ReorderChildren must name.
+func childIDs(children []wire.Node) []string {
+	ids := make([]string, 0, len(children))
+	for _, c := range children {
+		ids = append(ids, c.ID)
+	}
+	return ids
 }

@@ -106,14 +106,12 @@ func init() {
 		"InsertChild": {
 			{"child", true, decodeNodeField},
 			{"parentId", true, decodeString},
-			{"position", true, decodeInt},
 		},
 		"RemoveNode": {
 			{"target", true, decodeString},
 		},
 		"MoveNode": {
 			{"newParentId", true, decodeString},
-			{"newPosition", true, decodeInt},
 			{"target", true, decodeString},
 		},
 		"ReorderChildren": {

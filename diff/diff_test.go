@@ -329,7 +329,9 @@ func TestCrossHostGoldens(t *testing.T) {
 			if c.name == "leaf-metric-relabelled" {
 				wantScript := []string{
 					`{"$type":"RemoveNode","target":"m"}`,
-					`{"$type":"InsertChild","child":{"id":"m","kind":{"$type":"Metric","label":"Profit","value":{"$type":"Static","value":1}}},"parentId":"card","position":1}`,
+					// 0.4.0: InsertChild appends, and `m` was already the last
+					// child, so no ReorderChildren is needed to restore order.
+					`{"$type":"InsertChild","child":{"id":"m","kind":{"$type":"Metric","label":"Profit","value":{"$type":"Static","value":1}}},"parentId":"card"}`,
 				}
 				assertGoldenBytes(t, script, wantScript)
 			}
