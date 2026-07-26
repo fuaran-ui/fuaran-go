@@ -714,11 +714,20 @@ func decodeBindingWith(raw any, path string, parse staticParser) Value {
 	tag := dispatch(obj, path, bindingCases, CodeUnknownDUCase)
 	switch tag {
 	case "Static":
-		v, ok := obj["value"]
-		if !ok {
-			fail(CodeMissingField, path+".value", "Static binding missing value")
+		// Phase 677 — absence is structural: a MISSING `value` means the binding
+		// carries none, and the legacy `"value": null` spelling normalises to the
+		// same thing (§16 shorthand). Where the slot's parser yields Null the key
+		// is omitted entirely; where it yields a typed empty (options normalise to
+		// []) that empty is emitted, so "no selection" and "selected nothing" stay
+		// distinguishable.
+		raw := obj["value"]
+		decoded := parse(raw, path+".value")
+
+		if _, isNull := decoded.(Null); isNull {
+			return Obj{Tag: "Static", Fields: map[string]Value{}}
 		}
-		return Obj{Tag: "Static", Fields: map[string]Value{"value": parse(v, path+".value")}}
+
+		return Obj{Tag: "Static", Fields: map[string]Value{"value": decoded}}
 	case "Query":
 		name := expectString(require(obj, "name", path), path+".name")
 		fields := map[string]Value{"name": Str(name)}
@@ -757,7 +766,8 @@ func decodeBindingWith(raw any, path string, parse staticParser) Value {
 		key := expectString(require(obj, "key", path), path+".key")
 		fields := map[string]Value{"key": Str(key)}
 		// Field aliases: initialValue / default — the React useState prior.
-		if raw, ok := optAliased(obj, "defaultValue", "initialValue", "default"); ok {
+		// Phase 677 — an explicit null default is absence, same as omitting it.
+		if raw, ok := optAliased(obj, "defaultValue", "initialValue", "default"); ok && raw != nil {
 			fields["defaultValue"] = fromJSON(raw)
 		}
 		return Obj{Tag: "State", Fields: fields}
