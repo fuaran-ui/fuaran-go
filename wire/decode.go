@@ -436,8 +436,6 @@ var (
 var knownKinds = newCaseSet(
 	// Layout
 	"Box", "SplitPanel", "Tabs", "Stepper", "SummaryList", "Disclosure", "Modal", "ScrollArea",
-	// Legacy container tags (decode-upgrade to Box; Table upgrades to DataGrid)
-	"Dashboard", "Stack", "GridLayout", "Card", "Table",
 	// Display
 	"Heading", "Markdown", "Metric", "Fact", "Badge", "Sparkline", "Callout", "Progress", "Skeleton",
 	"LabelValueRow", "Link", "Image", "List", "Toast", "CodeBlock", "Math", "Drawing",
@@ -455,24 +453,13 @@ func KnownNodeKinds() []string {
 	return append([]string(nil), knownKinds.names...)
 }
 
-// CanonicalNodeKinds returns the emittable NodeKind vocabulary — the recognised
-// kinds MINUS the legacy container tags (Dashboard/Stack/GridLayout/Card, which
-// decode-upgrade to Box) and "Table" (decode-upgrades to DataGrid). Those legacy
-// tags never appear as a canonical node's kind.$type, so they are absent from the
-// wire-format-fixtures manifest's `kinds` enumeration — the Phase 548 cross-host
-// kind-set attestation anchor this set is pinned against.
+// CanonicalNodeKinds returns the emittable NodeKind vocabulary. Since Phase 673
+// retired the superseded container tags outright, every recognised kind is also
+// emittable, so this is now identical to KnownNodeKinds. It is kept as a distinct
+// name because the Phase 548 cross-host kind-set attestation is pinned against it,
+// and because a future decode-only tag would re-introduce the distinction.
 func CanonicalNodeKinds() []string {
-	out := make([]string, 0, len(knownKinds.names))
-
-	for _, k := range knownKinds.names {
-		if legacyContainerTags[k] || k == "Table" {
-			continue
-		}
-
-		out = append(out, k)
-	}
-
-	return out
+	return append([]string(nil), knownKinds.names...)
 }
 
 // ── Value-shape predicates (the omit-when-default seam, §3.6) ──────────────
@@ -2155,70 +2142,6 @@ func decodeBox(obj map[string]any, path string) Obj {
 	return Obj{Tag: "Box", Fields: fields}
 }
 
-var legacyContainerTags = map[string]bool{
-	"Dashboard":  true,
-	"Stack":      true,
-	"GridLayout": true,
-	"Card":       true,
-}
-
-// decodeLegacyContainer decode-upgrades a retired container tag to the
-// equivalent Box (permalink / op-stream compatibility — a legacy tag never
-// re-encodes to its old form).
-func decodeLegacyContainer(tag string, obj map[string]any, path string) Obj {
-	children := decodeChildren(require(obj, "children", path), path+".children")
-	switch tag {
-	case "Dashboard":
-		return Obj{Tag: "Box", Fields: map[string]Value{
-			"children": children,
-			"layout":   Obj{Tag: "Auto", Fields: map[string]Value{}},
-			"role":     Str("Dashboard"),
-		}}
-	case "Stack":
-		direction := enumStr(require(obj, "orientation", path), path+".orientation", orientationCases, "orientation", orientationAliases)
-		wrap := expectBool(require(obj, "wrap", path), path+".wrap")
-		return Obj{Tag: "Box", Fields: map[string]Value{
-			"children": children,
-			"layout":   Obj{Tag: "Flex", Fields: map[string]Value{"direction": Str(direction), "wrap": Bool(wrap)}},
-			"role":     Str("Group"),
-		}}
-	case "GridLayout":
-		gridFields := map[string]Value{
-			"cols": Int(expectInt(require(obj, "cols", path), path+".cols")),
-		}
-		if raw, ok := obj["templateColumns"]; ok {
-			gridFields["templateColumns"] = Str(expectString(raw, path+".templateColumns"))
-		}
-		return Obj{Tag: "Box", Fields: map[string]Value{
-			"children": children,
-			"layout":   Obj{Tag: "Grid", Fields: gridFields},
-			"role":     Str("Group"),
-		}}
-	default: // Card
-		fields := map[string]Value{
-			"children": children,
-			"layout":   Obj{Tag: "Flex", Fields: map[string]Value{"direction": Str("Vertical"), "wrap": Bool(false)}},
-			"role":     Str("Card"),
-		}
-		if raw, ok := optAliased(obj, "heading", "title"); ok {
-			fields["heading"] = decodeTextSource(raw, path+".heading")
-		}
-		return Obj{Tag: "Box", Fields: fields}
-	}
-}
-
-// decodeLegacyTable decode-upgrades a retired Table tag to a static read-only
-// DataGrid: the static text table becomes the staticRows mode, with an empty
-// column set and an opaque Static source. Accepted on read; never re-encodes
-// as Table. (0.2.0 — the editable:false default is omitted.)
-func decodeLegacyTable(obj map[string]any, path string) Obj {
-	return Obj{Tag: "DataGrid", Fields: map[string]Value{
-		"columns":    Arr{},
-		"source":     Obj{Tag: "Static", Fields: map[string]Value{"value": Str(opaqueSentinel)}},
-		"staticRows": decodeStaticRows(obj, path),
-	}}
-}
-
 // ── Kind / style / state / node envelope ────────────────────────────────────
 
 func decodeKind(raw any, path string) Obj {
@@ -2227,10 +2150,6 @@ func decodeKind(raw any, path string) Obj {
 	switch {
 	case tag == "Box":
 		return decodeBox(obj, path)
-	case legacyContainerTags[tag]:
-		return decodeLegacyContainer(tag, obj, path)
-	case tag == "Table":
-		return decodeLegacyTable(obj, path)
 	}
 	if builder, ok := kindBuilders[tag]; ok {
 		return builder(obj, path)

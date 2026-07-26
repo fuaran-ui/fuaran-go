@@ -151,15 +151,15 @@ func TestOpRejectsSentinelValue(t *testing.T) {
 }
 
 // Every kind with a typed decoder must be a recognised kind, and the
-// special-cased handlers (Box, the legacy containers, Table) must not also
-// carry a builder — a builder for an unroutable kind would be dead code. The
+// special-cased handler (Box) must not also carry a builder — a builder for an
+// unroutable kind would be dead code. The
 // validator's required-fields registry must likewise name only routable kinds.
 func TestKindSchemasAreRegistered(t *testing.T) {
 	for kind := range kindBuilders {
 		if !knownKinds.has(kind) {
 			t.Errorf("kindBuilders[%q] is not in knownKinds", kind)
 		}
-		if kind == "Box" || kind == "Table" || legacyContainerTags[kind] {
+		if kind == "Box" {
 			t.Errorf("kindBuilders[%q] is shadowed by a dedicated handler", kind)
 		}
 	}
