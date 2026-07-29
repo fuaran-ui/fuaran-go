@@ -54,9 +54,10 @@ type manifestFixture struct {
 }
 
 type corpusManifest struct {
-	Version  int               `json:"version"`
-	Kinds    []string          `json:"kinds"`
-	Fixtures []manifestFixture `json:"fixtures"`
+	Version        int               `json:"version"`
+	Kinds          []string          `json:"kinds"`
+	FormFieldKinds []string          `json:"formFieldKinds"`
+	Fixtures       []manifestFixture `json:"fixtures"`
 }
 
 // loadCorpus locates the corpus and parses its manifest, skipping the calling
@@ -121,6 +122,50 @@ func TestNodeKindSetMatchesManifest(t *testing.T) {
 	}
 	if len(extra) > 0 {
 		t.Errorf("go decoder kinds the manifest omits (regenerate with --emit-corpus): %v", extra)
+	}
+}
+
+// TestFormFieldKindSetMatchesManifest is the Phase 746 control-vocabulary
+// attestation — the FormFieldKind twin of TestNodeKindSetMatchesManifest above.
+// The kind-set pin only ever covered NodeKind, so a control-vocabulary commit
+// that skipped this host stayed silent until a fixture happened to exercise it;
+// this leg names the missing case ("go decoder lacks DateRange") at the host's
+// next test run instead.
+func TestFormFieldKindSetMatchesManifest(t *testing.T) {
+	_, m := loadCorpus(t)
+	if len(m.FormFieldKinds) == 0 {
+		t.Fatal("manifest declares no 'formFieldKinds' array — regenerate the corpus with --emit-corpus")
+	}
+
+	manifest := make(map[string]bool, len(m.FormFieldKinds))
+	for _, k := range m.FormFieldKinds {
+		manifest[k] = true
+	}
+
+	decoder := make(map[string]bool)
+	for _, k := range wire.CanonicalFormFieldKinds() {
+		decoder[k] = true
+	}
+
+	var missing, extra []string
+	for k := range manifest {
+		if !decoder[k] {
+			missing = append(missing, k)
+		}
+	}
+	for k := range decoder {
+		if !manifest[k] {
+			extra = append(extra, k)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(extra)
+
+	if len(missing) > 0 {
+		t.Errorf("manifest form-field kinds the go decoder lacks (add the decoder arm): %v", missing)
+	}
+	if len(extra) > 0 {
+		t.Errorf("go decoder form-field kinds the manifest omits (regenerate with --emit-corpus): %v", extra)
 	}
 }
 
@@ -293,9 +338,14 @@ func TestDiscriminatorExhaustiveness(t *testing.T) {
 	for _, k := range wire.KnownOpKinds() {
 		knownOps[k] = true
 	}
+	knownControls := make(map[string]bool)
+	for _, k := range wire.CanonicalFormFieldKinds() {
+		knownControls[k] = true
+	}
 
 	seenKinds := make(map[string]bool)
 	seenOps := make(map[string]bool)
+	seenControls := make(map[string]bool)
 	for _, fx := range m.Fixtures {
 		switch fx.Kind {
 		case "node-round-trip":
@@ -303,13 +353,13 @@ func TestDiscriminatorExhaustiveness(t *testing.T) {
 			if err := json.Unmarshal([]byte(readFixture(t, corpus, fx.InputFile)), &raw); err != nil {
 				t.Fatalf("%s: %v", fx.ID, err)
 			}
-			collectNodeKinds(raw, seenKinds)
+			collectNodeKinds(raw, seenKinds, seenControls)
 		case "op-round-trip":
 			var raw any
 			if err := json.Unmarshal([]byte(readFixture(t, corpus, fx.InputFile)), &raw); err != nil {
 				t.Fatalf("%s: %v", fx.ID, err)
 			}
-			collectOpKinds(raw, seenOps, seenKinds)
+			collectOpKinds(raw, seenOps, seenKinds, seenControls)
 		default:
 			// lenient-accept / envelope / elicitation families land with their
 			// own roadmap tiers.
@@ -326,18 +376,26 @@ func TestDiscriminatorExhaustiveness(t *testing.T) {
 			t.Errorf("corpus carries op kind %q the decoder does not recognise — add its case (forward-coupling rule)", op)
 		}
 	}
-	if len(seenKinds) == 0 || len(seenOps) == 0 {
+	for control := range seenControls {
+		if !knownControls[control] {
+			t.Errorf("corpus carries form-field kind %q the decoder does not recognise — add its case (forward-coupling rule)", control)
+		}
+	}
+	if len(seenKinds) == 0 || len(seenOps) == 0 || len(seenControls) == 0 {
 		t.Fatal("exhaustiveness guard collected no discriminators")
 	}
-	t.Logf("exhaustiveness guard: %d node kinds, %d op kinds exercised by the corpus", len(seenKinds), len(seenOps))
+	t.Logf("exhaustiveness guard: %d node kinds, %d op kinds, %d form-field kinds exercised by the corpus",
+		len(seenKinds), len(seenOps), len(seenControls))
 }
 
 // collectNodeKinds treats raw as a node envelope and walks its genuine
 // node-bearing positions only (children / child / fallback / default / body /
 // switch cases / fragment-arg + mount-input slot trees / state surfaces). A
 // blanket id+kind heuristic would over-match — a Form FIELD also carries an
-// {id, kind} envelope whose kind.$type is a FormFieldKind, not a NodeKind.
-func collectNodeKinds(raw any, kinds map[string]bool) {
+// {id, kind} envelope whose kind.$type is a FormFieldKind, not a NodeKind. Those
+// control discriminators are a SEPARATE closed vocabulary, swept into `controls`
+// by collectControlKinds below rather than left unattested (Phase 746).
+func collectNodeKinds(raw any, kinds, controls map[string]bool) {
 	obj, ok := raw.(map[string]any)
 	if !ok {
 		return
@@ -348,24 +406,25 @@ func collectNodeKinds(raw any, kinds map[string]bool) {
 	}
 	if tag, ok := kind["$type"].(string); ok {
 		kinds[tag] = true
+		collectControlKinds(kind, tag, controls)
 	}
 	if state, ok := obj["state"].(map[string]any); ok {
-		collectNodeKinds(state["onLoading"], kinds)
-		collectNodeKinds(state["onEmpty"], kinds)
+		collectNodeKinds(state["onLoading"], kinds, controls)
+		collectNodeKinds(state["onEmpty"], kinds, controls)
 	}
 	if children, ok := kind["children"].([]any); ok {
 		for _, c := range children {
-			collectNodeKinds(c, kinds)
+			collectNodeKinds(c, kinds, controls)
 		}
 	}
-	collectNodeKinds(kind["child"], kinds)
-	collectNodeKinds(kind["fallback"], kinds)
-	collectNodeKinds(kind["default"], kinds)
-	collectNodeKinds(kind["body"], kinds)
+	collectNodeKinds(kind["child"], kinds, controls)
+	collectNodeKinds(kind["fallback"], kinds, controls)
+	collectNodeKinds(kind["default"], kinds, controls)
+	collectNodeKinds(kind["body"], kinds, controls)
 	if cases, ok := kind["cases"].([]any); ok {
 		for _, c := range cases {
 			if caseObj, ok := c.(map[string]any); ok {
-				collectNodeKinds(caseObj["child"], kinds)
+				collectNodeKinds(caseObj["child"], kinds, controls)
 			}
 		}
 	}
@@ -373,16 +432,54 @@ func collectNodeKinds(raw any, kinds map[string]bool) {
 		if slots, ok := kind[slotMapKey].(map[string]any); ok {
 			for _, v := range slots {
 				if arg, ok := v.(map[string]any); ok {
-					collectNodeKinds(arg["tree"], kinds)
+					collectNodeKinds(arg["tree"], kinds, controls)
 				}
 			}
 		}
 	}
 }
 
+// controlCarriers is the FormFieldKind carrier rule (WIRE_FORMAT §11.2), keyed
+// by the PARENT node kind's $type — never by property name. A property-name
+// heuristic attests the wrong family: DataGrid.columns[].kind.$type is a
+// CellKindErased and shares spellings (Text, Date, Checkbox) with the control
+// vocabulary, so sweeping every ".kind" under a "columns"-ish key would report
+// green while measuring a different closed set.
+var controlCarriers = map[string]string{
+	"Form":    "fields",
+	"Filters": "items",
+}
+
+// collectControlKinds records the FormFieldKind discriminators carried by one
+// node kind, when that kind is a control carrier. Post-unification forms and
+// filter chips share ONE control vocabulary, so both carriers feed one set.
+func collectControlKinds(kind map[string]any, tag string, controls map[string]bool) {
+	carrier, ok := controlCarriers[tag]
+	if !ok {
+		return
+	}
+	items, ok := kind[carrier].([]any)
+	if !ok {
+		return
+	}
+	for _, item := range items {
+		itemObj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		control, ok := itemObj["kind"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if controlTag, ok := control["$type"].(string); ok {
+			controls[controlTag] = true
+		}
+	}
+}
+
 // collectOpKinds records an op fixture's top-level discriminator, recursing
 // into Batch members and sweeping the node-bearing op fields for kinds.
-func collectOpKinds(raw any, ops map[string]bool, kinds map[string]bool) {
+func collectOpKinds(raw any, ops, kinds, controls map[string]bool) {
 	obj, ok := raw.(map[string]any)
 	if !ok {
 		return
@@ -392,13 +489,13 @@ func collectOpKinds(raw any, ops map[string]bool, kinds map[string]bool) {
 	}
 	if members, ok := obj["ops"].([]any); ok {
 		for _, m := range members {
-			collectOpKinds(m, ops, kinds)
+			collectOpKinds(m, ops, kinds, controls)
 		}
 	}
-	collectNodeKinds(obj["child"], kinds)               // InsertChild
-	collectNodeKinds(obj["node"], kinds)                // ReplaceRoot
+	collectNodeKinds(obj["child"], kinds, controls)     // InsertChild
+	collectNodeKinds(obj["node"], kinds, controls)      // ReplaceRoot
 	if state, ok := obj["state"].(map[string]any); ok { // UpdateState
-		collectNodeKinds(state["onLoading"], kinds)
-		collectNodeKinds(state["onEmpty"], kinds)
+		collectNodeKinds(state["onLoading"], kinds, controls)
+		collectNodeKinds(state["onEmpty"], kinds, controls)
 	}
 }

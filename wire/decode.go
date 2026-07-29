@@ -394,7 +394,7 @@ var (
 	cellFormatCases   = newCaseSet("None", "Number", "Currency", "Percent", "SignificantDigits", "Date", "Custom")
 	columnWidthCases  = newCaseSet("Auto", "Fixed", "Flex")
 	cellKindCases     = newCaseSet("Text", "Numeric", "Date", "Editable", "Checkbox", "Button", "ButtonGroup", "Link", "Pill", "Progress", "Custom")
-	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Choice", "SegmentedChoice", "TextArea", "Range", "Date")
+	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Choice", "SegmentedChoice", "TextArea", "Range", "Date", "DateRange")
 	flushTriggerCases = newCaseSet("OnBlur", "OnSubmit", "OnDebounce", "OnCommitAction")
 	actionCases       = newCaseSet(
 		"Chain", "Dispatch", "Navigate", "SetState", "Notify", "WriteToClipboard",
@@ -460,6 +460,14 @@ func KnownNodeKinds() []string {
 // and because a future decode-only tag would re-introduce the distinction.
 func CanonicalNodeKinds() []string {
 	return append([]string(nil), knownKinds.names...)
+}
+
+// CanonicalFormFieldKinds returns the emittable FormFieldKind control vocabulary
+// — the Phase 746 attestation twin of CanonicalNodeKinds, pinned against the
+// corpus manifest's `formFieldKinds` enumeration. Since the filters/forms
+// unification there is ONE control vocabulary, so this covers both carriers.
+func CanonicalFormFieldKinds() []string {
+	return append([]string(nil), formFieldCases.names...)
 }
 
 // ── Value-shape predicates (the omit-when-default seam, §3.6) ──────────────
@@ -951,6 +959,79 @@ func decodeRangeValue(raw any, path string) Value {
 		return decodeRangePair(raw, path)
 	}
 	return decodeBindingWith(raw, path, decodeRangePair)
+}
+
+// dateRangePairShape is the ExpectedShape hint carried by the ordered-pair
+// reject — the didactic half of the error (the message names the rule, this
+// names the shape that satisfies it).
+const dateRangePairShape = `ordered ISO-8601 pair ({"from": <iso>, "to": <iso>} with from <= to)`
+
+// decodeDateRangePair reads a {from, to} ISO-8601 pair (object or lenient
+// two-element array) into the canonical bare pair object — the Range twin,
+// differing in exactly three ways: strings not numbers, from/to not min/max,
+// and the ordered-pair gate.
+//
+// The pair is ORDERED: a LITERAL pair whose from sorts after its to is a
+// decode error. Same-variant ISO-8601 strings compare lexicographically in
+// chronological order, so strings.Compare (byte-wise, i.e. ordinal) is total
+// here for every variant — no date parsing, no locale. Only a literal pair is
+// checked; a bound pair's ordering is a runtime concern.
+func decodeDateRangePair(raw any, path string) Value {
+	ordered := func(from, to string) Value {
+		if strings.Compare(from, to) > 0 {
+			failExpecting(
+				CodeWrongType,
+				path,
+				"date-range start '"+from+"' is after end '"+to+"' — a DateRange pair is ordered "+
+					"(from <= to); ISO-8601 strings of one variant compare lexicographically, so swap the two values",
+				dateRangePairShape,
+			)
+		}
+		return Obj{Fields: map[string]Value{"from": Str(from), "to": Str(to)}}
+	}
+	if m, ok := raw.(map[string]any); ok {
+		f, hasFrom := m["from"]
+		t, hasTo := m["to"]
+		if hasFrom && hasTo {
+			// Argument evaluation is left-to-right, so a malformed `from`
+			// surfaces before a malformed `to` — the F# host's order.
+			return ordered(expectString(f, path+".from"), expectString(t, path+".to"))
+		}
+		fail(CodeWrongType, path, "expected an object with from and to ISO-8601 strings at "+path)
+	}
+	if arr, ok := raw.([]any); ok && len(arr) == 2 {
+		return ordered(expectString(arr[0], path+"[0]"), expectString(arr[1], path+"[1]"))
+	}
+	fail(CodeWrongType, path, "expected a date-range pair ({from, to} object or [from, to] array) at "+path)
+	return nil
+}
+
+// decodeDateRangeValue — the DateRange control's value slot, the decodeRangeValue
+// twin. The canonical Static pair rides as the BARE {from, to} object (no
+// envelope); the Static envelope and the two-element array are lenient forms of
+// the same value; every other binding case decodes normally (its
+// State/Filter/Selection defaultValue pair passes through structurally, exactly
+// as Range does — the spec checks only a literal pair).
+func decodeDateRangeValue(raw any, path string) Value {
+	if m, ok := raw.(map[string]any); ok {
+		if _, tagged := m["$type"]; !tagged {
+			return decodeDateRangePair(raw, path)
+		}
+		obj := expectObject(raw, path)
+		tag := dispatch(obj, path, bindingCases, CodeUnknownDUCase)
+		if tag == "Static" {
+			v, ok := obj["value"]
+			if !ok {
+				fail(CodeMissingField, path+".value", "Static binding missing value")
+			}
+			return decodeDateRangePair(v, path+".value")
+		}
+		return decodeBindingWith(raw, path, decodeDateRangePair)
+	}
+	if _, ok := raw.([]any); ok {
+		return decodeDateRangePair(raw, path)
+	}
+	return decodeBindingWith(raw, path, decodeDateRangePair)
 }
 
 // ── Actions ─────────────────────────────────────────────────────────────────
@@ -1490,7 +1571,7 @@ type controlAutoBind struct {
 
 // placeholderFor is the slot's typed placeholder (the pinned
 // control-value defaults: "" / 0 / false / null-choice / {min 0, max 0} /
-// ISO-empty date), as its decoded wire shape.
+// ISO-empty date / ISO-empty {from, to} pair), as its decoded wire shape.
 func placeholderMatches(kindTag string, v Value) bool {
 	switch kindTag {
 	case "Text", "TextArea", "Date":
@@ -1508,6 +1589,13 @@ func placeholderMatches(kindTag string, v Value) bool {
 			return false
 		}
 		return isNumericZero(o.Fields["min"]) && isNumericZero(o.Fields["max"])
+	case "DateRange":
+		// ISO-empty both ends — the pair analogue of Date's "" placeholder.
+		o, ok := v.(Obj)
+		if !ok || o.Tag != "" || len(o.Fields) != 2 {
+			return false
+		}
+		return isStr(o.Fields["from"], "") && isStr(o.Fields["to"], "")
 	}
 	return false
 }
@@ -1601,6 +1689,22 @@ func decodeFormFieldKind(raw any, path string, ab controlAutoBind) Value {
 	case "Date":
 		handler("onChange")
 		valueSlot(decodeBindingString)
+		s.req("variant", enumDecoder(dateVariantCases, "variant", noAliases))
+		s.opt("min", decodeString)
+		s.opt("max", decodeString)
+		s.opt("step", expectNumberField)
+	case "DateRange":
+		// Range's pair mechanics with Date's value conventions: the value slot
+		// is the bare ordered {from, to} pair, the scalars are Date's. Every
+		// s.opt below is load-bearing — buildStrict DROPS unconsumed keys, so a
+		// forgotten one fails byte-comparison rather than erroring.
+		handler("onChange")
+		if raw, ok := s.take("value"); ok {
+			v := decodeDateRangeValue(raw, path+".value")
+			if !isAutoBoundValue(ab, tag, v) {
+				s.set("value", v)
+			}
+		}
 		s.req("variant", enumDecoder(dateVariantCases, "variant", noAliases))
 		s.opt("min", decodeString)
 		s.opt("max", decodeString)
