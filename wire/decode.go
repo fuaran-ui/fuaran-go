@@ -393,7 +393,7 @@ var (
 	)
 	cellFormatCases   = newCaseSet("None", "Number", "Currency", "Percent", "SignificantDigits", "Date", "Custom")
 	columnWidthCases  = newCaseSet("Auto", "Fixed", "Flex")
-	cellKindCases     = newCaseSet("Text", "Numeric", "Date", "Editable", "Checkbox", "Button", "ButtonGroup", "Link", "Pill", "Progress", "Custom")
+	cellKindCases     = newCaseSet("Text", "Numeric", "Date", "Editable", "Checkbox", "Button", "ButtonGroup", "Link", "Pill", "TonedPill", "Progress", "Custom")
 	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Choice", "SegmentedChoice", "TextArea", "Range", "Date", "DateRange")
 	flushTriggerCases = newCaseSet("OnBlur", "OnSubmit", "OnDebounce", "OnCommitAction")
 	actionCases       = newCaseSet(
@@ -1261,6 +1261,12 @@ func decodeEmphasisFlag(raw any, path string) Value {
 	return Bool(expectBool(raw, path))
 }
 
+// toneVariantNames — the legal ToneVariant names in DECLARATION order, in one
+// place because two positions now teach them: a `tone` field and (Phase 750) a
+// TonedPill tone-map value. A second inline copy is exactly how one of them comes
+// to name six tones. Distinct from toneCases.hint(), which sorts.
+const toneVariantNames = "Default | Subdued | Brand | Success | Warning | Critical | Info"
+
 func decodeTone(raw any, path string) Value {
 	return Str(enumStr(raw, path, toneCases, "tone", toneAliases))
 }
@@ -1770,12 +1776,97 @@ func decodeFilterItems(raw any, path string) Value {
 
 // ── DataGrid columns ────────────────────────────────────────────────────────
 
+// toneMapKeys — the tone-map field names a TonedPill cell accepts, canonical
+// first. `map` is the shortest honest name for a value→tone dictionary and the
+// least descriptive one.
+var toneMapKeys = [...]string{"map", "toneMap", "tones"}
+
+func hasAnyKey(obj map[string]any, keys []string) bool {
+	for _, k := range keys {
+		if _, ok := obj[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// decodeToneMap — a TonedPill's `map`: a string-keyed object whose VALUES are
+// ToneVariants. Routed through decodeTone per entry, so the §3.6 tone aliases
+// work inside the map exactly as they do at a `tone` field; a second, private
+// tone reader here is precisely how this position would come to accept a
+// vocabulary the `tone` field does not.
+//
+// The refusal is RE-ISSUED rather than passed through. decodeTone reports
+// "unrecognised tone '…'" with the sorted enum hint, which does not say WHICH
+// map entry is wrong — and "one of your tones is wrong" is not an actionable
+// report when the map has nine entries. The re-issue keeps the code, names the
+// offending KEY and value in the terms the author wrote them, and teaches the
+// seven legal names. A non-string value is a WRONG_TYPE from decodeTone and
+// already reports at the right path, so it passes through untouched.
+func decodeToneMap(raw any, path string) Value {
+	obj := expectObject(raw, path)
+	fields := make(map[string]Value, len(obj))
+	for key, v := range obj {
+		entryPath := path + "." + key
+		fields[key] = reissueToneMapEntry(v, entryPath, key)
+	}
+	return Obj{Fields: fields}
+}
+
+func reissueToneMapEntry(raw any, entryPath, key string) (out Value) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		f, ok := r.(decodeFailure)
+		if !ok || f.err.Code != CodeUnknownDUCase {
+			panic(r)
+		}
+		got, _ := raw.(string)
+		failExpecting(
+			CodeUnknownDUCase,
+			entryPath,
+			"tone-map value '"+got+"' for '"+key+"' is not a ToneVariant",
+			toneVariantNames,
+		)
+	}()
+	return decodeTone(raw, entryPath)
+}
+
+// decodeTonedPill — the shared body of the canonical TonedPill case and the
+// Pill-tagged §16 shorthand below. ONE reader, so the two spellings cannot drift
+// apart in what they accept.
+func decodeTonedPill(obj map[string]any, path string) Value {
+	s := newSpec(obj, path)
+	// `field` names the row property that is both the pill's label and the map key.
+	s.req("field", decodeString)
+	s.req("map", decodeToneMap, toneMapKeys[1:]...)
+	// `default` is omitted-when-`Default` (the Phase 460 discipline); an absent key
+	// restores the identity, and an aliased `Neutral` normalises to `Default` and
+	// then omits — two rules composing, in that order.
+	s.optDrop("default", decodeTone, isDefaultTone)
+	return s.buildStrict("TonedPill")
+}
+
 // decodeCellKindErased — a column's cell kind. Closure-bearing cases normalise
-// to their canonical sentinel shapes.
+// to their canonical sentinel shapes; TonedPill (Phase 750) is the one case with
+// no closure in it, which is exactly why it survives the wire.
 func decodeCellKindErased(raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, cellKindCases, CodeUnknownDUCase)
+	// Lenient-ingest (WIRE_FORMAT.md §16, Phase 750): "pill" is the WORD for the
+	// thing, so a declarative tone rule arrives tagged `Pill` more often than tagged
+	// `TonedPill`. Before this phase those keys were accepted and DISCARDED — the
+	// author's whole intent gone, silently, with no error to notice. Presence of a
+	// tone map is the unambiguous tell: a closure `Pill` carries only labelFn/toneFn
+	// and can never carry one.
+	if tag == "Pill" && hasAnyKey(obj, toneMapKeys[:]) {
+		return decodeTonedPill(obj, path)
+	}
 	switch tag {
+	case "TonedPill":
+		return decodeTonedPill(obj, path)
 	case "Text", "Numeric", "Date":
 		return Obj{Tag: tag, Fields: map[string]Value{}}
 	case "Editable":
