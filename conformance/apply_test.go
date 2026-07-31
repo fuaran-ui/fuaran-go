@@ -51,10 +51,10 @@ func gridColumnFmt(label, format string) string {
 
 func gridBase(columns ...string) string {
 	return `{"id":"grid-1","kind":{"$type":"DataGrid","columns":[` + strings.Join(columns, ",") +
-		`],"rowKey":"<closure>","source":{"$type":"Static","value":"<opaque>"}}}`
+		`],"rowKey":"<closure>","source":{"$type":"Static","value":[]}}}`
 }
 
-const chartBase = `{"id":"chart-1","kind":{"$type":"Chart","kind":"Bar","source":{"$type":"Static","value":"<opaque>"},"stacked":false,"xField":"month","yFields":["revenue","cost"]}}`
+const chartBase = `{"id":"chart-1","kind":{"$type":"Chart","kind":"Bar","source":{"$type":"Static","value":[]},"stacked":false,"xField":"month","yFields":["revenue","cost"]}}`
 
 func formBase(nameRequired, ageRequired string) string {
 	return `{"id":"form-1","kind":{"$type":"Form","fields":[` +

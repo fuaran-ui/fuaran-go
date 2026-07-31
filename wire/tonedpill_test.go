@@ -23,7 +23,7 @@ import (
 // column wraps a cell kind in the smallest grid document that carries it.
 func column(kind string) string {
 	return `{"id":"g1","kind":{"$type":"DataGrid","columns":[{"field":"status","kind":` +
-		kind + `,"label":"Status"}],"source":{"$type":"Static","value":"<opaque>"}}}`
+		kind + `,"label":"Status"}],"source":{"$type":"Static","value":[]}}}`
 }
 
 // normalisesTo asserts that a grid document carrying `given` as its cell kind

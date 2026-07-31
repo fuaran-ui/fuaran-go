@@ -660,23 +660,60 @@ func markerSeqStatic(raw any, path string) Value {
 	return out
 }
 
-// objSeqStatic — the host-typed row-sequence payload (DataGrid / Chart
-// source). The value is opaque by design: every accepted payload (null,
-// "<opaque>", an array of rows) re-encodes as the "<opaque>" sentinel —
-// mirroring the reference encoder's obj best-effort collapse.
-func objSeqStatic(raw any, path string) Value {
+// rowCell — one cell of a typed row (fuaran#665), the residual-opaque boundary
+// narrowed from the whole rows payload to the cell seam. The §2 rule-11
+// recognised scalars (string / bool / number) carry faithfully; a nested array
+// or object is display-opaque and normalises to the "<opaque>" sentinel, which
+// is what the reference hosts re-encode such a cell as — so this host's
+// decode-time normalisation keeps the round trip byte-stable in one pass rather
+// than two, the same idiom the typed parsers above use.
+func rowCell(raw any) Value {
 	switch t := raw.(type) {
-	case nil:
-		return Str(opaqueSentinel)
+	case bool:
+		return Bool(t)
 	case string:
-		return Str(opaqueSentinel)
-	case []any:
-		return Str(opaqueSentinel)
-	default:
-		_ = t
+		return Str(t)
+	case json.Number:
+		return numberValue(t)
 	}
-	fail(CodeWrongType, path, "expected an array (or the \"<opaque>\" sentinel) at "+path)
-	return nil
+	return Str(opaqueSentinel)
+}
+
+// decodeRow — one row: an *open* name→value record of scalar cells. A null cell
+// is OMITTED (rule 4 — absence is structural, never "k":null), matching what the
+// reference encoders emit. Built structurally rather than via fromJSON so a cell
+// named "$type" stays a cell, never a discriminator.
+func decodeRow(raw any, path string) Value {
+	obj := expectObject(raw, path)
+	fields := make(map[string]Value, len(obj))
+	for k, v := range obj {
+		if v == nil {
+			continue
+		}
+		fields[k] = rowCell(v)
+	}
+	return Obj{Fields: fields}
+}
+
+// rowSeqStatic — the typed row-source payload (DataGrid / Chart source).
+// fuaran#665 moved it off the §5 host-typed opaque seam: rows ride the wire as
+// an array of row objects. Both legacy spellings — the "<opaque>" sentinel a
+// pre-typed host emitted, and an absent/null payload — normalise to the empty
+// feed (read-compat, indefinitely: that *was* the whole value the sentinel
+// carried). An empty feed encodes [], never null.
+func rowSeqStatic(raw any, path string) Value {
+	if raw == nil {
+		return Arr{}
+	}
+	if s, ok := raw.(string); ok && s == opaqueSentinel {
+		return Arr{}
+	}
+	arr := expectArray(raw, path)
+	out := make(Arr, len(arr))
+	for i, item := range arr {
+		out[i] = decodeRow(item, path+"["+strconv.Itoa(i)+"]")
+	}
+	return out
 }
 
 func decodeLocalFlushTrigger(raw any, path string) Value {
@@ -710,6 +747,22 @@ func decodeInvokeArgs(raw any, path string) Value {
 // closure sentinels (Query.accessor / Selection.accessor), renames the
 // field-name aliases, and decodes each case to its canonical shape.
 func decodeBindingWith(raw any, path string, parse staticParser) Value {
+	return decodeBindingTyped(raw, path, parse, false)
+}
+
+// decodeBindingTyped is decodeBindingWith plus typedDefault, which extends the
+// slot's Static parser to the OTHER value-carrying binding arms —
+// State/Selection/Filter's defaultValue, which the reference hosts route through
+// the same typed parser. Opt-in per slot rather than global: only the rows slot
+// (fuaran#665) has a fixture pinning it, and flipping the pre-429 typed slots
+// onto it is a behaviour change of its own.
+func decodeBindingTyped(raw any, path string, parse staticParser, typedDefault bool) Value {
+	decodeDefault := func(raw any, p string) Value {
+		if typedDefault {
+			return parse(raw, p)
+		}
+		return fromJSON(raw)
+	}
 	switch raw.(type) {
 	case string, json.Number, bool, []any:
 		// §3.6 shape coercion: every Binding case is a $type-discriminated
@@ -757,14 +810,14 @@ func decodeBindingWith(raw any, path string, parse staticParser) Value {
 		name := expectString(require(obj, "name", path), path+".name")
 		fields := map[string]Value{"name": Str(name)}
 		if raw, ok := obj["defaultValue"]; ok {
-			fields["defaultValue"] = fromJSON(raw)
+			fields["defaultValue"] = decodeDefault(raw, path+".defaultValue")
 		}
 		return Obj{Tag: "Filter", Fields: fields}
 	case "Selection":
 		nodeID := expectString(require(obj, "nodeId", path), path+".nodeId")
 		fields := map[string]Value{"nodeId": Str(nodeID)}
 		if raw, ok := obj["defaultValue"]; ok {
-			fields["defaultValue"] = fromJSON(raw)
+			fields["defaultValue"] = decodeDefault(raw, path+".defaultValue")
 		}
 		if raw, ok := obj["field"]; ok {
 			fields["field"] = Str(expectString(raw, path+".field"))
@@ -776,7 +829,7 @@ func decodeBindingWith(raw any, path string, parse staticParser) Value {
 		// Field aliases: initialValue / default — the React useState prior.
 		// Phase 677 — an explicit null default is absence, same as omitting it.
 		if raw, ok := optAliased(obj, "defaultValue", "initialValue", "default"); ok && raw != nil {
-			fields["defaultValue"] = fromJSON(raw)
+			fields["defaultValue"] = decodeDefault(raw, path+".defaultValue")
 		}
 		return Obj{Tag: "State", Fields: fields}
 	case "Computed":
@@ -906,8 +959,12 @@ func decodeBindingMarkerSeq(raw any, path string) Value {
 	return decodeBindingWith(raw, path, markerSeqStatic)
 }
 
-func decodeBindingObjSeq(raw any, path string) Value {
-	return decodeBindingWith(raw, path, objSeqStatic)
+// decodeBindingRows — the grid/chart rows slot. typedDefault is set because the
+// editable-grid authoring shape is a State-sourced rows array (the write-back
+// floor), so defaultValue carries rows exactly as value does and must take the
+// same normalisation.
+func decodeBindingRows(raw any, path string) Value {
+	return decodeBindingTyped(raw, path, rowSeqStatic, true)
 }
 
 // decodeRangePair reads a {min, max} pair (object or lenient two-element
@@ -2227,7 +2284,7 @@ func init() {
 			s := newSpec(obj, path)
 			s.req("columns", decodeColumns)
 			s.optDrop("editable", decodeBool, isFalseValue)
-			s.req("source", decodeBindingObjSeq, "data", "rows")
+			s.req("source", decodeBindingRows, "data", "rows")
 			s.sentinel("onRowClick")
 			s.sentinel("rowKey")
 			s.opt("rowKeyField", decodeString)
@@ -2239,7 +2296,7 @@ func init() {
 		"Chart": func(obj map[string]any, path string) Obj {
 			s := newSpec(obj, path)
 			s.req("kind", enumDecoder(chartKindCases, "kind", noAliases))
-			s.req("source", decodeBindingObjSeq, "data")
+			s.req("source", decodeBindingRows, "data")
 			stacked := Value(Bool(false))
 			if raw, ok := s.take("stacked"); ok {
 				stacked = decodeBool(raw, path+".stacked")
