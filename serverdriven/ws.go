@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 )
@@ -84,18 +85,127 @@ func (c *WSChannel) Listen() error {
 	}
 }
 
+// ErrOriginNotAllowed is returned when the handshake's Origin fails the
+// UpgradeOptions policy. It is returned BEFORE the connection is hijacked, so
+// the ResponseWriter is untouched and the host can still write a status
+// (403 is the usual choice). Test for it with errors.Is.
+var ErrOriginNotAllowed = errors.New("serverdriven: origin not allowed")
+
+// UpgradeOptions configures the upgrade handshake's Origin policy.
+//
+// THE ZERO VALUE IS THE SAFE DEFAULT: same-origin only. The same-origin policy
+// does not cover WebSockets, so a browser will happily let a page on any origin
+// open a socket to this server — with the victim's cookies attached. A helper
+// that upgraded whatever it was handed unless told otherwise would give every
+// host a cross-site WebSocket hijacking bug by omission, silently, so the
+// unconfigured policy is the restrictive one and widening it is the deliberate
+// act.
+//
+// HOST OBLIGATION. Widening this policy is a security decision the host owns,
+// and Origin is the only signal separating a victim's browser from an
+// attacker's page. Before adding an entry, be sure the socket either carries no
+// ambient authority (no cookies, no HTTP auth, no client certificate) or
+// authenticates every peer independently of the browser's ambient credentials.
+type UpgradeOptions struct {
+	// AllowedOrigins widens the policy beyond same-origin. Same-origin is
+	// ALWAYS allowed and needs no entry here — the list is additive, so adding
+	// a partner origin can never lock out the page this server serves.
+	//
+	// Each entry is a fully-serialised origin ("https://app.example.com" —
+	// scheme, host, and port when non-default), matched case-insensitively; a
+	// bare host name never matches. Two values carry teeth:
+	//
+	//   - "*" disables the check entirely and re-opens the hijacking hole for
+	//     any cookie-authenticated socket. Correct only for a socket that
+	//     carries no ambient authority at all.
+	//   - "null" matches the literal "Origin: null" that sandboxed iframes,
+	//     file:// documents and some redirect chains send. An attacker can mint
+	//     a null origin at will — a sandboxed iframe is enough — so it is never
+	//     treated as same-origin, and allowing it is nearly as broad as "*".
+	AllowedOrigins []string
+
+	// DenyMissingOrigin refuses a handshake carrying no Origin header at all.
+	// The default (false) ALLOWS it, deliberately:
+	//
+	// Origin is a defence against browsers, and only browsers. RFC 6455
+	// requires a browser client to send Origin on every handshake, so an absent
+	// header means the peer is not a browser — a CLI, a service, a mobile app,
+	// a test — which are exactly the clients a headless host exists to serve.
+	// Refusing them by default would break that common case to buy nothing: a
+	// non-browser peer is not bound by the same-origin policy and can simply
+	// send whichever Origin the allowlist accepts, so the check never held it
+	// back. Authentication, not Origin, is what keeps a non-browser peer out.
+	//
+	// Set it when the socket is only ever opened by page JavaScript, where a
+	// header-less handshake is by definition not the client you shipped.
+	DenyMissingOrigin bool
+}
+
+// originAllowed applies the UpgradeOptions policy to one request.
+func originAllowed(r *http.Request, opts UpgradeOptions) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return !opts.DenyMissingOrigin
+	}
+	if sameOrigin(origin, r.Host) {
+		return true
+	}
+	for _, allowed := range opts.AllowedOrigins {
+		if allowed == "*" || strings.EqualFold(allowed, origin) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameOrigin reports whether the serialised Origin names the same host as the
+// request.
+//
+// It compares HOST ONLY, not scheme. A TLS-terminating proxy or load balancer
+// leaves this server seeing plain HTTP while the browser used https, so a
+// strict scheme comparison would reject every legitimate same-origin upgrade
+// behind one — a check that fails closed on correct traffic gets switched off,
+// which is worse than the narrower one it replaced. A host needing
+// scheme-exactness names the exact origin in AllowedOrigins.
+//
+// "null" and any other unparseable or host-less value are never same-origin;
+// they match only an explicit AllowedOrigins entry.
+func sameOrigin(origin, host string) bool {
+	if host == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, host)
+}
+
 // ServeWebSocket completes the RFC 6455 handshake on an HTTP request and
-// returns the channel over the hijacked connection. The caller starts the read
+// returns the channel over the hijacked connection, under the DEFAULT origin
+// policy — same-origin only (see UpgradeOptions). The caller starts the read
 // loop (Listen) in a goroutine and wires the channel to a Connection. Returns
-// an error if the request is not a valid WebSocket upgrade or the
-// ResponseWriter cannot be hijacked.
+// an error if the request is not a valid WebSocket upgrade, its Origin is not
+// allowed, or the ResponseWriter cannot be hijacked.
 func ServeWebSocket(w http.ResponseWriter, r *http.Request) (*WSChannel, error) {
+	return ServeWebSocketWithOptions(w, r, UpgradeOptions{})
+}
+
+// ServeWebSocketWithOptions is ServeWebSocket with an explicit origin policy.
+// Read UpgradeOptions before widening it: the zero value is same-origin, and
+// every widening is a decision the host owns.
+func ServeWebSocketWithOptions(w http.ResponseWriter, r *http.Request, opts UpgradeOptions) (*WSChannel, error) {
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		return nil, errors.New("serverdriven: not a WebSocket upgrade request")
 	}
 	key := r.Header.Get("Sec-WebSocket-Key")
 	if key == "" {
 		return nil, errors.New("serverdriven: missing Sec-WebSocket-Key")
+	}
+	// Checked BEFORE the hijack: a refused upgrade must leave the
+	// ResponseWriter intact so the host can still write a 403.
+	if !originAllowed(r, opts) {
+		return nil, ErrOriginNotAllowed
 	}
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
