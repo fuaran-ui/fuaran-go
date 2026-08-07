@@ -55,6 +55,24 @@ func extractScheme(url string) (string, bool) {
 	return strings.ToLower(strings.TrimSpace(sb.String())), true
 }
 
+// isProtocolRelative reports whether the URL is protocol-relative: "//host/path"
+// and the forms browsers fold into it. WHATWG URL parsing treats '\' as '/' for
+// special schemes, so `\\host`, `/\host` and `\/host` all resolve exactly as
+// `//host` does.
+//
+// These carry no scheme, so the schemeless branch of SanitizeURL would otherwise
+// admit them — but the browser resolves them against the CURRENT page's scheme
+// and lands on an OFF-ORIGIN host, defeating the same-origin intent that makes a
+// schemeless URL safe. On an href that is off-origin navigation; on an image src
+// it is an off-origin request that leaks the Referer.
+func isProtocolRelative(url string) bool {
+	if len(url) < 2 {
+		return false
+	}
+	sep := func(c byte) bool { return c == '/' || c == '\\' }
+	return sep(url[0]) && sep(url[1])
+}
+
 // SanitizeURL returns the URL and true if its scheme is accepted, else
 // ("", false) — default-deny.
 func SanitizeURL(url string) (string, bool) {
@@ -65,6 +83,10 @@ func SanitizeURL(url string) (string, bool) {
 	}
 	scheme, hasScheme := extractScheme(trimmed)
 	if !hasScheme {
+		if isProtocolRelative(trimmed) {
+			// Off-origin despite carrying no scheme.
+			return "", false
+		}
 		// No scheme → relative / fragment / same-origin. Allowed.
 		return trimmed, true
 	}
@@ -88,6 +110,25 @@ func SanitizeURLOrBlank(url string) string {
 }
 
 // ── Markdown raw-HTML sanitization ──────────────────────────────────────────
+
+// asciiLower lowercases ASCII A-Z only, and is therefore byte-length preserving
+// — which strings.ToLower is NOT (U+0130 is two UTF-8 bytes and lowercases to a
+// three-byte sequence). The sweep below searches a case-folded COPY and slices
+// the resulting byte offsets out of the ORIGINAL, so the two must stay aligned;
+// a Unicode-aware fold silently shifts the removal window and leaves a fragment
+// of the element it meant to remove. Operating a byte at a time is safe on UTF-8
+// because every continuation byte has its high bit set and so never matches A-Z.
+// The tag / scheme / protocol vocabulary this file matches is ASCII, so an
+// ASCII-only fold loses no matches.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i := range b {
+		if b[i] >= 'A' && b[i] <= 'Z' {
+			b[i] += 'a' - 'A'
+		}
+	}
+	return string(b)
+}
 
 var dangerousElements = []string{"script", "iframe", "object", "embed", "form", "link", "meta"}
 
@@ -124,7 +165,9 @@ func sanitizeMarkdownHTML(html string) string {
 		openTag := "<" + tag
 		closeTag := "</" + tag + ">"
 		for {
-			lower := strings.ToLower(result)
+			// ASCII-only fold: the byte offsets below index into `result`, so the
+			// searched copy must stay byte-aligned with it (see asciiLower).
+			lower := asciiLower(result)
 			i := strings.Index(lower, openTag)
 			if i < 0 {
 				break
