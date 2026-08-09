@@ -110,6 +110,15 @@ jobs:
           echo "The blocking gate below EXCLUDES these known-failing cases:"
           echo "  whole tests:  $QUARANTINE_WHOLE"
           echo "  fixtures (within the corpus-wide tests): $QUARANTINE_FIXTURES"
+          echo
+          echo "ALSO NOT GATED HERE — inert rather than quarantined:"
+          echo "  - the class-vocabulary parity oracle reads the reference host's source"
+          echo "    from a sibling checkout this workflow does not make, so it Skipf's and"
+          echo "    asserts NOTHING in CI. (This repo has been bitten by that before: a"
+          echo "    sibling rename left the same oracles skipping silently for as long as"
+          echo "    the stale path stood — see the comment above referenceHostNames.)"
+          echo "    Cross-host parity is covered by the scheduled cross-implementation"
+          echo "    run, not by this gate."
           {
             echo "### Conformance quarantine (excluded from the blocking gate)"
             echo
