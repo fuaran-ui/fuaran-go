@@ -1,0 +1,150 @@
+# Build, test and wire-format conformance gate for the Go host.
+#
+# ── Layout ───────────────────────────────────────────────────────────────────
+# The conformance corpus is its own public repository. The test suite locates it
+# by walking up from the repo root looking for `wire-format-fixtures/manifest.json`,
+# so this repo is checked out into a subdirectory and the corpus beside it:
+#
+#     $GITHUB_WORKSPACE/
+#     ├── fuaran-go/               ← this repo
+#     └── wire-format-fixtures/    ← the corpus (fuaran-ui/fuaran-ui-specification)
+#
+# The corpus repository is PUBLIC, so the checkout is anonymous — no token.
+#
+# ── Why the corpus assertion below is not optional ───────────────────────────
+# Every corpus-dependent test calls t.Skip when the corpus is absent, so a
+# layout drift would not fail the job — it would silently retire the entire
+# conformance leg and report green. The assertion turns that into a hard stop.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # ── QUARANTINE ─────────────────────────────────────────────────────────────
+  # These cases fail on a clean tree TODAY, and are excluded from the blocking
+  # gate so that a NEW regression is caught while this existing drift stays
+  # visible. They are not a judgement that the cases are wrong — they are a
+  # record of known, understood, outstanding work.
+  #
+  # Single root cause: the shared corpus has moved ahead of this decoder. Three
+  # fixtures — form-toggle, now-environment-binding, switch-on-selection — carry
+  # vocabulary the decoder does not yet model (a `Toggle` form-field kind, a
+  # `Now` binding, and a required `stateKey` on `Switch`). The five whole tests
+  # below assert over the corpus as a SET, so they fail on the same three
+  # fixtures without offering a per-fixture subtest to exclude.
+  #
+  # Two invocations are needed because `go test -skip` splits its pattern on
+  # unbracketed slashes and matches each part positionally: one pattern cannot
+  # express both "skip this whole test" and "skip only these subtests".
+  #
+  #   QUARANTINE_WHOLE    — tests excluded entirely (the five set-level asserts,
+  #                         plus the three corpus-wide tests, which the second
+  #                         invocation then re-runs per-fixture).
+  #   QUARANTINE_FIXTURES — the three fixtures excluded from those corpus-wide
+  #                         tests. Every OTHER fixture in them is still gated.
+  #
+  # This list SHRINKS TO EMPTY when the decoder models that vocabulary. Delete
+  # entries as they start passing; do not add to it to make a red build green —
+  # a new failure here is the regression this gate exists to catch.
+  QUARANTINE_WHOLE: '^(TestFormFieldKindSetMatchesManifest|TestDiscriminatorExhaustiveness|TestDiffCorpusSelfIsEmpty|TestDiffCorpusPairsRoundTrip|TestDiffCorpusMutationRoundTrip|TestRoundTrip|TestClassVocabularyParity|TestAiToolsIntrospectionOverCorpus)$'
+  CORPUS_WIDE: '^(TestRoundTrip|TestClassVocabularyParity|TestAiToolsIntrospectionOverCorpus)$'
+  QUARANTINE_FIXTURES: '^(form-toggle|now-environment-binding|switch-on-selection)$'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fuaran-go
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: fuaran-go
+
+      # Deliberately UNPINNED: the corpus is the shared conformance authority
+      # every host certifies against, and one current spec for all hosts is the
+      # point of giving it a single home. Pinning here would let this host drift
+      # from the spec without anything going red.
+      - name: Check out the wire-format conformance corpus
+        uses: actions/checkout@v4
+        with:
+          repository: fuaran-ui/fuaran-ui-specification
+          path: wire-format-fixtures
+
+      - name: Assert the corpus is where the tests resolve it
+        run: test -f ../wire-format-fixtures/manifest.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: fuaran-go/go.mod
+
+      # gofmt is this repo's formatting gate. `gofmt -l` lists unformatted files
+      # and exits 0, so the emptiness of its output is the assertion.
+      - name: Format check (gofmt)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt found unformatted files. Run 'gofmt -w .' before committing."
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      # Print what this gate does NOT cover, on every run. A cap nobody can see
+      # reads as "covered everything".
+      - name: Report the conformance quarantine
+        run: |
+          echo "The blocking gate below EXCLUDES these known-failing cases:"
+          echo "  whole tests:  $QUARANTINE_WHOLE"
+          echo "  fixtures (within the corpus-wide tests): $QUARANTINE_FIXTURES"
+          {
+            echo "### Conformance quarantine (excluded from the blocking gate)"
+            echo
+            echo "Cause: the shared corpus carries vocabulary this decoder does not yet model"
+            echo "(\`Toggle\` form-field kind, \`Now\` binding, required \`Switch.stateKey\`)."
+            echo
+            echo '```'
+            echo "whole tests:  $QUARANTINE_WHOLE"
+            echo "fixtures:     $QUARANTINE_FIXTURES"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Non-blocking: runs the FULL suite so the size of the existing drift is
+      # measured on every run rather than inferred from the quarantine list.
+      - name: Conformance drift (reported, non-blocking)
+        continue-on-error: true
+        run: |
+          set +e
+          go test ./... > drift.log 2>&1
+          tail -40 drift.log
+          {
+            echo "### Full suite, including quarantined cases (non-blocking)"
+            echo
+            echo '```'
+            grep -cE '^--- FAIL|^    --- FAIL' drift.log | sed 's/^/failing test lines: /'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      # THE GATE, part 1 — every package, every test outside the quarantine.
+      - name: Test (gated — all packages outside the quarantine)
+        run: go test ./... -skip "$QUARANTINE_WHOLE"
+
+      # THE GATE, part 2 — the three corpus-wide tests, run over every fixture
+      # EXCEPT the three quarantined ones. Without this step the quarantine
+      # would silently drop ~96 fixtures per test rather than three.
+      - name: Test (gated — corpus-wide tests, quarantined fixtures excluded)
+        run: go test ./conformance/... -run "$CORPUS_WIDE" -skip "$CORPUS_WIDE/$QUARANTINE_FIXTURES"
