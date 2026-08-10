@@ -377,6 +377,9 @@ var (
 	boxLayoutCases         = newCaseSet("Flex", "Grid", "Auto")
 	channelDirectionCases  = newCaseSet("OutOnly", "TwoWay")
 	textAnchorCases        = newCaseSet("Start", "Middle", "End")
+	// Phase 801 — the closed two-value sort direction on staticRows.defaultSort.
+	// Lower-case on the wire, unlike most enums here.
+	sortDirectionCases = newCaseSet("asc", "desc")
 
 	// Drawing (Phase 524) — the closed Shape / CurveCommand DUs. An unrecognised
 	// discriminator is UNKNOWN_DU_CASE (the typed-surface default-deny).
@@ -1978,8 +1981,26 @@ func decodeColumns(raw any, path string) Value {
 	return out
 }
 
+// decodeDefaultSort — Phase 801: the {column, direction} initial-order
+// declaration on a static table. `column` is a NON-NEGATIVE index into
+// `headers`; a negative (or non-integral) value is WRONG_TYPE, which is also
+// what schema.json's `minimum: 0` says. An index PAST the end of `headers` is
+// deliberately accepted — a relation between sibling values is not something a
+// per-object codec judges.
+func decodeDefaultSort(raw any, path string) Value {
+	obj := expectObject(raw, path)
+	column := expectInt(require(obj, "column", path), path+".column")
+	if column < 0 {
+		fail(CodeWrongType, path+".column", "expected a non-negative integer header index at "+path+".column")
+	}
+	direction := enumStr(require(obj, "direction", path), path+".direction", sortDirectionCases, "direction", noAliases)
+	return Obj{Fields: map[string]Value{"column": Int(column), "direction": Str(direction)}}
+}
+
 // decodeStaticRows — the {headers, rows} static-rows object of a read-only
-// grid (also the shape the legacy Table decode-upgrade reads).
+// grid (also the shape the legacy Table decode-upgrade reads), plus the
+// Phase 801 optional sort-intent slots. Both omitted re-encodes byte-identically
+// to the pre-801 wire.
 func decodeStaticRows(raw any, path string) Value {
 	obj := expectObject(raw, path)
 	headers := decodeTextSourceArray(require(obj, "headers", path), path+".headers")
@@ -1988,7 +2009,14 @@ func decodeStaticRows(raw any, path string) Value {
 	for i, row := range rowsArr {
 		rows[i] = decodeTextSourceArray(row, path+".rows["+strconv.Itoa(i)+"]")
 	}
-	return Obj{Fields: map[string]Value{"headers": headers, "rows": rows}}
+	fields := map[string]Value{"headers": headers, "rows": rows}
+	if raw, ok := obj["sortable"]; ok {
+		fields["sortable"] = Bool(expectBool(raw, path+".sortable"))
+	}
+	if raw, ok := obj["defaultSort"]; ok {
+		fields["defaultSort"] = decodeDefaultSort(raw, path+".defaultSort")
+	}
+	return Obj{Fields: fields}
 }
 
 // ── Per-kind typed decoders ─────────────────────────────────────────────────

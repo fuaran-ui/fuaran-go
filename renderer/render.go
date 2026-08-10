@@ -884,7 +884,28 @@ func (r *renderer) staticTable(fields map[string]wire.Value) string {
 	}
 	thead := element("thead", nil, element("tr", nil, headerCells.String()))
 	tbody := element("tbody", nil, bodyRows.String())
-	return element("table", []attr{{"class", "fuaran-table"}}, thead+tbody)
+	// Phase 801 — the declared sort intent as data attributes, so a
+	// progressive-enhancement script honours it without re-parsing the wire.
+	// Emitted ONLY when declared (an undeclared table's bytes are unchanged), and
+	// in the same order as the F# / TS / Python server renderers so the
+	// parity-locked markup stays parity-locked.
+	attrs := []attr{{"class", "fuaran-table"}}
+	if sortable, ok := fields["sortable"].(wire.Bool); ok {
+		if bool(sortable) {
+			attrs = append(attrs, attr{"data-fuaran-sortable", "true"})
+		} else {
+			attrs = append(attrs, attr{"data-fuaran-sortable", "false"})
+		}
+	}
+	if ds, ok := fields["defaultSort"].(wire.Obj); ok {
+		column, colOK := ds.Fields["column"].(wire.Int)
+		direction, dirOK := ds.Fields["direction"].(wire.Str)
+		if colOK && dirOK {
+			attrs = append(attrs, attr{"data-fuaran-sort-column", strconv.FormatInt(int64(column), 10)})
+			attrs = append(attrs, attr{"data-fuaran-sort-direction", string(direction)})
+		}
+	}
+	return element("table", attrs, thead+tbody)
 }
 
 func seqLen(v wire.Value) int {
