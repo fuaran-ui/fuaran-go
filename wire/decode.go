@@ -392,13 +392,13 @@ var (
 	// Invoke) plus "Bound" — the TextSource-wrapper convention transferred to
 	// a bare-Binding slot, accepted leniently and unwrapped in place.
 	bindingCases = newCaseSet(
-		"Static", "Query", "Filter", "Selection", "State", "Computed",
+		"Static", "Query", "Filter", "Selection", "State", "Now", "Computed",
 		"I18n", "Local", "Format", "Data", "Transform", "Invoke", "Bound",
 	)
 	cellFormatCases   = newCaseSet("None", "Number", "Currency", "Percent", "SignificantDigits", "Date", "Custom")
 	columnWidthCases  = newCaseSet("Auto", "Fixed", "Flex")
 	cellKindCases     = newCaseSet("Text", "Numeric", "Date", "Editable", "Checkbox", "Button", "ButtonGroup", "Link", "Pill", "TonedPill", "Progress", "Custom")
-	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Choice", "SegmentedChoice", "TextArea", "Range", "Date", "DateRange")
+	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Toggle", "Choice", "SegmentedChoice", "TextArea", "Range", "Date", "DateRange")
 	flushTriggerCases = newCaseSet("OnBlur", "OnSubmit", "OnDebounce", "OnCommitAction")
 	actionCases       = newCaseSet(
 		"Chain", "Dispatch", "Navigate", "SetState", "Notify", "WriteToClipboard",
@@ -836,6 +836,10 @@ func decodeBindingTyped(raw any, path string, parse staticParser, typedDefault b
 			fields["defaultValue"] = decodeDefault(raw, path+".defaultValue")
 		}
 		return Obj{Tag: "State", Fields: fields}
+	case "Now":
+		// Phase 765 — the host-furnished current instant. Tag-only on the wire
+		// (`{"$type":"Now"}`); the clock lives in the host, never the tree.
+		return Obj{Tag: "Now", Fields: map[string]Value{}}
 	case "Computed":
 		return Obj{Tag: "Computed", Fields: map[string]Value{"fn": Str(closureSentinel)}}
 	case "I18n":
@@ -1645,7 +1649,7 @@ func placeholderMatches(kindTag string, v Value) bool {
 		return isStr(v, "")
 	case "Number", "RangedNumber":
 		return isNumericZero(v)
-	case "Checkbox":
+	case "Checkbox", "Toggle":
 		return isBool(v, false)
 	case "Choice", "SegmentedChoice":
 		_, ok := v.(Null)
@@ -1716,7 +1720,9 @@ func decodeFormFieldKind(raw any, path string, ab controlAutoBind) Value {
 	case "Number":
 		handler("onChange")
 		valueSlot(decodeBindingFloat)
-	case "Checkbox":
+	case "Checkbox", "Toggle":
+		// Phase 766 — Toggle is Checkbox's data twin (a boolean with the same
+		// write-back) under a distinct control / a11y contract (role="switch").
 		handler("onToggle")
 		valueSlot(decodeBindingBool)
 	case "Choice":
@@ -2067,9 +2073,11 @@ var requiredKindFields = map[string][]string{
 	"DataGrid":      {"columns", "source"},
 	"Chart":         {"kind", "source", "xField", "yFields"},
 	"Custom":        {"moduleId", "componentId"},
-	"Switch":        {"cases", "default", "stateKey"},
-	"Mount":         {"scopeId", "channel", "capabilities", "onBubble"},
-	"Box":           {"children", "layout", "role"},
+	// Switch's selector is one-of stateKey / on (Phase 768) — the validator's
+	// checkSwitch enforces the pair, so neither appears in the required set.
+	"Switch": {"cases", "default"},
+	"Mount":  {"scopeId", "channel", "capabilities", "onBubble"},
+	"Box":    {"children", "layout", "role"},
 }
 
 func init() {
@@ -2351,11 +2359,28 @@ func init() {
 		},
 		// State-bound conditional child. Duplicate match values are NOT a
 		// decode error (first-match-wins; the validator flags them).
+		// Phase 768 — the selector is any Binding: a non-State selector rides
+		// an `on` key holding the canonical Binding wire form, while the
+		// State(key) form keeps the compact `stateKey` spelling (the reference
+		// encoders' collapse rule, applied on the decode boundary here since
+		// this host's encoder is generic). Both absent keeps the stateKey
+		// MISSING_FIELD, so the reject fixture's error is unchanged; `on` wins
+		// when both are present.
 		"Switch": func(obj map[string]any, path string) Obj {
 			s := newSpec(obj, path)
 			s.req("cases", decodeSwitchCases)
 			s.req("default", decodeSingleNode)
-			s.req("stateKey", decodeString)
+			if raw, ok := s.take("on"); ok {
+				s.take("stateKey") // consumed — `on` is authoritative
+				on := decodeBinding(raw, path+".on")
+				if o, isObj := on.(Obj); isObj && o.Tag == "State" && len(o.Fields) == 1 {
+					s.set("stateKey", o.Fields["key"])
+				} else {
+					s.set("on", on)
+				}
+			} else {
+				s.req("stateKey", decodeString)
+			}
 			return s.build("Switch")
 		},
 		// Isolation/embedding boundary (§4o). inputs passes through WITHOUT

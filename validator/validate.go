@@ -109,9 +109,20 @@ func walk(node wire.Node, path string, findings *[]Finding, seen map[string]bool
 	}
 }
 
-// checkSwitch runs the Switch-specific structural checks: duplicate match
-// values (dead cases, FUARAN082) and an empty state key (FUARAN083).
+// checkSwitch runs the Switch-specific structural checks: a missing selector
+// (one of stateKey / on is required — Phase 768 widened the selector to any
+// Binding), duplicate match values (dead cases, FUARAN082) and an empty state
+// key (FUARAN083).
 func checkSwitch(kind wire.Obj, path string, findings *[]Finding) {
+	if _, hasKey := kind.Fields["stateKey"]; !hasKey {
+		if _, hasOn := kind.Fields["on"]; !hasOn {
+			*findings = append(*findings, Finding{
+				Code: "MISSING_REQUIRED_FIELD", Path: path + ".stateKey",
+				Message:  "kind 'Switch' requires a selector — field 'stateKey' or 'on'",
+				Severity: SeverityError,
+			})
+		}
+	}
 	if key, ok := kind.Fields["stateKey"].(wire.Str); ok && key == "" {
 		*findings = append(*findings, Finding{
 			Code: "UNGROUNDED_SWITCH_STATE_KEY", Path: path + ".stateKey",

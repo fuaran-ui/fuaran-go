@@ -987,12 +987,19 @@ func (r *renderer) mapVis(fields map[string]wire.Value) string {
 // switchKind resolves the initial state value at stateKey from the host
 // sources and renders the first case whose match equals its string form
 // (first-match-wins), else the default. Server + client first render read the
-// same initial state → hydration parity.
+// same initial state → hydration parity. Phase 768 — a non-State selector
+// rides the `on` field and resolves through the shared binding resolver (an
+// unwritten Selection falls back to its declared defaultValue), so SSR renders
+// the branch the client's first render will.
 func (r *renderer) switchKind(fields map[string]wire.Value) string {
 	valueStr := ""
 	if key, ok := fields["stateKey"].(wire.Str); ok {
 		if current, found := r.sources[string(key)]; found {
 			valueStr = displayString(current)
+		}
+	} else if on, ok := fields["on"]; ok {
+		if resolved := resolveBinding(on, r.sources); resolved != nil {
+			valueStr = displayString(resolved)
 		}
 	}
 	if cases, ok := fields["cases"].(wire.Arr); ok {
