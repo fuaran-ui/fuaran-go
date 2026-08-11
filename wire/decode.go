@@ -370,6 +370,7 @@ var (
 	styleRoleCases         = newCaseSet("None", "Eyebrow", "Data", "Lede", "Caption")
 	fontVoiceCases         = newCaseSet("Default", "Display", "Structural")
 	imageVariantCases      = newCaseSet("Default", "Avatar", "Rounded")
+	linkProtectionCases    = newCaseSet("email") // Phase 812 — anti-scraper render strategy
 	scrollOrientationCases = newCaseSet("Vertical", "Horizontal", "Both")
 	mathDisplayCases       = newCaseSet("Inline", "Block")
 	chartKindCases         = newCaseSet("Line", "Bar", "Area", "Pie", "Scatter", "Heatmap")
@@ -2192,6 +2193,9 @@ func init() {
 			s.req("download", decodeBool)
 			s.req("href", decodeBindingString)
 			s.req("label", decodeTextSource)
+			// Phase 812 — optional closed enumeration; an unknown case is
+			// UNKNOWN_DU_CASE at $.kind.protection.
+			s.opt("protection", enumDecoder(linkProtectionCases, "protection", noAliases))
 			s.opt("rel", decodeString)
 			s.opt("target", decodeString)
 			return s.build("Link")

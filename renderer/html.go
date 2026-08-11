@@ -1,6 +1,10 @@
 package renderer
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+	"unicode/utf16"
+)
 
 // A tiny string-HTML builder + the escaping floor. The renderer emits HTML
 // strings — no DOM, no template engine, stdlib only. This file is the single
@@ -59,4 +63,18 @@ func voidElement(tag string, attrs []attr) string {
 // textElement renders an element whose only child is escaped text content.
 func textElement(tag string, attrs []attr, text string) string {
 	return element(tag, attrs, escapeText(text))
+}
+
+// entityEncode emits every UTF-16 code unit of the string as a decimal HTML
+// entity (&#78;) — the protected-link emission (see renderer link). Code-unit
+// iteration (not code points) matches the sibling hosts' per-char encode
+// exactly, keeping the emissions byte-identical across hosts.
+func entityEncode(value string) string {
+	var sb strings.Builder
+	for _, u := range utf16.Encode([]rune(value)) {
+		sb.WriteString("&#")
+		sb.WriteString(strconv.Itoa(int(u)))
+		sb.WriteByte(';')
+	}
+	return sb.String()
 }

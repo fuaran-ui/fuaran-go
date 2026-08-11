@@ -41,6 +41,27 @@ func TestLinkSanitisesScriptScheme(t *testing.T) {
 	}
 }
 
+func TestLinkProtectedEmailEmitsNoPlaintextAddress(t *testing.T) {
+	// Phase 812 — the protected emission: wrapper span + protected anchor with
+	// every href/label character a decimal entity; no plaintext address or
+	// scheme anywhere in the output.
+	node := mustDecode(t, `{"id":"plk","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"mailto:contact@example.com"},"label":"Email us","protection":"email"}}`)
+	html := RenderHTML(node, nil)
+	for _, want := range []string{
+		`<span class="fuaran-link-protected-wrap">`,
+		`<a class="fuaran-link fuaran-link-protected" href="&#109;&#97;&#105;&#108;&#116;&#111;&#58;`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("html missing %q:\n%s", want, html)
+		}
+	}
+	for _, banned := range []string{"mailto:", "contact@example.com", "@example", "Email us"} {
+		if strings.Contains(html, banned) {
+			t.Errorf("protected output leaks plaintext %q:\n%s", banned, html)
+		}
+	}
+}
+
 func TestButtonRendersInert(t *testing.T) {
 	node := mustDecode(t, `{"id":"b","kind":{"$type":"Button","label":"Go","onClick":{"$type":"Navigate","route":"/x"},"variant":"Primary"}}`)
 	html := RenderHTML(node, nil)

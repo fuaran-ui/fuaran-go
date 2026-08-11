@@ -662,7 +662,21 @@ func (r *renderer) link(fields map[string]wire.Value) string {
 	if h, ok := resolveBinding(fields["href"], r.sources).(wire.Str); ok {
 		href = string(h)
 	}
-	attrs := []attr{{"class", "fuaran-link"}, {"href", SanitizeURLOrBlank(href)}}
+	safeHref := SanitizeURLOrBlank(href)
+	if p, ok := fields["protection"].(wire.Str); ok && string(p) == "email" && strings.HasPrefix(safeHref, "mailto:") {
+		// Phase 812 — protected email link. Every UTF-16 code unit of the
+		// sanitised href AND the label is emitted as a decimal HTML entity: the
+		// browser decodes entities in both positions, so the anchor is a working
+		// mailto: with no JavaScript while the raw source carries no scrapeable
+		// address. Encoding every character makes the fragment injection-proof
+		// by construction, which is why the anchor is built as a raw string
+		// below the attribute-escaping floor (escapeAttr would re-escape the
+		// entities). Byte-identical to the reference server renderers.
+		anchor := `<a class="fuaran-link fuaran-link-protected" href="` +
+			entityEncode(safeHref) + `">` + entityEncode(r.text(fields["label"])) + `</a>`
+		return element("span", []attr{{"class", "fuaran-link-protected-wrap"}}, anchor)
+	}
+	attrs := []attr{{"class", "fuaran-link"}, {"href", safeHref}}
 	if rel, ok := fields["rel"].(wire.Str); ok {
 		attrs = append(attrs, attr{"rel", string(rel)})
 	}
