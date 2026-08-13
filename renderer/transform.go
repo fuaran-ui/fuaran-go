@@ -2,6 +2,7 @@ package renderer
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/fuaran-ui/fuaran-go/dataframe"
 	"github.com/fuaran-ui/fuaran-go/wire"
@@ -37,6 +38,84 @@ func transformBinding(binding wire.Value) (wire.Obj, bool) {
 	return wire.Obj{}, false
 }
 
+// liveSourceBinding reports a Phase-818 preserved LIVE Transform source — a
+// binding-shaped source (State / Selection / Query) the decoder kept verbatim
+// so a runtime re-evaluates the pipeline with subscription semantics. This
+// headless host's render-time analogue: the host-seeded store value when
+// present, else the binding's carried default (the decode-time initial
+// snapshot), so SSR output is byte-identical to the Phase-815 snapshot era.
+func liveSourceBinding(source wire.Value) (wire.Obj, bool) {
+	if obj, ok := source.(wire.Obj); ok && (obj.Tag == "State" || obj.Tag == "Selection" || obj.Tag == "Query") {
+		return obj, true
+	}
+	return wire.Obj{}, false
+}
+
+// normaliseLiveRows mirrors the decode-time Phase-815 normalisation at the
+// Value level: ROW-MAJOR data (an Arr of row Objs) transposes to the canonical
+// columnar `{"columns": …}` shape — FIRST-row key set (sorted ordinal), absent
+// cells (and non-object rows' cells) null. Anything else passes through
+// untouched, so canonical columnar data reaches the frame codec unchanged.
+func normaliseLiveRows(v wire.Value) wire.Value {
+	rows, ok := v.(wire.Arr)
+	if !ok || len(rows) == 0 {
+		return v
+	}
+	first, ok := rows[0].(wire.Obj)
+	if !ok {
+		return v
+	}
+	keys := make([]string, 0, len(first.Fields))
+	for k := range first.Fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	cols := make(map[string]wire.Value, len(keys))
+	for _, k := range keys {
+		cells := make(wire.Arr, len(rows))
+		for i, row := range rows {
+			cells[i] = wire.Value(wire.Null{})
+			if rm, ok := row.(wire.Obj); ok {
+				if cell, ok := rm.Fields[k]; ok {
+					cells[i] = cell
+				}
+			}
+		}
+		cols[k] = cells
+	}
+	return wire.Obj{Fields: map[string]wire.Value{"columns": wire.Obj{Fields: cols}}}
+}
+
+// liveInputTable materialises a LIVE source's current data as the pipeline's
+// input table: the host-resolved value when the store is seeded, else the
+// binding's carried defaultValue (the initial snapshot), else the empty table
+// (a Selection / Query with nothing yet — the pipeline evaluates over zero
+// rows). A non-tabular value is an error, so the caller renders absence
+// rather than a wrong value.
+func liveInputTable(obj wire.Obj, sources BindingSources) (dataframe.Table, error) {
+	v := resolveBinding(obj, sources)
+	if v == nil {
+		if dv, ok := obj.Fields["defaultValue"]; ok {
+			v = dv
+		}
+	}
+	if v == nil {
+		return dataframe.Table{}, nil
+	}
+	dataJSON, err := wire.EncodeValue(normaliseLiveRows(v))
+	if err != nil {
+		return dataframe.Table{}, err
+	}
+	src, cerr := dataframe.DecodeSource(dataJSON)
+	if cerr != nil {
+		return dataframe.Table{}, cerr
+	}
+	if emb, ok := src.(dataframe.Embedded); ok {
+		return emb.Table, nil
+	}
+	return dataframe.Table{}, fmt.Errorf("transform live source resolved to a non-embedded source")
+}
+
 // resolveSource resolves a data-bearing node's `source` slot to a row collection
 // (a wire.Arr of column-keyed row objects) — the ROW context. A `Transform`
 // evaluates through the certified evaluator; any other binding falls back to
@@ -67,22 +146,32 @@ func evalTransformFrame(t wire.Obj, sources BindingSources) (dataframe.Table, er
 	if !ok {
 		return dataframe.Table{}, fmt.Errorf("transform binding has no source")
 	}
-	srcJSON, err := wire.EncodeValue(srcVal)
-	if err != nil {
-		return dataframe.Table{}, err
-	}
-	src, cerr := dataframe.DecodeSource(srcJSON)
-	if cerr != nil {
-		return dataframe.Table{}, cerr
-	}
 	var input dataframe.Table
-	switch s := src.(type) {
-	case dataframe.Embedded:
-		input = s.Table
-	case dataframe.Ref:
-		// A headless host resolves no named sources — the top-level source must
-		// travel embedded (a Ref inside a join is likewise UNRESOLVED_SOURCE).
-		return dataframe.Table{}, fmt.Errorf("transform source is an unresolved Ref %q", s.Name)
+	if live, isLive := liveSourceBinding(srcVal); isLive {
+		// Phase 818 — a preserved LIVE source: evaluate over the current data
+		// (host-seeded store value, else the initial snapshot).
+		var lerr error
+		input, lerr = liveInputTable(live, sources)
+		if lerr != nil {
+			return dataframe.Table{}, lerr
+		}
+	} else {
+		srcJSON, err := wire.EncodeValue(srcVal)
+		if err != nil {
+			return dataframe.Table{}, err
+		}
+		src, cerr := dataframe.DecodeSource(srcJSON)
+		if cerr != nil {
+			return dataframe.Table{}, cerr
+		}
+		switch s := src.(type) {
+		case dataframe.Embedded:
+			input = s.Table
+		case dataframe.Ref:
+			// A headless host resolves no named sources — the top-level source must
+			// travel embedded (a Ref inside a join is likewise UNRESOLVED_SOURCE).
+			return dataframe.Table{}, fmt.Errorf("transform source is an unresolved Ref %q", s.Name)
+		}
 	}
 
 	var pipeline []dataframe.Transform
@@ -91,10 +180,11 @@ func evalTransformFrame(t wire.Obj, sources BindingSources) (dataframe.Table, er
 		if err != nil {
 			return dataframe.Table{}, err
 		}
-		pipeline, cerr = dataframe.DecodePipeline(pipeJSON)
+		decoded, cerr := dataframe.DecodePipeline(pipeJSON)
 		if cerr != nil {
 			return dataframe.Table{}, cerr
 		}
+		pipeline = decoded
 	}
 
 	env, unbound, perr := resolveTransformParams(t.Fields["params"], sources)

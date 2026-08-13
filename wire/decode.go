@@ -881,11 +881,54 @@ func decodeBindingTyped(raw any, path string, parse staticParser, typedDefault b
 		source := decodeBindingWith(require(obj, "source", path), path+".source", floatStatic)
 		return Obj{Tag: "Format", Fields: map[string]Value{"format": format, "locale": locale, "source": source}}
 	case "Transform":
-		// Phase 815 — normalise the two observed organic shapes (State/Static
+		// Phase 815 — normalise the two observed organic shapes (Static/Bound
 		// wrapper; row-major rows) to canonical columnar before the frame
 		// codec sees the value.
-		srcRaw := normaliseTransformSource(require(obj, "source", path))
-		source := atComputePath(path+".source", func() Value { return decodeFrameSource(srcRaw) })
+		// Phase 818 — a binding-shaped source (State / Selection / Query
+		// `$type`) is PRESERVED as the live source: the decoded binding sits
+		// in the `source` slot verbatim (canonical re-encode is byte-for-byte
+		// — one wire dialect) and the renderer derives the initial snapshot
+		// from its carried default data at evaluation time. A State wrapper
+		// carrying NO data still errors didactically through the columnar
+		// codec (the 815 posture — it names the missing canonical field), and
+		// a State wrapper's carried data is snapshot-VALIDATED at decode so
+		// the ragged-rows didactic stays byte-identical to the snapshot era.
+		srcRawOrig := require(obj, "source", path)
+		liveTag := ""
+		if m, ok := srcRawOrig.(map[string]any); ok {
+			if t, ok := m["$type"].(string); ok && (t == "State" || t == "Selection" || t == "Query") {
+				liveTag = t
+			}
+		}
+		var source Value
+		switch {
+		case liveTag != "":
+			b := decodeBinding(srcRawOrig, path+".source")
+			_, hasCarried := srcRawOrig.(map[string]any)["defaultValue"]
+			if liveTag == "State" {
+				if hasCarried {
+					// Validate the carried data as the initial snapshot
+					// (didactics byte-identical to the 815 snapshot decode);
+					// the preserved binding stays the stored source.
+					srcRaw := normaliseTransformSource(srcRawOrig)
+					atComputePath(path+".source", func() Value { return decodeFrameSource(srcRaw) })
+					source = b
+				} else {
+					// No carried data — surface the columnar codec's own
+					// missing-field didactic (byte-identical to pre-818).
+					srcRaw := normaliseTransformSource(srcRawOrig)
+					source = atComputePath(path+".source", func() Value { return decodeFrameSource(srcRaw) })
+				}
+			} else {
+				// Selection / Query — the initial snapshot derives from the
+				// carried default (or the empty table) at evaluation time; a
+				// non-tabular default stays loud at evaluation, never here.
+				source = b
+			}
+		default:
+			srcRaw := normaliseTransformSource(srcRawOrig)
+			source = atComputePath(path+".source", func() Value { return decodeFrameSource(srcRaw) })
+		}
 		pipeRaw := require(obj, "pipeline", path)
 		pipeline := atComputePath(path+".pipeline", func() Value { return decodeComputePipeline(pipeRaw) })
 		fields := map[string]Value{"pipeline": pipeline, "source": source}
@@ -1152,9 +1195,29 @@ func decodeAction(raw any, path string) Value {
 		route := expectString(requireAliased(obj, "route", path, "href", "url", "to"), path+".route")
 		return Obj{Tag: tag, Fields: map[string]Value{"route": Str(route)}}
 	case "SetState":
+		// Phase 818 — `value` (a literal JSON value, written verbatim) XOR
+		// `valueFrom` (a Binding evaluated at dispatch time inside the
+		// existing gate). Exactly one must be present; both / neither error
+		// didactically naming both fields.
 		key := expectString(require(obj, "key", path), path+".key")
-		value := fromJSONStrict(require(obj, "value", path), path+".value")
-		return Obj{Tag: tag, Fields: map[string]Value{"key": Str(key), "value": value}}
+		rawValue, hasValue := obj["value"]
+		rawFrom, hasFrom := obj["valueFrom"]
+		if hasValue && hasFrom {
+			fail(CodeWrongType, path+".valueFrom",
+				"SetState carries both 'value' and 'valueFrom' — exactly one is allowed: 'value' is a literal JSON value written verbatim; 'valueFrom' derives the written value from a Binding at dispatch time; remove one")
+		}
+		if !hasValue && !hasFrom {
+			fail(CodeMissingField, path+".value",
+				"missing required field 'value' — provide 'value' (a literal JSON value) or 'valueFrom' (a Binding evaluated at dispatch time)")
+		}
+		fields := map[string]Value{"key": Str(key)}
+		if hasValue {
+			fields["value"] = fromJSONStrict(rawValue, path+".value")
+		}
+		if hasFrom {
+			fields["valueFrom"] = decodeBinding(rawFrom, path+".valueFrom")
+		}
+		return Obj{Tag: tag, Fields: fields}
 	case "AiTool":
 		name := expectString(require(obj, "toolName", path), path+".toolName")
 		args := fromJSONStrict(require(obj, "args", path), path+".args")
@@ -2364,6 +2427,11 @@ func init() {
 			s.sentinel("onRowClick")
 			s.sentinel("rowKey")
 			s.opt("rowKeyField", decodeString)
+			// Phase 818 — the grid-sort header affordance: names the State key
+			// carrying the sort descriptor `{column, direction}` a data-bound
+			// grid's runtime sorts by (and whose headers write it). Typed as a
+			// string; encode-omitted when absent.
+			s.opt("sortStateKey", decodeString)
 			s.opt("staticRows", decodeStaticRows)
 			return s.build("DataGrid")
 		},
