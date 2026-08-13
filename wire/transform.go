@@ -160,6 +160,65 @@ func cInt(raw any, ctx string) Value {
 
 func tagged(tag string, fields map[string]Value) Obj { return Obj{Tag: tag, Fields: fields} }
 
+// ── Transform-source normalisation (Phase 815) ──────────────────────────────
+
+// normaliseTransformSource applies the organic-demand leniencies for the
+// Transform `source` slot, both observed cross-family (the Tier-D pilot,
+// 2026-08-13): models bind a derived value to a Transform whose source is
+// `{"$type":"State","defaultValue":[{row},…]}`. Two universal priors,
+// accommodated as raw data at this host bridge, before the frame codec sees
+// the value (the Bound-unwrap precedent — no frame-codec change, no wire-spec
+// change, no new key). Mirrors the reference host's normaliser:
+//
+//  1. a `State`/`Static`/`Bound` binding WRAPPER around the data unwraps to
+//     its `defaultValue`/`value` (initial-snapshot semantics — a LIVE
+//     state-sourced Transform is deliberately not this); a wrapper carrying
+//     neither payload field stays UNCHANGED and fails downstream;
+//  2. ROW-MAJOR data (an array of row objects) transposes to the canonical
+//     columnar `{"columns": …}` shape — FIRST-row key set (sorted ordinal,
+//     the reference host's map ordering), absent cells (and non-object rows'
+//     cells) filled with JSON null. Canonical columnar and `ref` sources pass
+//     through untouched, so existing fixtures stay byte-identical.
+//
+// Ragged / mixed-type rows are deliberately NOT special-cased — they may fail
+// downstream (the mixed-type didactic).
+func normaliseTransformSource(raw any) any {
+	unwrapped := raw
+	if m, ok := raw.(map[string]any); ok {
+		if t, ok := m["$type"].(string); ok && (t == "State" || t == "Static" || t == "Bound") {
+			if inner, ok := m["defaultValue"]; ok {
+				unwrapped = inner
+			} else if inner, ok := m["value"]; ok {
+				unwrapped = inner
+			}
+		}
+	}
+	rows, ok := unwrapped.([]any)
+	if !ok || len(rows) == 0 {
+		return unwrapped
+	}
+	first, ok := rows[0].(map[string]any)
+	if !ok {
+		return unwrapped
+	}
+	keys := make([]string, 0, len(first))
+	for k := range first {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	cols := make(map[string]any, len(keys))
+	for _, k := range keys {
+		cells := make([]any, len(rows))
+		for i, row := range rows {
+			if rm, ok := row.(map[string]any); ok {
+				cells[i] = rm[k] // absent → nil (JSON null)
+			}
+		}
+		cols[k] = cells
+	}
+	return map[string]any{"columns": cols}
+}
+
 // ── Embedded columnar frame ─────────────────────────────────────────────────
 
 // isoOfEpochSeconds renders an epoch-seconds instant as the canonical ISO-8601

@@ -34,6 +34,9 @@ func BadgeVariants() []string { return append([]string(nil), badgeVariantCases.n
 // HeadingVariants returns the HeadingVariant bare-enum vocabulary.
 func HeadingVariants() []string { return append([]string(nil), headingVariantCases.names...) }
 
+// IconSizes returns the IconSize bare-enum vocabulary (Phase 821).
+func IconSizes() []string { return append([]string(nil), iconSizeCases.names...) }
+
 // RequiredKindFields returns, per kind discriminator, the wire fields the
 // contract requires (the same required set the decoder enforces on wire
 // input). The validator uses it to catch a CONSTRUCTED tree that would fail

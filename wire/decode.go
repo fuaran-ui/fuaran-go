@@ -395,7 +395,15 @@ var (
 		"Static", "Query", "Filter", "Selection", "State", "Now", "Computed",
 		"I18n", "Local", "Format", "Data", "Transform", "Invoke", "Bound",
 	)
-	cellFormatCases   = newCaseSet("None", "Number", "Currency", "Percent", "SignificantDigits", "Date", "Custom")
+	cellFormatCases = newCaseSet("None", "Number", "Currency", "Percent", "SignificantDigits", "Date", "Duration", "RelativeTime", "Custom")
+	// Phase 819 — the Duration / RelativeTime format enums (shared by the
+	// CellFormat vocabulary; the binding-level Format object still decodes
+	// structurally).
+	durationUnitCases     = newCaseSet("Seconds", "Minutes", "Hours")
+	durationStyleCases    = newCaseSet("Compact", "Clock", "Long")
+	relativeTimeUnitCases = newCaseSet("Second", "Minute", "Hour", "Day", "Week", "Month", "Year")
+	// Phase 821 — the standalone Icon display kind's size enum.
+	iconSizeCases     = newCaseSet("Small", "Medium", "Large")
 	columnWidthCases  = newCaseSet("Auto", "Fixed", "Flex")
 	cellKindCases     = newCaseSet("Text", "Numeric", "Date", "Editable", "Checkbox", "Button", "ButtonGroup", "Link", "Pill", "TonedPill", "Progress", "Custom")
 	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Toggle", "Choice", "SegmentedChoice", "TextArea", "Range", "Date", "DateRange")
@@ -442,7 +450,7 @@ var knownKinds = newCaseSet(
 	"Box", "SplitPanel", "Tabs", "Stepper", "SummaryList", "Disclosure", "Modal", "ScrollArea",
 	// Display
 	"Heading", "Markdown", "Metric", "Fact", "Badge", "Sparkline", "Callout", "Progress", "Skeleton",
-	"LabelValueRow", "Link", "Image", "List", "Toast", "CodeBlock", "Math", "Drawing",
+	"Icon", "LabelValueRow", "Link", "Image", "List", "Toast", "CodeBlock", "Math", "Drawing",
 	// Input
 	"Form", "Button", "FileUpload", "Select", "Filters",
 	// Visualisation
@@ -873,7 +881,10 @@ func decodeBindingTyped(raw any, path string, parse staticParser, typedDefault b
 		source := decodeBindingWith(require(obj, "source", path), path+".source", floatStatic)
 		return Obj{Tag: "Format", Fields: map[string]Value{"format": format, "locale": locale, "source": source}}
 	case "Transform":
-		srcRaw := require(obj, "source", path)
+		// Phase 815 — normalise the two observed organic shapes (State/Static
+		// wrapper; row-major rows) to canonical columnar before the frame
+		// codec sees the value.
+		srcRaw := normaliseTransformSource(require(obj, "source", path))
 		source := atComputePath(path+".source", func() Value { return decodeFrameSource(srcRaw) })
 		pipeRaw := require(obj, "pipeline", path)
 		pipeline := atComputePath(path+".pipeline", func() Value { return decodeComputePipeline(pipeRaw) })
@@ -1281,7 +1292,19 @@ func (s *spec) buildStrict(tag string) Obj {
 
 func decodeCellFormat(raw any, path string) Value {
 	obj := expectObject(raw, path)
-	dispatch(obj, path, cellFormatCases, CodeUnknownDUCase)
+	switch dispatch(obj, path, cellFormatCases, CodeUnknownDUCase) {
+	case "Duration":
+		// Phase 819 — trendable duration cells: raw float counts `unit`s,
+		// rendered per `style`. Both fields required, closed vocabularies.
+		style := enumStr(require(obj, "style", path), path+".style", durationStyleCases, "style", noAliases)
+		unit := enumStr(require(obj, "unit", path), path+".unit", durationUnitCases, "unit", noAliases)
+		return Obj{Tag: "Duration", Fields: map[string]Value{"style": Str(style), "unit": Str(unit)}}
+	case "RelativeTime":
+		// Phase 819 — cell-vocabulary parity with the binding-level Format's
+		// RelativeTime case.
+		unit := enumStr(require(obj, "unit", path), path+".unit", relativeTimeUnitCases, "unit", noAliases)
+		return Obj{Tag: "RelativeTime", Fields: map[string]Value{"unit": Str(unit)}}
+	}
 	return fromJSON(raw)
 }
 
@@ -2029,6 +2052,7 @@ func decodeStaticRows(raw any, path string) Value {
 // ── Per-kind typed decoders ─────────────────────────────────────────────────
 
 func isDefaultTone(v Value) bool    { return isStr(v, "Default") }
+func isMediumIconSize(v Value) bool { return isStr(v, "Medium") }
 func isStandardWeight(v Value) bool { return isStr(v, "Standard") }
 func isNormalEmphasis(v Value) bool { return isStr(v, "Normal") }
 func isFalseValue(v Value) bool     { return isBool(v, false) }
@@ -2054,6 +2078,7 @@ var requiredKindFields = map[string][]string{
 	"Callout":       {"body"},
 	"Progress":      {"fraction"},
 	"Skeleton":      {"rows"},
+	"Icon":          {"icon"},
 	"Sparkline":     {"source"},
 	"Map":           {"centreLatitude", "centreLongitude", "source", "zoom"},
 	"Link":          {"download", "href", "label"},
@@ -2178,6 +2203,17 @@ func init() {
 			s := newSpec(obj, path)
 			s.req("rows", decodeInt)
 			return s.build("Skeleton")
+		},
+		// Phase 821 — the standalone icon-only display kind. `size`
+		// omitted-when-`Medium`; `tone` omitted-when-default (the Phase 460
+		// discipline); `label` omitted-when-decorative.
+		"Icon": func(obj map[string]any, path string) Obj {
+			s := newSpec(obj, path)
+			s.req("icon", decodeString)
+			s.optDrop("size", enumDecoder(iconSizeCases, "size", noAliases), isMediumIconSize)
+			s.optDrop("tone", decodeTone, isDefaultTone)
+			s.opt("label", decodeString)
+			return s.build("Icon")
 		},
 		// source is a §5 typed Static float-series position; `data` aliases.
 		"Sparkline": func(obj map[string]any, path string) Obj {

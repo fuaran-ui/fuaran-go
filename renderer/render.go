@@ -193,6 +193,8 @@ func (r *renderer) renderKind(node wire.Node) string {
 		return r.progress(node, fields)
 	case "Skeleton":
 		return r.skeleton(fields)
+	case "Icon":
+		return renderIcon(fields)
 	case "Sparkline":
 		return textElement("div", []attr{{"class", "fuaran-sparkline fuaran-sparkline-empty"}}, emDash)
 	case "LabelValueRow":
@@ -640,6 +642,26 @@ func (r *renderer) skeleton(fields map[string]wire.Value) string {
 		body.WriteString(element("div", []attr{{"class", "fuaran-skeleton-row"}}, ""))
 	}
 	return element("div", []attr{{"class", "fuaran-skeleton"}}, body.String())
+}
+
+// renderIcon — Phase 821, the standalone icon-only display kind. The glyph
+// NAME rides `data-icon` (the uniform icon-hook contract — no text content,
+// hosts map it to glyphs); size + tone are modifier classes. A11y: decorative
+// (no label) emits `aria-hidden="true"`; labelled emits `role="img"` +
+// `aria-label`. Mirrors the reference SSR renderer byte-for-byte.
+func renderIcon(fields map[string]wire.Value) string {
+	size := lowerEnum(fields["size"], "Medium")
+	tone := lowerEnum(fields["tone"], "Default")
+	attrs := []attr{
+		{"class", "fuaran-icon fuaran-icon--" + size + " fuaran-icon-" + tone},
+		{"data-icon", strValue(fields["icon"])},
+	}
+	if label, ok := fields["label"].(wire.Str); ok {
+		attrs = append(attrs, attr{"role", "img"}, attr{"aria-label", string(label)})
+	} else {
+		attrs = append(attrs, attr{"aria-hidden", "true"})
+	}
+	return element("span", attrs, "")
 }
 
 func (r *renderer) labelValueRow(fields map[string]wire.Value) string {

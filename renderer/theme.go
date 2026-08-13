@@ -44,6 +44,7 @@ var kindClassMap = map[string]string{
 	"Callout":       "fuaran-kind-callout",
 	"Progress":      "fuaran-kind-progress",
 	"Skeleton":      "fuaran-kind-skeleton",
+	"Icon":          "fuaran-kind-icon",
 	// Input
 	"Form":       "fuaran-kind-form",
 	"Filters":    "fuaran-kind-filters",

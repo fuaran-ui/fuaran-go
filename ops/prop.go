@@ -24,6 +24,7 @@ var (
 	cellFormatSet = nameSet(wire.CellFormatCases())
 
 	toneSet           = nameSet(wire.ToneVariants())
+	iconSizeSet       = nameSet(wire.IconSizes())
 	weightSet         = nameSet(wire.StyleWeights())
 	emphasisSet       = nameSet(wire.EmphasisLevels())
 	orientationSet    = nameSet(wire.Orientations())
@@ -156,6 +157,7 @@ type fieldEntry struct {
 
 var (
 	coerceTone           = coerceEnum(toneSet, wire.ToneVariants())
+	coerceIconSize       = coerceEnum(iconSizeSet, wire.IconSizes())
 	coerceWeight         = coerceEnum(weightSet, wire.StyleWeights())
 	coerceEmphasisEnum   = coerceEnum(emphasisSet, wire.EmphasisLevels())
 	coerceOrientation    = coerceEnum(orientationSet, wire.Orientations())
@@ -199,6 +201,13 @@ var propFields = map[string]map[string]fieldEntry{
 	},
 	"Skeleton": {
 		"Rows": {wireKey: "rows", coerce: coerceInt},
+	},
+	// Phase 821 — the standalone Icon display kind's field surface.
+	"Icon": {
+		"Icon":  {wireKey: "icon", coerce: coerceString},
+		"Size":  {wireKey: "size", coerce: coerceIconSize},
+		"Tone":  {wireKey: "tone", coerce: coerceTone},
+		"Label": {wireKey: "label", coerce: coerceString},
 	},
 	"Callout": {
 		"Tone":        {wireKey: "tone", coerce: coerceTone},

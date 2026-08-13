@@ -3,6 +3,7 @@ package renderer
 import (
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
@@ -159,8 +160,124 @@ func formatNumber(format, value wire.Value) string {
 			return strconv.FormatFloat(num, 'g', int(digits), 64)
 		}
 		return plainNumber(num)
+	case "Duration":
+		return formatDuration(strValue(fmtObj.Fields["unit"]), strValue(fmtObj.Fields["style"]), num)
+	case "RelativeTime":
+		return formatRelativeEnglish(strValue(fmtObj.Fields["unit"]), num)
 	default:
 		// None / Date / Custom: the plain numeric form.
 		return plainNumber(num)
 	}
+}
+
+// ─── Duration / relative-time rendering (Phase 819) ─────────────────────────
+//
+// Mirrors the reference host's shared `formatDuration` / `formatRelativeEnglish`
+// exactly (hand-rolled, shared across its pipelines): a duration is
+// deliberately LOCALE-INDEPENDENT — "1h 20m" / "1:20:00" / "1 hour 20 minutes"
+// are unit glyphs and English words, not CLDR-driven forms — and the cell
+// vocabulary has no locale dimension, so the English relative form IS the
+// canonical cell rendering. Rounding is half-to-even, matching the reference
+// host's `round`.
+
+// durationUnitSeconds maps a DurationUnit case to its length in seconds.
+func durationUnitSeconds(unit string) float64 {
+	switch unit {
+	case "Minutes":
+		return 60
+	case "Hours":
+		return 3600
+	}
+	return 1 // Seconds
+}
+
+// formatDuration renders `value` (a signed count of `unit`s) per the bounded
+// DurationStyle. Negatives render with a leading "-" once the rounded
+// magnitude is nonzero.
+func formatDuration(unit, style string, value float64) string {
+	totalSeconds := value * durationUnitSeconds(unit)
+	total := int(math.RoundToEven(math.Abs(totalSeconds)))
+	sign := ""
+	if totalSeconds < 0 && total > 0 {
+		sign = "-"
+	}
+	hours := total / 3600
+	minutes := (total % 3600) / 60
+	seconds := total % 60
+	var body string
+	switch style {
+	case "Clock":
+		// "h:mm:ss" from one hour up, "m:ss" below it.
+		if hours >= 1 {
+			body = strconv.Itoa(hours) + ":" + pad2(minutes) + ":" + pad2(seconds)
+		} else {
+			body = strconv.Itoa(minutes) + ":" + pad2(seconds)
+		}
+	case "Long":
+		// English words, singular/plural, zero components omitted;
+		// zero → "0 minutes".
+		var parts []string
+		for _, p := range []struct {
+			n    int
+			word string
+		}{{hours, "hour"}, {minutes, "minute"}, {seconds, "second"}} {
+			switch {
+			case p.n == 0:
+			case p.n == 1:
+				parts = append(parts, "1 "+p.word)
+			default:
+				parts = append(parts, strconv.Itoa(p.n)+" "+p.word+"s")
+			}
+		}
+		if len(parts) == 0 {
+			body = "0 minutes"
+		} else {
+			body = strings.Join(parts, " ")
+		}
+	default: // Compact
+		// Largest two grains, zero tails omitted: "1h 20m" / "2h" /
+		// "5m 30s" / "42s"; zero → "0s".
+		switch {
+		case hours >= 1 && minutes > 0:
+			body = strconv.Itoa(hours) + "h " + strconv.Itoa(minutes) + "m"
+		case hours >= 1:
+			body = strconv.Itoa(hours) + "h"
+		case minutes >= 1 && seconds > 0:
+			body = strconv.Itoa(minutes) + "m " + strconv.Itoa(seconds) + "s"
+		case minutes >= 1:
+			body = strconv.Itoa(minutes) + "m"
+		default:
+			body = strconv.Itoa(seconds) + "s"
+		}
+	}
+	return sign + body
+}
+
+func pad2(n int) string {
+	if n < 10 {
+		return "0" + strconv.Itoa(n)
+	}
+	return strconv.Itoa(n)
+}
+
+// formatRelativeEnglish renders a signed count of `unit` — "in 2 hours" /
+// "3 minutes ago" / "this minute".
+func formatRelativeEnglish(unit string, value float64) string {
+	n := int(math.RoundToEven(value))
+	unitWord := strings.ToLower(unit)
+	if n == 0 {
+		return "this " + unitWord
+	}
+	magnitude := n
+	if n < 0 {
+		magnitude = -n
+	}
+	plural := unitWord
+	if magnitude != 1 {
+		plural += "s"
+	}
+	if n < 0 {
+		return strconv.Itoa(magnitude) + " " + plural + " ago"
+	}
+	return "in " + strconv.Itoa(magnitude) + " " + plural
 }
