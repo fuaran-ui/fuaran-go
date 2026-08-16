@@ -63,6 +63,82 @@ func TestSanitizeURLRejectsProtocolRelative(t *testing.T) {
 	}
 }
 
+// §19 rule 1 — the WHATWG basic URL parser's own pre-parse normalisation.
+//
+// Control characters are written as escapes throughout: a raw C0 byte in source is
+// invisible in review and does not survive a copy-paste, which is the wrong property
+// for the payloads a security pin is made of.
+func TestSanitizeURLNormalisesAsTheURLParserDoes(t *testing.T) {
+	// V1 — an interior TAB / LF / CR BETWEEN the two slash-ish characters. Before
+	// rule 1 normalised, "/<TAB>/host/x" had first two characters '/' and TAB, so
+	// isProtocolRelative read an ordinary relative reference and accepted, while the
+	// browser removed the tab by the URL Standard's step 2 and resolved "//host/x"
+	// OFF-ORIGIN. Verified against the WHATWG parser: all twelve spellings below
+	// resolve to https://evil.example/x.
+	for _, c := range []string{"\t", "\n", "\r"} {
+		for _, a := range []string{"/", `\`} {
+			for _, b := range []string{"/", `\`} {
+				url := a + c + b + "evil.example/x"
+				if got, ok := SanitizeURL(url); ok {
+					t.Errorf("V1 SanitizeURL(%q) = (%q, true); want rejected", url, got)
+				}
+			}
+		}
+	}
+	if got, ok := SanitizeURL("/\t\r/\nevil.example/x"); ok {
+		t.Errorf("V1 interleaved SanitizeURL = (%q, true); want rejected", got)
+	}
+
+	// V2 — a LEADING C0 control that is not whitespace. No native trim removes
+	// U+0001 or NUL, so the two slashes sat at positions 1 and 2 and
+	// isProtocolRelative never saw them; the parser removes them by step 1 and
+	// resolves off-origin.
+	for _, c := range []string{"\x01", "\x00", "\x1f"} {
+		url := c + "//evil.example/x"
+		if got, ok := SanitizeURL(url); ok {
+			t.Errorf("V2 SanitizeURL(%q) = (%q, true); want rejected", url, got)
+		}
+	}
+
+	// Step 1 is the whole C0-or-space range, at both ends. And rule 1's output is
+	// what gets RETURNED — an accepted URL loses its interior tab.
+	if got, ok := SanitizeURL("https://good.example/x\x01"); !ok || got != "https://good.example/x" {
+		t.Errorf("trailing C0: got (%q, %v); want the trimmed URL", got, ok)
+	}
+	if got, ok := SanitizeURL("https://good.ex\tample/x"); !ok || got != "https://good.example/x" {
+		t.Errorf("interior tab: got (%q, %v); want the tab removed from the emitted value", got, ok)
+	}
+
+	// U+000B and U+000C are removed at the EDGES by step 1 and KEPT in the interior
+	// — the parser treats "/<VT>/host/x" as a same-origin path, and so must the
+	// floor. Pinned because widening step 2 to "all C0" would over-reject here.
+	for _, c := range []string{"\x0b", "\x0c"} {
+		url := "/" + c + "/evil.example/x"
+		if got, ok := SanitizeURL(url); !ok || got != url {
+			t.Errorf("interior %q: got (%q, %v); want it kept as a same-origin path", c, got, ok)
+		}
+	}
+
+	// ASCII-exact LOOSENS these, correctly: the parser keeps them and resolves an
+	// ordinary same-origin path, where strings.TrimSpace removed them and the floor
+	// then saw "//" and rejected. U+0085 is where JS diverged from Go, .NET, Python
+	// and Rust; ASCII-exact ends the divergence in both directions.
+	for _, c := range []string{"\u00a0", "\u0085"} {
+		url := c + "//evil.example/x"
+		if got, ok := SanitizeURL(url); !ok || got != url {
+			t.Errorf("leading %q: got (%q, %v); want it kept (parser keeps it too)", c, got, ok)
+		}
+	}
+
+	// Rule 2 is UNCHANGED and still stricter than the browser, which is why V1 and
+	// V2 are off-origin navigation rather than script execution.
+	for _, url := range []string{"java\tscript:alert(1)", "java\x0bscript:alert(1)"} {
+		if got, ok := SanitizeURL(url); ok {
+			t.Errorf("SanitizeURL(%q) = (%q, true); want rejected", url, got)
+		}
+	}
+}
+
 func TestSanitizeURLKeepsSingleSlashRelativePaths(t *testing.T) {
 	accepted := []string{"/", "/a", "/foo//bar", "./rel", "page", "#frag", "foo/bar"}
 	for _, url := range accepted {

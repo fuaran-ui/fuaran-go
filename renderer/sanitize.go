@@ -73,10 +73,57 @@ func isProtocolRelative(url string) bool {
 	return sep(url[0]) && sep(url[1])
 }
 
+// normalizeURLForFloor applies §19 rule 1 — the normalisation the WHATWG URL
+// Standard's basic URL parser performs before it parses anything, ASCII-exact, in
+// this order:
+//
+//  1. remove leading and trailing C0 control or space — ALL of U+0000–U+0020, not
+//     merely the whitespace subset;
+//  2. remove every U+0009 / U+000A / U+000D from anywhere in what remains.
+//
+// Deliberately NOT strings.TrimSpace. A native trim answers a different question
+// in every language — Python's strip also removes U+001C–U+001F where Go, .NET, JS
+// and Rust do not; JS alone keeps U+0085 NEL where the other four drop it — and all
+// of them remove non-ASCII whitespace (U+00A0, U+2028, …) that the parser keeps.
+// The floor's whole purpose is that a tree vetted on one host is safe on another,
+// so the normalisation is defined by the parser that will actually consume the
+// string, not by the host's standard library.
+//
+// Step 2 is those three code points ONLY: the parser removes U+000B and U+000C at
+// the edges (step 1) and KEEPS them in the interior, so "/<VT>/host/x" is an
+// ordinary same-origin path and must stay one.
+//
+// Byte-wise is correct here: every code point at or below U+0020 is a single byte
+// in UTF-8 and every continuation byte is >= 0x80, so this can never split a
+// multi-byte character.
+func normalizeURLForFloor(url string) string {
+	lo, hi := 0, len(url)
+	for lo < hi && url[lo] <= 0x20 {
+		lo++
+	}
+	for hi > lo && url[hi-1] <= 0x20 {
+		hi--
+	}
+	var sb strings.Builder
+	sb.Grow(hi - lo)
+	for i := lo; i < hi; i++ {
+		if c := url[i]; c == '\t' || c == '\n' || c == '\r' {
+			continue
+		}
+		sb.WriteByte(url[i])
+	}
+	return sb.String()
+}
+
 // SanitizeURL returns the URL and true if its scheme is accepted, else
 // ("", false) — default-deny.
+//
+// The input is first normalised per §19 rule 1 (see normalizeURLForFloor), and that
+// normalised form is also what is RETURNED on acceptance — so an accepted URL
+// carrying an interior tab loses it, which is what the browser would have parsed
+// anyway.
 func SanitizeURL(url string) (string, bool) {
-	trimmed := strings.TrimSpace(url)
+	trimmed := normalizeURLForFloor(url)
 	if trimmed == "" {
 		// Empty href/src — pass through (a same-page link).
 		return trimmed, true
