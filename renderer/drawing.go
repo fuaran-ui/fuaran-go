@@ -187,8 +187,21 @@ func (r *renderer) drawShape(sh wire.Value) string {
 		return `<ellipse class="fuaran-drawing-ellipse" cx="` + drawNum(f["cx"]) + `" cy="` + drawNum(f["cy"]) +
 			`" rx="` + drawNum(f["rx"]) + `" ry="` + drawNum(f["ry"]) + `"` + r.drawStyleAttrs(style, false) + `/>`
 	case "Label":
+		// rotation (Phase 877) — emitted here rather than in drawStyleAttrs
+		// because the pivot is the label's own anchor point, which the style
+		// value does not carry; drawStyleAttrs is shared by every shape and
+		// stays position-free. Anchoring at (x, y) is what makes the rotation
+		// compose with textAnchor. Deliberately never emitted off Label: an SVG
+		// transform on a <rect> would MOVE GEOMETRY rather than be inert as the
+		// other text-only fields are.
+		rot := ""
+		if sf, ok := style.(wire.Obj); ok {
+			if v, ok := sf.Fields["rotation"]; ok {
+				rot = ` transform="rotate(` + drawNum(v) + ` ` + drawNum(f["x"]) + ` ` + drawNum(f["y"]) + `)"`
+			}
+		}
 		return `<text class="fuaran-drawing-label" x="` + drawNum(f["x"]) + `" y="` + drawNum(f["y"]) + `"` +
-			r.drawStyleAttrs(style, false) + `>` + drawEscape(r.text(f["text"])) + `</text>`
+			rot + r.drawStyleAttrs(style, false) + `>` + drawEscape(r.text(f["text"])) + `</text>`
 	}
 	return ""
 }

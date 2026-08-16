@@ -1600,6 +1600,13 @@ func decodeDrawStyle(raw any, path string) Value {
 	if v, ok := obj["markId"]; ok {
 		fields["markId"] = Str(expectString(v, path+".markId"))
 	}
+	// rotation (Phase 877) — Label text rotation in degrees, clockwise.
+	// Optional with no default: absent means upright, and an explicit 0 is a
+	// distinct present value, so this must key off presence in the object and
+	// never off the decoded number being non-zero.
+	if v, ok := obj["rotation"]; ok {
+		fields["rotation"] = expectNumber(v, path+".rotation")
+	}
 	return Obj{Fields: fields}
 }
 

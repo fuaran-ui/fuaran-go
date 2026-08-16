@@ -166,3 +166,55 @@ func TestFragmentRefResolvesDeclaredBody(t *testing.T) {
 		t.Errorf("the decl itself must be zero-paint (body rendered once via the ref):\n%s", html)
 	}
 }
+
+// TestDrawingLabelRotation pins the Phase 877 rotation emission cross-host: the
+// transform is anchored at the label's OWN (x, y), so the rotation composes with
+// textAnchor rather than fighting it, and the numbers use the shared canonical
+// form. These are byte-for-byte the strings the F# reference emitter produces
+// for the same shapes — the corpus is the oracle for the codec, and this is the
+// emission half it does not cover.
+func TestDrawingLabelRotation(t *testing.T) {
+	node := mustDecode(t, `{"id":"d","kind":{"$type":"Drawing","shapes":[`+
+		`{"$type":"Label","style":{"rotation":-30},"text":"Q1","x":30,"y":100},`+
+		`{"$type":"Label","style":{"rotation":12.34},"text":"F","x":110,"y":100},`+
+		`{"$type":"Label","style":{"rotation":0},"text":"Z","x":150,"y":100},`+
+		`{"$type":"Label","style":{},"text":"U","x":100,"y":20}`+
+		`],"style":{},"viewBox":{"height":120,"minX":0,"minY":0,"width":200}}}`)
+	html := RenderHTML(node, nil)
+
+	for _, want := range []string{
+		`<text class="fuaran-drawing-label" x="30" y="100" transform="rotate(-30 30 100)"`,
+		`transform="rotate(12.34 110 100)"`,
+		// An explicit 0 is a PRESENT value and must still emit — absent and zero
+		// are different wire shapes, and a renderer that conflates them
+		// re-introduces the distinction the codec is careful to preserve.
+		`transform="rotate(0 150 100)"`,
+		// The unrotated label carries no transform at all — the byte-unchanged
+		// guarantee for every pre-877 drawing.
+		`<text class="fuaran-drawing-label" x="100" y="20">U</text>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("rotation emission missing %q:\n%s", want, html)
+		}
+	}
+
+	if got := strings.Count(html, `transform="rotate(`); got != 3 {
+		t.Errorf("expected exactly 3 rotate transforms, got %d:\n%s", got, html)
+	}
+}
+
+// TestDrawingRotationInertOffLabel pins that rotation is ignored on non-text
+// shapes. This is load-bearing rather than cosmetic: unlike the other text-only
+// DrawStyle fields, an SVG transform on a <rect> would MOVE GEOMETRY, so a
+// renderer that emitted it uniformly would silently distort drawings.
+func TestDrawingRotationInertOffLabel(t *testing.T) {
+	node := mustDecode(t, `{"id":"d","kind":{"$type":"Drawing","shapes":[`+
+		`{"$type":"Rectangle","height":10,"style":{"rotation":45},"width":10,"x":0,"y":0},`+
+		`{"$type":"Circle","cx":5,"cy":5,"r":2,"style":{"rotation":45}}`+
+		`],"style":{},"viewBox":{"height":100,"minX":0,"minY":0,"width":100}}}`)
+	html := RenderHTML(node, nil)
+
+	if strings.Contains(html, "transform=") {
+		t.Errorf("rotation must be inert on non-Label shapes:\n%s", html)
+	}
+}
