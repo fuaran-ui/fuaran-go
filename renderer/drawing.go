@@ -88,6 +88,27 @@ func drawPathD(commands wire.Value) string {
 	return strings.Join(parts, " ")
 }
 
+// drawStrokeJoinAttrs emits round line joins + caps for a STROKED path shape
+// (Polyline / Polygon / Curve). A RENDERER default, not a wire field: DrawStyle
+// gains nothing and no fixture changes shape, so this is a per-host emitter
+// obligation rather than a corpus event. SVG's initial stroke-linejoin is
+// miter, which spikes at the acute vertices a data polyline routinely has — a
+// visible artefact carrying no data.
+//
+// Emitted only when the shape actually strokes, so a fill-only polygon (a chart
+// area band) keeps its minimal attribute set. Line is deliberately excluded: a
+// round cap on the axis and gridline rules would overhang each end by half the
+// stroke width, lengthening chrome that is positioned exactly.
+func (r *renderer) drawStrokeJoinAttrs(style wire.Value) string {
+	obj, _ := style.(wire.Obj)
+	if v, ok := obj.Fields["stroke"]; ok {
+		if resolved := resolveBinding(v, r.sources); resolved != nil {
+			return ` stroke-linejoin="round" stroke-linecap="round"`
+		}
+	}
+	return ""
+}
+
 // drawStyleAttrs lowers a DrawStyle to SVG presentation attributes in the fixed
 // reference order: fill, opacity, stroke, stroke-width, then the text-only attrs
 // (Label). Bindings resolve through the host sources; each attribute is emitted
@@ -173,13 +194,13 @@ func (r *renderer) drawShape(sh wire.Value) string {
 			`" x2="` + drawNum(f["x2"]) + `" y2="` + drawNum(f["y2"]) + `"` + r.drawStyleAttrs(style, false) + `/>`
 	case "Polyline":
 		return `<polyline class="fuaran-drawing-polyline" points="` + drawPoints(f["points"]) + `"` +
-			r.drawStyleAttrs(style, true) + `/>`
+			r.drawStyleAttrs(style, true) + r.drawStrokeJoinAttrs(style) + `/>`
 	case "Polygon":
 		return `<polygon class="fuaran-drawing-polygon" points="` + drawPoints(f["points"]) + `"` +
-			r.drawStyleAttrs(style, false) + `/>`
+			r.drawStyleAttrs(style, false) + r.drawStrokeJoinAttrs(style) + `/>`
 	case "Curve":
 		return `<path class="fuaran-drawing-curve" d="` + drawPathD(f["commands"]) + `"` +
-			r.drawStyleAttrs(style, true) + `/>`
+			r.drawStyleAttrs(style, true) + r.drawStrokeJoinAttrs(style) + `/>`
 	case "Circle":
 		return `<circle class="fuaran-drawing-circle" cx="` + drawNum(f["cx"]) + `" cy="` + drawNum(f["cy"]) +
 			`" r="` + drawNum(f["r"]) + `"` + r.drawStyleAttrs(style, false) + `/>`
