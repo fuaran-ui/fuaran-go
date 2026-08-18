@@ -128,7 +128,8 @@ func checkSwitch(kind wire.Obj, path string, findings *[]Finding) {
 	if key, ok := kind.Fields["stateKey"].(wire.Str); ok && key == "" {
 		*findings = append(*findings, Finding{
 			Code: "FUARAN083", Path: path + ".stateKey",
-			Message:  "switch stateKey is empty — it can never resolve a case and is stuck on its default",
+			Message: "switch has an empty stateKey — it can never resolve a case and is stuck on its " +
+				"default; name the state key the switch selects on",
 			Severity: SeverityError,
 		})
 	}
@@ -150,7 +151,9 @@ func checkSwitch(kind wire.Obj, path string, findings *[]Finding) {
 		if seen[string(match)] && !reported[string(match)] {
 			*findings = append(*findings, Finding{
 				Code: "FUARAN082", Path: path + ".cases",
-				Message:  fmt.Sprintf("duplicate switch match '%s'", string(match)),
+				Message: fmt.Sprintf(
+					"switch has two or more cases matching '%s' — first-match-wins makes the later "+
+						"case dead; give each case a distinct match value", string(match)),
 				Severity: SeverityError,
 			})
 			reported[string(match)] = true
