@@ -280,7 +280,53 @@ func (r *renderer) drawShape(sh wire.Value) string {
 	return ""
 }
 
-// drawing renders a Drawing kind as inline SVG (role="img" + optional title/desc).
+// terminateTitle (Phase 921) ends a title with "." unless it already ends in
+// sentence punctuation, so the composed accessible name reads as two sentences
+// rather than one run-on.
+func terminateTitle(t string) string {
+	if t == "" {
+		return t
+	}
+	switch t[len(t)-1] {
+	case '.', '!', '?':
+		return t
+	default:
+		return t + "."
+	}
+}
+
+// rootAriaLabel (Phase 921) is the drawing root's ANNOUNCED accessible name, or
+// "" when the root emits no aria-label.
+//
+// role="img" presents the drawing as ONE graphic and does not traverse into it,
+// and <desc> is not uniformly mapped to the accessible description (Chromium has
+// never exposed it) — so the value the markup has carried since the builder
+// landed is one a reader cannot reach. aria-label is the accessible NAME, which
+// every assistive technology announces unconditionally for a role="img" element.
+//
+// NOT aria-labelledby / aria-describedby: both reference elements BY ID, and this
+// builder has no id to give — its whole input is the drawing's own fields,
+// several drawings routinely share one document, and any minted id would have to
+// be both unique per page and byte-identical across five hosts.
+//
+// Emitted ONLY when a description is present, so every drawing predating this
+// phase is byte-identical.
+func (r *renderer) rootAriaLabel(fields map[string]wire.Value) string {
+	d, ok := fields["description"]
+	if !ok {
+		return ""
+	}
+	composed := r.text(d)
+	if t, ok := fields["title"]; ok {
+		if titleText := terminateTitle(r.text(t)); titleText != "" {
+			composed = titleText + " " + composed
+		}
+	}
+	return ` aria-label="` + drawEscape(composed) + `"`
+}
+
+// drawing renders a Drawing kind as inline SVG (role="img" + optional title/desc,
+// plus the Phase 921 aria-label that gets the description ANNOUNCED).
 func (r *renderer) drawing(fields map[string]wire.Value) string {
 	vb, _ := fields["viewBox"].(wire.Obj)
 	viewBox := drawNum(vb.Fields["minX"]) + " " + drawNum(vb.Fields["minY"]) + " " +
@@ -301,7 +347,8 @@ func (r *renderer) drawing(fields map[string]wire.Value) string {
 		}
 	}
 	rootStyle := r.drawStyleAttrs(fields["style"], false)
-	svg := `<svg class="fuaran-drawing" role="img" viewBox="` + viewBox + `"` + rootStyle + `>` +
+	aria := r.rootAriaLabel(fields)
+	svg := `<svg class="fuaran-drawing" role="img" viewBox="` + viewBox + `"` + aria + rootStyle + `>` +
 		title + desc + body.String() + `</svg>`
 	return element("div", nil, svg)
 }

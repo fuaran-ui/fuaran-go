@@ -251,3 +251,71 @@ func TestDrawingMarkIdEmission(t *testing.T) {
 		t.Errorf("expected exactly 2 data-fuaran-mark attributes, got %d:\n%s", got, html)
 	}
 }
+
+// TestDrawingRootAriaLabel pins the Phase 921 root wiring cross-host.
+//
+// role="img" (the drawing renderer's a11y posture) presents the drawing as ONE
+// graphic and does not traverse into it, and <desc> is not uniformly mapped to
+// the accessible description (Chromium has never exposed it) — so the
+// description the markup carried was a value no reader could reach. The root now
+// emits aria-label composing the title and the description. These strings are
+// byte-for-byte what the reference emitter produces.
+func TestDrawingRootAriaLabel(t *testing.T) {
+	drawingRoot := func(extra string) string {
+		return RenderHTML(mustDecode(t, `{"id":"d","kind":{"$type":"Drawing","shapes":[],`+
+			`"style":{},"viewBox":{"height":100,"minX":0,"minY":0,"width":200}`+extra+`}}`), nil)
+	}
+
+	both := drawingRoot(`,"title":"Sales vs target","description":"Bar chart. 2 series: sales, target."`)
+	want := `<svg class="fuaran-drawing" role="img" viewBox="0 0 200 100" ` +
+		`aria-label="Sales vs target. Bar chart. 2 series: sales, target.">` +
+		`<title>Sales vs target</title>` +
+		`<desc>Bar chart. 2 series: sales, target.</desc></svg>`
+	if !strings.Contains(both, want) {
+		t.Errorf("root wiring drifted:\nwant %q\ngot  %s", want, both)
+	}
+
+	// The title is terminated only when it needs to be.
+	for _, c := range []struct{ title, want string }{
+		{"Ends in a period.", `aria-label="Ends in a period. D."`},
+		{"Really?", `aria-label="Really? D."`},
+		{"Now!", `aria-label="Now! D."`},
+		{"Plain", `aria-label="Plain. D."`},
+		// An EMPTY title contributes nothing rather than a bare period.
+		{"", `aria-label="D."`},
+	} {
+		got := drawingRoot(`,"title":"` + c.title + `","description":"D."`)
+		if !strings.Contains(got, c.want) {
+			t.Errorf("title %q: want %q in\n%s", c.title, c.want, got)
+		}
+	}
+
+	// A title-only or bare root is byte-identical to the pre-921 emission.
+	titled := drawingRoot(`,"title":"Bars"`)
+	if !strings.Contains(titled, `<svg class="fuaran-drawing" role="img" viewBox="0 0 200 100"><title>Bars</title></svg>`) {
+		t.Errorf("a title-only root gained an attribute:\n%s", titled)
+	}
+	if strings.Contains(drawingRoot(""), "aria-label") {
+		t.Error("a bare root must carry no aria-label")
+	}
+
+	// A description-only root announces the description alone.
+	descOnly := drawingRoot(`,"description":"One filled circle."`)
+	if !strings.Contains(descOnly,
+		`<svg class="fuaran-drawing" role="img" viewBox="0 0 200 100" aria-label="One filled circle.">`+
+			`<desc>One filled circle.</desc></svg>`) {
+		t.Errorf("description-only wiring drifted:\n%s", descOnly)
+	}
+
+	// Hostile text is inert inside the ATTRIBUTE — the builder emits raw markup,
+	// so its own XML escape is the whole defence, and the chart lowering feeds
+	// this seam untrusted series and category strings straight off the data feed.
+	hostile := drawingRoot(`,"title":"a\"b","description":"<script>alert('x') & \"y\"</script>"`)
+	if !strings.Contains(hostile,
+		`aria-label="a&quot;b. &lt;script&gt;alert(&#39;x&#39;) &amp; &quot;y&quot;&lt;/script&gt;"`) {
+		t.Errorf("hostile text is not fully escaped in the attribute:\n%s", hostile)
+	}
+	if strings.Contains(hostile, "<script>") {
+		t.Errorf("raw markup survived:\n%s", hostile)
+	}
+}
