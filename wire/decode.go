@@ -1607,6 +1607,15 @@ func decodeDrawStyle(raw any, path string) Value {
 	if v, ok := obj["rotation"]; ok {
 		fields["rotation"] = expectNumber(v, path+".rotation")
 	}
+	// tip (Phase 883) — the per-mark hover readout, a full TextSource (so a
+	// Bound envelope decodes here as well as the canonical bare-string
+	// Literal). Optional; absent means untipped. Keys off presence for the same
+	// reason rotation does, and the trap is sharper here: an explicitly EMPTY
+	// tip is a distinct present value, so a non-empty test would drop it and
+	// re-encode to different bytes.
+	if v, ok := obj["tip"]; ok {
+		fields["tip"] = decodeTextSource(v, path+".tip")
+	}
 	return Obj{Fields: fields}
 }
 

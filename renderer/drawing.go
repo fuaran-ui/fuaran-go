@@ -165,6 +165,47 @@ func (r *renderer) drawStyleAttrs(style wire.Value, defaultFillNone bool) string
 	return b.String()
 }
 
+// drawTipChild renders DrawStyle.tip (Phase 883) as an SVG <title> CHILD of the
+// shape's own element: the native browser tooltip and the element's accessible
+// name, with no script, so this host's server-emitted page carries the readout
+// too. <title> must be the FIRST child to be the accessible name, which is why
+// every arm below emits it ahead of any other content.
+//
+// A tip is the one DrawStyle field honoured on EVERY shape rather than only on
+// Label — the marks a reader hovers are bars, wedges and points, and a <title>
+// is inert geometry-wise on all of them (unlike rotation, whose off-Label
+// emission would MOVE GEOMETRY).
+//
+// The text is XML-escaped through the same drawEscape the label text and the
+// drawing title/desc already use: this builder emits raw markup, so the escape
+// is the whole defence, and a chart lowering feeds it UNTRUSTED series and
+// category strings straight off the data feed.
+func (r *renderer) drawTipChild(style wire.Value) string {
+	sf, ok := style.(wire.Obj)
+	if !ok {
+		return ""
+	}
+	t, ok := sf.Fields["tip"]
+	if !ok {
+		return ""
+	}
+	return "<title>" + drawEscape(r.text(t)) + "</title>"
+}
+
+// drawClose is the tail of a shape element carrying no child content of its
+// own: self-closing when untipped (byte-unchanged from every pre-883 drawing),
+// an open/close pair wrapping the <title> when tipped.
+func (r *renderer) drawClose(style wire.Value, element string) string {
+	sf, ok := style.(wire.Obj)
+	if !ok {
+		return "/>"
+	}
+	if _, ok := sf.Fields["tip"]; !ok {
+		return "/>"
+	}
+	return ">" + r.drawTipChild(style) + "</" + element + ">"
+}
+
 func (r *renderer) drawShape(sh wire.Value) string {
 	shape, ok := sh.(wire.Obj)
 	if !ok {
@@ -180,7 +221,8 @@ func (r *renderer) drawShape(sh wire.Value) string {
 				inner.WriteString(r.drawShape(c))
 			}
 		}
-		return `<g class="fuaran-drawing-group"` + r.drawStyleAttrs(style, false) + `>` + inner.String() + `</g>`
+		return `<g class="fuaran-drawing-group"` + r.drawStyleAttrs(style, false) + `>` +
+			r.drawTipChild(style) + inner.String() + `</g>`
 	case "Rectangle":
 		rx := ""
 		if cr, ok := f["cornerRadius"]; ok {
@@ -188,25 +230,27 @@ func (r *renderer) drawShape(sh wire.Value) string {
 		}
 		return `<rect class="fuaran-drawing-rect" x="` + drawNum(f["x"]) + `" y="` + drawNum(f["y"]) +
 			`" width="` + drawNum(f["width"]) + `" height="` + drawNum(f["height"]) + `"` + rx +
-			r.drawStyleAttrs(style, false) + `/>`
+			r.drawStyleAttrs(style, false) + r.drawClose(style, "rect")
 	case "Line":
 		return `<line class="fuaran-drawing-line" x1="` + drawNum(f["x1"]) + `" y1="` + drawNum(f["y1"]) +
-			`" x2="` + drawNum(f["x2"]) + `" y2="` + drawNum(f["y2"]) + `"` + r.drawStyleAttrs(style, false) + `/>`
+			`" x2="` + drawNum(f["x2"]) + `" y2="` + drawNum(f["y2"]) + `"` +
+			r.drawStyleAttrs(style, false) + r.drawClose(style, "line")
 	case "Polyline":
 		return `<polyline class="fuaran-drawing-polyline" points="` + drawPoints(f["points"]) + `"` +
-			r.drawStyleAttrs(style, true) + r.drawStrokeJoinAttrs(style) + `/>`
+			r.drawStyleAttrs(style, true) + r.drawStrokeJoinAttrs(style) + r.drawClose(style, "polyline")
 	case "Polygon":
 		return `<polygon class="fuaran-drawing-polygon" points="` + drawPoints(f["points"]) + `"` +
-			r.drawStyleAttrs(style, false) + r.drawStrokeJoinAttrs(style) + `/>`
+			r.drawStyleAttrs(style, false) + r.drawStrokeJoinAttrs(style) + r.drawClose(style, "polygon")
 	case "Curve":
 		return `<path class="fuaran-drawing-curve" d="` + drawPathD(f["commands"]) + `"` +
-			r.drawStyleAttrs(style, true) + r.drawStrokeJoinAttrs(style) + `/>`
+			r.drawStyleAttrs(style, true) + r.drawStrokeJoinAttrs(style) + r.drawClose(style, "path")
 	case "Circle":
 		return `<circle class="fuaran-drawing-circle" cx="` + drawNum(f["cx"]) + `" cy="` + drawNum(f["cy"]) +
-			`" r="` + drawNum(f["r"]) + `"` + r.drawStyleAttrs(style, false) + `/>`
+			`" r="` + drawNum(f["r"]) + `"` + r.drawStyleAttrs(style, false) + r.drawClose(style, "circle")
 	case "Ellipse":
 		return `<ellipse class="fuaran-drawing-ellipse" cx="` + drawNum(f["cx"]) + `" cy="` + drawNum(f["cy"]) +
-			`" rx="` + drawNum(f["rx"]) + `" ry="` + drawNum(f["ry"]) + `"` + r.drawStyleAttrs(style, false) + `/>`
+			`" rx="` + drawNum(f["rx"]) + `" ry="` + drawNum(f["ry"]) + `"` +
+			r.drawStyleAttrs(style, false) + r.drawClose(style, "ellipse")
 	case "Label":
 		// rotation (Phase 877) — emitted here rather than in drawStyleAttrs
 		// because the pivot is the label's own anchor point, which the style
@@ -222,7 +266,10 @@ func (r *renderer) drawShape(sh wire.Value) string {
 			}
 		}
 		return `<text class="fuaran-drawing-label" x="` + drawNum(f["x"]) + `" y="` + drawNum(f["y"]) + `"` +
-			rot + r.drawStyleAttrs(style, false) + `>` + drawEscape(r.text(f["text"])) + `</text>`
+			rot + r.drawStyleAttrs(style, false) + `>` +
+			// The tip precedes the visible run — <title> is the accessible name
+			// only as the FIRST child.
+			r.drawTipChild(style) + drawEscape(r.text(f["text"])) + `</text>`
 	}
 	return ""
 }
