@@ -225,8 +225,14 @@ func Decode(s string) (Bundle, error) {
 		}
 	}
 	// 6 — pre-emit validation (node-identity defects refuse).
+	//
+	// The codes are the canonical vocabulary's, not host-local strings: state
+	// re-seat is keyed on stable identity, so this refusal is the whole reason
+	// WIRE_FORMAT.md 17 step 6 exists. Keep it in step with the vocabulary — the
+	// sibling Python host had the identical line, and renaming the codes there
+	// silently disabled the check until a test caught it.
 	for _, f := range validator.ValidateNode(tree) {
-		if f.Code == "EMPTY_NODE_ID" || f.Code == "DUPLICATE_NODE_ID" {
+		if f.Code == "FUARAN-EMPTY-ID" || f.Code == "FUARAN-DUP-ID" {
 			return Bundle{}, tErr(KindTreeInvalid, "tree has a node-identity defect: "+f.Message)
 		}
 	}

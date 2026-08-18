@@ -59,12 +59,12 @@ func walk(node wire.Node, path string, findings *[]Finding, seen map[string]bool
 	switch {
 	case node.ID == "":
 		*findings = append(*findings, Finding{
-			Code: "EMPTY_NODE_ID", Path: path + ".id",
+			Code: "FUARAN-EMPTY-ID", Path: path + ".id",
 			Message: "node id is empty", Severity: SeverityError,
 		})
 	case seen[node.ID]:
 		*findings = append(*findings, Finding{
-			Code: "DUPLICATE_NODE_ID", Path: path + ".id",
+			Code: "FUARAN-DUP-ID", Path: path + ".id",
 			Message: fmt.Sprintf("duplicate node id '%s'", node.ID), Severity: SeverityError,
 		})
 	default:
@@ -99,6 +99,8 @@ func walk(node wire.Node, path string, findings *[]Finding, seen map[string]bool
 		checkProgressFraction(node.Kind, kindPath, findings)
 	}
 
+	checkInertControl(node, node.Kind, kindPath, findings)
+
 	for _, entry := range childNodes(node.Kind, kindPath) {
 		walk(entry.node, entry.path, findings, seen)
 	}
@@ -125,8 +127,8 @@ func checkSwitch(kind wire.Obj, path string, findings *[]Finding) {
 	}
 	if key, ok := kind.Fields["stateKey"].(wire.Str); ok && key == "" {
 		*findings = append(*findings, Finding{
-			Code: "UNGROUNDED_SWITCH_STATE_KEY", Path: path + ".stateKey",
-			Message:  "switch stateKey is empty — it can never resolve a case and is stuck on its default (FUARAN083)",
+			Code: "FUARAN083", Path: path + ".stateKey",
+			Message:  "switch stateKey is empty — it can never resolve a case and is stuck on its default",
 			Severity: SeverityError,
 		})
 	}
@@ -147,8 +149,8 @@ func checkSwitch(kind wire.Obj, path string, findings *[]Finding) {
 		}
 		if seen[string(match)] && !reported[string(match)] {
 			*findings = append(*findings, Finding{
-				Code: "DUPLICATE_SWITCH_MATCH", Path: path + ".cases",
-				Message:  fmt.Sprintf("duplicate switch match '%s' (FUARAN082)", string(match)),
+				Code: "FUARAN082", Path: path + ".cases",
+				Message:  fmt.Sprintf("duplicate switch match '%s'", string(match)),
 				Severity: SeverityError,
 			})
 			reported[string(match)] = true
@@ -219,4 +221,110 @@ func childNodes(value wire.Value, path string) []childEntry {
 		return out
 	}
 	return nil
+}
+
+// ── FUARAN069 — the inert-control rule (Phase 426 write-back doctrine) ───────
+
+// writableBindingTags are the binding kinds the write-back default can write TO.
+// Everything else — Static, Query, Computed, Transform, Selection — is a read.
+var writableBindingTags = map[string]bool{"State": true, "Local": true}
+
+// isWriteBackTarget mirrors the reference host's predicate. `Filter` is writable
+// only WITHOUT a default: a defaulted filter is a read of a computed value, not a
+// slot the renderer can commit a change to.
+func isWriteBackTarget(v wire.Value) bool {
+	obj, ok := v.(wire.Obj)
+	if !ok {
+		return false
+	}
+	if writableBindingTags[obj.Tag] {
+		return true
+	}
+	if obj.Tag != "Filter" {
+		return false
+	}
+	_, hasDefault := obj.Fields["default"]
+	return !hasDefault
+}
+
+// inert reports the FUARAN069 condition: no handler AND no writable slot, so
+// nothing can carry the interaction.
+//
+// An omitted handler is the DECLARATIVE shape, not a defect — the write-back
+// default is meant to carry it. The defect is omitting the handler *and* pointing
+// the value at something unwritable, which leaves a control that looks interactive
+// and does nothing.
+func inert(kind wire.Obj, handler, slot string) bool {
+	if _, hasHandler := kind.Fields[handler]; hasHandler {
+		return false
+	}
+	return !isWriteBackTarget(kind.Fields[slot])
+}
+
+// checkInertControl raises FUARAN069 (Warning) for a control that cannot act,
+// with a short descriptor naming which one — matching the reference host's sites:
+// Tabs, Disclosure, Modal, Select and Form fields.
+func checkInertControl(node wire.Node, kind wire.Obj, path string, findings *[]Finding) {
+	report := func(control string) {
+		*findings = append(*findings, Finding{
+			Code: "FUARAN069", Path: path,
+			Message: fmt.Sprintf(
+				"%s on '%s' has no event handler and no writable value binding — bind its value to "+
+					"$state.<key> or $filters.<name>, or supply the handler", control, node.ID),
+			Severity: SeverityWarning,
+		})
+	}
+
+	switch kind.Tag {
+	case "Tabs":
+		// The tag overlay is a second way to be live: `activeTag` over a populated
+		// `tabTags` carries the selection when `activeIndex` does not.
+		_, hasSelectTag := kind.Fields["onSelectTag"]
+		_, hasTabTags := kind.Fields["tabTags"]
+		tagLive := hasSelectTag || (hasTabTags && isWriteBackTarget(kind.Fields["activeTag"]))
+		if inert(kind, "onSelect", "activeIndex") && !tagLive {
+			report("Tabs")
+		}
+	case "Disclosure":
+		if inert(kind, "onToggle", "open") {
+			report("Disclosure")
+		}
+	case "Modal":
+		// Only a DISMISSABLE modal is defective: one that cannot be dismissed by
+		// design is not inert, it is modal.
+		if dismissable, ok := kind.Fields["dismissable"].(wire.Bool); ok && bool(dismissable) &&
+			inert(kind, "onDismiss", "open") {
+			report("Modal")
+		}
+	case "Select":
+		if multiple, ok := kind.Fields["multiple"].(wire.Bool); ok && bool(multiple) {
+			if inert(kind, "onChangeMulti", "values") {
+				report("Select(multiple)")
+			}
+		} else if inert(kind, "onChange", "value") {
+			report("Select")
+		}
+	case "Form":
+		fields, ok := kind.Fields["fields"].(wire.Arr)
+		if !ok {
+			return
+		}
+		for _, item := range fields {
+			fieldObj, ok := item.(wire.Obj)
+			if !ok {
+				continue
+			}
+			fieldKind, ok := fieldObj.Fields["kind"].(wire.Obj)
+			if !ok {
+				continue
+			}
+			if inert(fieldKind, "onChange", "value") {
+				id := "?"
+				if s, ok := fieldObj.Fields["id"].(wire.Str); ok {
+					id = string(s)
+				}
+				report(fmt.Sprintf("FormField(%s)", id))
+			}
+		}
+	}
 }
