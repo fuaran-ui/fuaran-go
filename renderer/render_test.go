@@ -218,3 +218,36 @@ func TestDrawingRotationInertOffLabel(t *testing.T) {
 		t.Errorf("rotation must be inert on non-Label shapes:\n%s", html)
 	}
 }
+
+// TestDrawingMarkIdEmission pins the Phase 642 keyed mark identity in the
+// emitted SVG. The codec has carried `markId` since 642 and this renderer
+// decoded it without ever emitting it, so a Go-served chart's marks were the
+// only ones in the estate that a client could not address by key — the object-
+// constancy contract the field exists for, silently absent. The other four
+// hosts emit `data-fuaran-mark` LAST in the fixed attribute order; this test
+// pins the same position, the same escaping, and that an absent markId leaves
+// the emitted bytes unchanged (chrome shapes carry no identity).
+func TestDrawingMarkIdEmission(t *testing.T) {
+	node := mustDecode(t, `{"id":"d","kind":{"$type":"Drawing","shapes":[`+
+		`{"$type":"Rectangle","height":10,"style":{"fill":"#1a86ac","markId":"revenue/Q1"},"width":10,"x":0,"y":0},`+
+		`{"$type":"Label","style":{"emphasis":"Loud","markId":"a<b>&\"c\""},"text":"L","x":5,"y":5},`+
+		`{"$type":"Line","style":{"stroke":"currentColor"},"x1":0,"y1":0,"x2":9,"y2":9}`+
+		`],"style":{},"viewBox":{"height":20,"minX":0,"minY":0,"width":20}}}`)
+	html := RenderHTML(node, nil)
+
+	for _, want := range []string{
+		// Last in the order: after fill, and after the text-only cluster.
+		`fill="#1a86ac" data-fuaran-mark="revenue/Q1"`,
+		`font-weight="700" data-fuaran-mark="a&lt;b&gt;&amp;&quot;c&quot;"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("mark-identity emission missing %q:\n%s", want, html)
+		}
+	}
+
+	// The chrome Line declares no markId, so it gains no attribute — exactly two
+	// marks are addressable, not three.
+	if got := strings.Count(html, `data-fuaran-mark=`); got != 2 {
+		t.Errorf("expected exactly 2 data-fuaran-mark attributes, got %d:\n%s", got, html)
+	}
+}

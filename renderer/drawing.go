@@ -162,6 +162,12 @@ func (r *renderer) drawStyleAttrs(style wire.Value, defaultFillNone bool) string
 		}
 		b.WriteString(` font-weight="` + weight + `"`)
 	}
+	// Phase 642 — keyed mark identity: a data-bearing shape's derivation-based
+	// id rides into the emitted SVG so marks are addressable (object
+	// constancy) — last in the fixed attribute order, matching every other host.
+	if v, ok := f["markId"]; ok {
+		b.WriteString(` data-fuaran-mark="` + drawEscape(strValue(v)) + `"`)
+	}
 	return b.String()
 }
 
