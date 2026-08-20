@@ -120,7 +120,11 @@ func (r *renderer) stateLoading(node wire.Node) (wire.Node, bool) {
 	return wire.Node{}, false
 }
 
-// a11yAttrs projects the structural accessibility section best-effort.
+// a11yAttrs projects the structural accessibility section best-effort, in the
+// slot order every reference host emits: label, labelledby, describedby, role,
+// live, hidden. The projection is meant to be ONE function ported to every
+// host, so a slot missing here is a silent per-host divergence in the emitted
+// DOM — which is what `hidden` was until it was added.
 func (r *renderer) a11yAttrs(node wire.Node) []attr {
 	a11y, ok := node.Extras["accessibility"].(wire.Obj)
 	if !ok {
@@ -136,11 +140,28 @@ func (r *renderer) a11yAttrs(node wire.Node) []attr {
 	if describedBy, ok := a11y.Fields["describedBy"].(wire.Str); ok {
 		out = append(out, attr{"aria-describedby", string(describedBy)})
 	}
+	// `role` is an OPEN vocabulary — the named ARIA roles and the custom escape
+	// both travel as the raw string, so a host cannot tell them apart and the
+	// reference tiers all emit what they were given. Case-folding it here would
+	// rewrite a custom role the author cased deliberately; the named vocabulary
+	// is lower-case already, so folding bought nothing and cost fidelity.
 	if role, ok := a11y.Fields["role"].(wire.Str); ok {
-		out = append(out, attr{"role", strings.ToLower(string(role))})
+		out = append(out, attr{"role", string(role)})
 	}
+	// `liveRegion` is the opposite case — a CLOSED lower-case vocabulary
+	// (polite | assertive | off) a typed host rejects at decode. Folding it is
+	// a no-op for every valid tree and keeps this structural renderer from
+	// emitting an invalid `aria-live` for a tree a typed host would refuse, so
+	// it stays.
 	if live, ok := a11y.Fields["liveRegion"].(wire.Str); ok {
 		out = append(out, attr{"aria-live", strings.ToLower(string(live))})
+	}
+	// `hidden` is a Binding<bool>: emit `aria-hidden="true"` only when it
+	// resolves TRUE. False and unresolved both emit NOTHING — `aria-hidden`
+	// is not a tri-state, and emitting "false" on an unresolved binding would
+	// be a claim the tree never made.
+	if hidden, ok := resolveBinding(a11y.Fields["hidden"], r.sources).(wire.Bool); ok && bool(hidden) {
+		out = append(out, attr{"aria-hidden", "true"})
 	}
 	return out
 }

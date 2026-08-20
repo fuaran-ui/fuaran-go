@@ -29,7 +29,11 @@ func openTagOf(html, tag string) string {
 // wrapperTag returns the wrapper's own open tag — everything up to its first `>`.
 func wrapperTag(html string) string { return html[:strings.Index(html, ">")+1] }
 
-const a11ySection = `"accessibility":{"label":"Home","role":"Link"}`
+// The canonical wire form of a named ARIA role is the lower-case ARIA string
+// ("link"), which is what every host's encoder emits. This fixture said "Link"
+// until the projection stopped case-folding `role`; it was only ever passing
+// because of the fold this host has now dropped.
+const a11ySection = `"accessibility":{"label":"Home","role":"link"}`
 
 func TestLinkA11yLandsOnTheAnchor(t *testing.T) {
 	node := mustDecode(t, `{"id":"lk","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"/home"},"label":"Home"},`+a11ySection+`}`)
