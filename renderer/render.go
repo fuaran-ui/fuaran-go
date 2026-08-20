@@ -138,6 +138,31 @@ func (r *renderer) a11yAttrs(node wire.Node) []attr {
 	return out
 }
 
+// forwardsToSemanticElement reports whether this kind renders a body that IS
+// the node's semantic element — so the a11y projection belongs on the body, not
+// on the wrapper <div>.
+//
+// Three conditions, all required: the body is a SINGLE root element (not a
+// container of siblings, not a label-wrapped control); that element carries
+// native semantics of its own (an interactive role, or a graphic), so role /
+// aria-* on an ancestor <div> is announced against the wrong node; and the
+// element IS the node, with nothing else in the body competing for the
+// accessible name. Link (<a>), Button (<button>) and Image (<img>) satisfy all
+// three. The form-field kinds deliberately do not: a Select's control sits
+// inside a <label> that already names it.
+//
+// Kind-level by construction — the wrapper must decide before the body is
+// rendered, and the only thing it has then is the kind tag. Where an arm has a
+// runtime branch (the protected-email Link), the arm owns placement within its
+// own body.
+func forwardsToSemanticElement(node wire.Node) bool {
+	switch node.Kind.Tag {
+	case "Link", "Button", "Image":
+		return true
+	}
+	return false
+}
+
 // renderNode emits the node wrapper <div> plus the kind body — and, when the
 // node is marked as an island, the boundary wrapper around it (whose children
 // are exactly this node's static HTML, so client hydration is mismatch-free).
@@ -147,8 +172,17 @@ func (r *renderer) renderNode(node wire.Node) string {
 		{"data-fuaran-node-id", node.ID},
 		{"class", nodeClassName(node)},
 	}
-	attrs = append(attrs, r.a11yAttrs(node)...)
-	rendered := element("div", attrs, r.renderKind(node))
+	// Route the projection: a kind whose body IS the node's semantic element
+	// takes the a11y attributes onto that element; every other kind carries
+	// them on the wrapper, as before. The wrapper keeps the node's address
+	// (data-fuaran-node-id) either way.
+	var semanticAttrs []attr
+	if forwardsToSemanticElement(node) {
+		semanticAttrs = r.a11yAttrs(node)
+	} else {
+		attrs = append(attrs, r.a11yAttrs(node)...)
+	}
+	rendered := element("div", attrs, r.renderKind(node, semanticAttrs))
 	if islandID, ok := r.islands[node.ID]; ok {
 		return element("div", []attr{
 			{"class", "fuaran-island"},
@@ -158,7 +192,10 @@ func (r *renderer) renderNode(node wire.Node) string {
 	return rendered
 }
 
-func (r *renderer) renderKind(node wire.Node) string {
+// renderKind dispatches on the kind tag. semanticAttrs carries the node's a11y
+// projection for the kinds that emit it on their own semantic element (Link /
+// Button / Image); it is nil for every other kind.
+func (r *renderer) renderKind(node wire.Node, semanticAttrs []attr) string {
 	fields := node.Kind.Fields
 	switch node.Kind.Tag {
 	case "Box":
@@ -200,9 +237,9 @@ func (r *renderer) renderKind(node wire.Node) string {
 	case "LabelValueRow":
 		return r.labelValueRow(fields)
 	case "Link":
-		return r.link(fields)
+		return r.link(fields, semanticAttrs)
 	case "Image":
-		return r.image(fields)
+		return r.image(fields, semanticAttrs)
 	case "List":
 		return r.list(fields)
 	case "Toast":
@@ -214,7 +251,7 @@ func (r *renderer) renderKind(node wire.Node) string {
 	case "Drawing":
 		return r.drawing(fields)
 	case "Button":
-		return r.button(fields)
+		return r.button(fields, semanticAttrs)
 	case "Select":
 		return r.selectControl(fields)
 	case "Form":
@@ -679,7 +716,7 @@ func (r *renderer) labelValueRow(fields map[string]wire.Value) string {
 	return element("div", []attr{{"class", "fuaran-label-value-row" + emphasis}}, label+val)
 }
 
-func (r *renderer) link(fields map[string]wire.Value) string {
+func (r *renderer) link(fields map[string]wire.Value, semanticAttrs []attr) string {
 	href := ""
 	if h, ok := resolveBinding(fields["href"], r.sources).(wire.Str); ok {
 		href = string(h)
@@ -696,7 +733,10 @@ func (r *renderer) link(fields map[string]wire.Value) string {
 		// entities). Byte-identical to the reference server renderers.
 		anchor := `<a class="fuaran-link fuaran-link-protected" href="` +
 			entityEncode(safeHref) + `">` + entityEncode(r.text(fields["label"])) + `</a>`
-		return element("span", []attr{{"class", "fuaran-link-protected-wrap"}}, anchor)
+		// The anchor here is an entity-encoded opaque string, so the projection
+		// lands on the wrap <span>: the only element this arm owns in every
+		// tier, and cross-tier parity outranks reaching one tier's anchor.
+		return element("span", append([]attr{{"class", "fuaran-link-protected-wrap"}}, semanticAttrs...), anchor)
 	}
 	attrs := []attr{{"class", "fuaran-link"}, {"href", safeHref}}
 	if rel, ok := fields["rel"].(wire.Str); ok {
@@ -708,10 +748,12 @@ func (r *renderer) link(fields map[string]wire.Value) string {
 	if d, ok := fields["download"].(wire.Bool); ok && bool(d) {
 		attrs = append(attrs, attr{"download", ""})
 	}
+	// The node's a11y projection lands on the anchor.
+	attrs = append(attrs, semanticAttrs...)
 	return textElement("a", attrs, r.text(fields["label"]))
 }
 
-func (r *renderer) image(fields map[string]wire.Value) string {
+func (r *renderer) image(fields map[string]wire.Value, semanticAttrs []attr) string {
 	src := ""
 	if s, ok := resolveBinding(fields["src"], r.sources).(wire.Str); ok {
 		src = string(s)
@@ -725,9 +767,10 @@ func (r *renderer) image(fields map[string]wire.Value) string {
 			cls = "fuaran-image fuaran-image-rounded"
 		}
 	}
-	return voidElement("img", []attr{
+	// The a11y projection lands on the <img> itself.
+	return voidElement("img", append([]attr{
 		{"class", cls}, {"src", SanitizeURLOrBlank(src)}, {"alt", r.text(fields["alt"])},
-	})
+	}, semanticAttrs...))
 }
 
 func (r *renderer) list(fields map[string]wire.Value) string {
@@ -815,12 +858,14 @@ func (r *renderer) math(fields map[string]wire.Value) string {
 
 // ── Inputs (inert — no dispatch server-side) ────────────────────────────────
 
-func (r *renderer) button(fields map[string]wire.Value) string {
+func (r *renderer) button(fields map[string]wire.Value, semanticAttrs []attr) string {
 	variant := lowerEnum(fields["variant"], "Primary")
 	attrs := []attr{{"class", "fuaran-button fuaran-button-" + variant}}
 	if tooltip, ok := fields["tooltip"]; ok {
 		attrs = append(attrs, attr{"title", r.text(tooltip)})
 	}
+	// Before disabled, matching the reference server renderer's order.
+	attrs = append(attrs, semanticAttrs...)
 	if v, ok := resolveBinding(fields["disabled"], r.sources).(wire.Bool); ok && bool(v) {
 		attrs = append(attrs, attr{"disabled", ""})
 	}
