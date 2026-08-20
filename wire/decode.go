@@ -2066,6 +2066,54 @@ func decodeCellKindErased(raw any, path string) Value {
 	}
 }
 
+// nearMiss — decode-time didactics for the grid-behaviour family's NEAR MISSES.
+//
+// Every shape in the tables below decoded SILENTLY before: §2 rule 2 tolerates
+// unknown keys, so a model that reached for the wrong name got a tree that
+// decoded, validated and rendered while the declaration did nothing — the
+// fake-affordance failure in a new guise, and tolerance is what hid it. The
+// narrowing is an ENUMERATED set with an unambiguous canonical form each; rule 2
+// holds for everything else.
+func nearMiss(path, found, canonical string) {
+	failExpecting(
+		CodeWrongType,
+		path+"."+found,
+		"'"+found+"' is not part of the grid vocabulary — it would be ignored, not honoured",
+		canonical,
+	)
+}
+
+// checkNearMisses walks the candidate table in declaration order, so which
+// defect surfaces first is deterministic across hosts.
+func checkNearMisses(obj map[string]any, path string, candidates [][2]string) {
+	for _, c := range candidates {
+		if _, ok := obj[c[0]]; ok {
+			nearMiss(path, c[0], c[1])
+		}
+	}
+}
+
+// columnNearMisses — named by the census row itself. Deliberately NOT aliased to
+// `editable: false`: an inverting alias that guesses wrong makes a read-only
+// column editable.
+var columnNearMisses = [][2]string{
+	{"readOnly", "editable: false — the column flag NARROWS the grid's editable capability"},
+}
+
+// gridNearMisses — the grid-level rejected spellings.
+var gridNearMisses = [][2]string{
+	// The sharpest of them: a LITERAL page number is not expressible at all,
+	// because the position lives in State so a control can move it. Ignoring it
+	// is what produced the fake-affordance cluster.
+	{"currentPage", "pageStateKey — the page POSITION lives in State as {\"page\": N} so the pager can move it; a literal page number is not expressible"},
+	{"page", "pageStateKey — the page POSITION lives in State as {\"page\": N} so the pager can move it; a literal page number is not expressible"},
+	{"pageIndex", "pageStateKey — the page POSITION lives in State as {\"page\": N}, 1-based (not a zero-based index)"},
+	{"sortable", "sortStateKey on the grid + sortable on each COLUMN — grid-wide sortable is the staticRows spelling; a data-bound grid narrows per column"},
+	{"onEdit", "editStateKey — the edit DESTINATION is a State key on the grid; onEdit is a per-cell host closure and carries no destination across the wire"},
+	{"behaviour", "sibling fields on the grid (sortStateKey / pageStateKey / pageSize / editStateKey / defaultSort) — grid behaviour is not a nested record"},
+	{"behavior", "sibling fields on the grid (sortStateKey / pageStateKey / pageSize / editStateKey / defaultSort) — grid behaviour is not a nested record"},
+}
+
 func decodeColumnErased(raw any, path string) Value {
 	obj := expectObject(raw, path)
 	s := newSpec(obj, path)
@@ -2077,6 +2125,12 @@ func decodeColumnErased(raw any, path string) Value {
 	s.optDrop("format", decodeCellFormat, func(v Value) bool { return isTagOnly(v, "None") })
 	s.optDrop("width", decodeColumnWidth, func(v Value) bool { return isTagOnly(v, "Auto") })
 	s.sentinel("value")
+	checkNearMisses(obj, path, columnNearMisses)
+	// Phase 861 / 863 — per-column sort and editability NARROWING; absent
+	// inherits the grid-level flag, so an explicit `false` is carried rather
+	// than omitted-when-default (omitting it would erase the narrowing).
+	s.opt("sortable", decodeBool)
+	s.opt("editable", decodeBool)
 	s.opt("field", decodeString)
 	return s.buildStrict("")
 }
@@ -2104,6 +2158,17 @@ func decodeDefaultSort(raw any, path string) Value {
 	}
 	direction := enumStr(require(obj, "direction", path), path+".direction", sortDirectionCases, "direction", noAliases)
 	return Obj{Fields: map[string]Value{"column": Int(column), "direction": Str(direction)}}
+}
+
+// decodeGridPageSize — Phase 862: how many rows a page holds. A page of zero or
+// fewer rows names no page at all, so a non-positive (or non-integral) value is
+// WRONG_TYPE, which is also what schema.json's `minimum: 1` says.
+func decodeGridPageSize(raw any, path string) Value {
+	n := expectInt(raw, path)
+	if n < 1 {
+		fail(CodeWrongType, path, "expected an integer page size of 1 or more at "+path)
+	}
+	return Int(n)
 }
 
 // decodeStaticRows — the {headers, rows} static-rows object of a read-only
@@ -2439,6 +2504,9 @@ func init() {
 			s := newSpec(obj, path)
 			s.req("columns", decodeColumns)
 			s.optDrop("editable", decodeBool, isFalseValue)
+			// Phase 934 — declarative row reorder; omitted-when-false, the same
+			// convention as `editable`.
+			s.optDrop("reorderable", decodeBool, isFalseValue)
 			s.req("source", decodeBindingRows, "data", "rows")
 			s.sentinel("onRowClick")
 			s.sentinel("rowKey")
@@ -2448,6 +2516,21 @@ func init() {
 			// grid's runtime sorts by (and whose headers write it). Typed as a
 			// string; encode-omitted when absent.
 			s.opt("sortStateKey", decodeString)
+			// Phase 862 — declarative pagination. `pageStateKey` names the State
+			// key carrying `{"page": N}` (1-based); `pageSize` is how many rows a
+			// page holds. A page of zero or fewer rows names no page at all, so
+			// it is WRONG_TYPE — which is also what schema.json's `minimum: 1`
+			// says. The pager that writes the key is renderer-owned, so nothing
+			// here decodes a control.
+			s.opt("pageSize", decodeGridPageSize)
+			// Phase 861 — the bound path's declared initial order, decoded by
+			// the SAME function the staticRows spelling uses: same record, same
+			// bound, same message at a different path.
+			s.opt("defaultSort", decodeDefaultSort)
+			checkNearMisses(obj, path, gridNearMisses)
+			// Phase 863 — the declared edit destination.
+			s.opt("editStateKey", decodeString)
+			s.opt("pageStateKey", decodeString)
 			s.opt("staticRows", decodeStaticRows)
 			return s.build("DataGrid")
 		},
