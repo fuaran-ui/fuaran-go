@@ -7,8 +7,15 @@
 // dispatch. Action-bearing nodes render inert (a Button is dead until a client
 // hydrates it; a Link is a real crawlable <a href>). Static bindings resolve
 // to their value; other bindings resolve from a host-supplied BindingSources
-// map or fall back to the em-dash placeholder. Client-library visualisations
-// (Chart / Map / DataGrid) render a deterministic placeholder, never a blank.
+// map or fall back to the em-dash placeholder. A visualisation this host does
+// not paint (Map, a Chart that reached here un-lowered) renders a deterministic
+// placeholder, never a blank.
+//
+// Bound-grid posture (Phase 668) — COMPLETENESS, matching Phase 651's model for
+// the rest of this host's static emission: a data-bound DataGrid whose columns
+// declare a declarative projection renders its resolved rows as a real table
+// rather than degrading to a row-count placeholder. The boundary that remains is
+// declared rather than incidental — see dataGrid below.
 //
 // The renderer emits the BODY FRAGMENT only — the host owns <html> / <head> /
 // the <link> to ReferenceCSS.
@@ -590,6 +597,20 @@ func (r *renderer) metric(node wire.Node, fields map[string]wire.Value) string {
 	var parts strings.Builder
 	parts.WriteString(textElement("div", []attr{{"class", "fuaran-metric-label"}}, r.text(fields["label"])))
 	parts.WriteString(textElement("div", []attr{{"class", "fuaran-metric-value"}}, valueText))
+	// Phase 668 sweep — the trend slot is a SCALAR-BOUND slot exactly like the
+	// value, and this host was dropping it entirely: a Metric declaring a trend
+	// emitted no trend div at all, so a bound trend rendered nothing and the
+	// markup diverged from every other host. Emitted only when declared (a
+	// Metric without one keeps its bytes), resolved through the same Phase 651
+	// scalar path, formatted through `trendFormat`, and empty rather than
+	// em-dashed when unresolved — the reference host's shape.
+	if trendBinding, ok := fields["trend"]; ok {
+		trendText := ""
+		if trend := resolveScalarNumber(trendBinding, r.sources); trend != nil {
+			trendText = formatNumber(fields["trendFormat"], trend)
+		}
+		parts.WriteString(textElement("div", []attr{{"class", "fuaran-metric-trend"}}, trendText))
+	}
 	if subtext, ok := fields["subtext"]; ok {
 		parts.WriteString(textElement("div", []attr{{"class", "fuaran-metric-subtext"}}, r.text(subtext)))
 	}
@@ -996,13 +1017,123 @@ func seqLen(v wire.Value) int {
 	return 0
 }
 
-// dataGrid: a static read-only grid renders the semantic <table>; a
-// data-bound grid renders a client-hydration placeholder.
+// gridColumns is the decoded columns list as column objects (non-objects
+// dropped).
+func gridColumns(v wire.Value) []wire.Obj {
+	arr, ok := v.(wire.Arr)
+	if !ok {
+		return nil
+	}
+	out := make([]wire.Obj, 0, len(arr))
+	for _, item := range arr {
+		if col, ok := item.(wire.Obj); ok {
+			out = append(out, col)
+		}
+	}
+	return out
+}
+
+// anyFieldProjected reports whether at least one column projects its cell
+// DECLARATIVELY (by `field`) rather than through a host closure.
+func anyFieldProjected(columns []wire.Obj) bool {
+	for _, col := range columns {
+		if _, ok := col.Fields["field"].(wire.Str); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// gridCellText renders one bound-grid cell, mirroring the reference host's
+// renderCellValue. A column projects its cell either declaratively (`field` — a
+// row property name that rides the wire) or through a host closure (`value`);
+// the closure does NOT survive serialisation, so a closure-projected column has
+// no server-side cell value and renders empty — exactly what the reference
+// renderer does with a decoded grid, for the same reason.
+func gridCellText(column wire.Obj, row wire.Obj) string {
+	field, ok := column.Fields["field"].(wire.Str)
+	if !ok {
+		return ""
+	}
+	value, present := row.Fields[string(field)]
+	if !present {
+		return ""
+	}
+	switch value.(type) {
+	case wire.Int, wire.Float:
+		return formatNumber(column.Fields["format"], value)
+	}
+	return displayString(value)
+}
+
+// boundGrid emits the resolved rows as the reference grid's own <table> markup.
+// The element shape and class vocabulary match the reference renderer's
+// simple-table grid path exactly (fuaran-grid / -header / -row / -cell, a <span>
+// inside each cell), which is what keeps the islands contract's mismatch-freedom
+// property true for a bound grid: the client re-renders into markup it already
+// agrees with rather than replacing a foreign placeholder.
+//
+// Rich cell kinds (TonedPill, Checkbox, Link, Progress, …) render their TEXT
+// projection here — this host's inert server semantics for every interactive
+// node, not a special case for grids.
+func boundGrid(columns []wire.Obj, rows wire.Arr) string {
+	var headerCells strings.Builder
+	for _, col := range columns {
+		headerCells.WriteString(textElement("th", []attr{{"class", "fuaran-grid-header"}}, strValue(col.Fields["label"])))
+	}
+	var bodyRows strings.Builder
+	for _, rowValue := range rows {
+		row, ok := rowValue.(wire.Obj)
+		if !ok {
+			continue
+		}
+		var cells strings.Builder
+		for _, col := range columns {
+			cells.WriteString(element("td", []attr{{"class", "fuaran-grid-cell"}},
+				textElement("span", nil, gridCellText(col, row))))
+		}
+		bodyRows.WriteString(element("tr", []attr{{"class", "fuaran-grid-row"}}, cells.String()))
+	}
+	thead := element("thead", nil, element("tr", nil, headerCells.String()))
+	tbody := element("tbody", nil, bodyRows.String())
+	return element("table", []attr{{"class", "fuaran-grid"}}, thead+tbody)
+}
+
+// dataGrid: a static read-only grid renders the semantic <table>.
+//
+// Phase 668 — the bound-grid posture is COMPLETENESS, which is the same posture
+// Phase 651 set for the rest of this host's static emission: a grid is data, and
+// a host that has already resolved the rows (the placeholder's row count was
+// computed from them) while printing "hydrates client-side" withholds what it
+// holds. A no-JS surface — an email digest, an ops report, a crawler — can never
+// recover it, and where a client DOES arrive the placeholder breaks the islands
+// contract's mismatch-freedom property, since the client must replace the markup
+// rather than attach to it.
+//
+// The boundary that remains is declared, not incidental: a cell is projected
+// either by `field` (declarative, on the wire) or by a host closure (`value`),
+// and a closure decodes as an opaque sentinel. So a grid declaring NO
+// field-projected column — including one declaring no columns — keeps the
+// placeholder, because there is nothing server-side to draw and the placeholder
+// at least says so; a mixed grid renders, with its closure-projected cells
+// empty. A source that does not resolve to rows (an unbound Query, an opaque
+// Static, a State this host leaves unresolved) likewise keeps the placeholder:
+// the same contract as before, narrowed to the cases that genuinely cannot be
+// served.
+//
+// The line Phase 651 drew does not move: render(tree, data) → bytes stays a pure
+// function, no session state, no server-side interaction handling. A rendered
+// bound grid is inert markup — sorting, paging and editing remain the client's.
 func (r *renderer) dataGrid(fields map[string]wire.Value) string {
 	if staticRows, ok := fields["staticRows"].(wire.Obj); ok {
 		return r.staticTable(staticRows.Fields)
 	}
-	count := seqLen(resolveSource(fields["source"], r.sources))
+	resolved := resolveSource(fields["source"], r.sources)
+	columns := gridColumns(fields["columns"])
+	if rows, ok := resolved.(wire.Arr); ok && anyFieldProjected(columns) {
+		return boundGrid(columns, rows)
+	}
+	count := seqLen(resolved)
 	return textElement("div", []attr{
 		{"class", "fuaran-grid fuaran-grid-ssr-placeholder"},
 		{"data-fuaran-ssr-placeholder", "DataGrid"},

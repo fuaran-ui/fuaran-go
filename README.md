@@ -112,6 +112,40 @@ Shipped:
 Every roadmap tier for this host (codec → apply → validator → renderer →
 server-driven driver) is now shipped.
 
+## Bound-grid posture — completeness
+
+A `DataGrid` bound to data renders its **rows**, server-side. The `source` is
+resolved through the same render-time compute path every other bound slot uses
+(a `Transform` pipeline is evaluated by the certified `dataframe` evaluator; a
+`Selection` / `Filter` default resolves), and the resolved rows are emitted as
+the reference grid's own `<table class="fuaran-grid">` markup — the same element
+shape and class vocabulary a conformant client renders.
+
+That last part is what makes it more than a nicety here. The islands emission's
+mismatch-freedom property holds because an island boundary's static children are
+byte-identical to what the client re-renders into the wrapper; a placeholder
+where the client draws a table is markup the client must *replace*, not attach
+to. And on a genuinely no-JS surface — an email digest, an ops report, a crawler
+— a row count is all the reader ever gets, while the host had the rows in hand.
+
+One boundary remains, and it is declared rather than incidental. A column
+projects its cell either **declaratively**, by `field` (a row property name that
+rides the wire), or through a **host closure** (`value`) — and a closure does not
+survive serialisation; it decodes as an opaque sentinel. So:
+
+| Bound grid | Rendered |
+|---|---|
+| at least one `field`-projected column, source resolves to rows | the rows, as a `fuaran-grid` table (closure-projected cells empty) |
+| no `field`-projected column (including no columns at all) | the `[Grid: N rows — hydrates client-side]` placeholder, with `N` the *resolved* row count |
+| source does not resolve to rows | the same placeholder |
+
+Rich cell kinds (`TonedPill`, `Checkbox`, `Link`, `Progress`, …) render their
+**text** projection — this host's inert server semantics for every interactive
+node, not a special case for grids. The line stays where Phase 651 drew it:
+`render(tree, data) → bytes` is a pure function, the rendered grid is inert
+markup, and sorting / paging / editing remain the client's. Pinned by the
+bound-grid tests in `renderer/transform_test.go`.
+
 ## Chart-lowering posture — require-pre-lowered
 
 A resolved `Drawing` node renders as first-party inline SVG on every host, this

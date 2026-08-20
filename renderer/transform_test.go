@@ -76,9 +76,14 @@ func TestScalarTransformCompositionResolvesStatically(t *testing.T) {
 		// Callout scalar slot: Selection.defaultValue-param → filter + project +
 		// limit 1 → the pre-selected ticket's alert text.
 		`<div class="fuaran-callout-body">TCK-2041 breaches SLA in 2 hours</div>`,
-		// Row context: the Transform source's row count reaches the placeholder.
-		`data-fuaran-row-count="3"`,
+		// Row context: the Transform source resolves and the grid renders those
+		// rows (Phase 668 — a field-projected bound grid is no longer a
+		// row-count placeholder).
+		`<td class="fuaran-grid-cell"><span>TCK-2043</span></td>`,
 	)
+	if got := strings.Count(html, `<tr class="fuaran-grid-row">`); got != 3 {
+		t.Errorf("expected the Transform source's 3 rows rendered, got %d:\n%s", got, html)
+	}
 	// Never a silent unresolved slot where a value resolves.
 	if strings.Contains(html, `fuaran-badge-critical">`+emDash) {
 		t.Errorf("badge scalar slot regressed to the em-dash placeholder:\n%s", html)
@@ -94,9 +99,13 @@ func TestMasterDetailPreselectedResolvesStatically(t *testing.T) {
 		// (Phase 629) — preselected detail renders the ticket id.
 		`<div class="fuaran-fact-value"><span>TCK-2041</span></div>`,
 		// related-grid: Transform param from the same Selection default → the one
-		// matching row.
-		`data-fuaran-row-count="1"`,
+		// matching row, rendered (Phase 668).
+		`<td class="fuaran-grid-cell"><span>TCK-2041</span></td>`,
 	)
+	// The master grid renders all 2 rows, the related grid the 1 filtered row.
+	if got := strings.Count(html, `<tr class="fuaran-grid-row">`); got != 3 {
+		t.Errorf("expected 2 master rows + 1 related row rendered, got %d:\n%s", got, html)
+	}
 }
 
 func TestFilterableStaticDashboardResolvesStatically(t *testing.T) {
@@ -105,9 +114,14 @@ func TestFilterableStaticDashboardResolvesStatically(t *testing.T) {
 
 	// Both filter params are unset (Filter bindings, no default, no host value),
 	// so each filter step is pruned (unset choice ⇒ no constraint) and the full
-	// 2-row frame reaches both the chart and the grid placeholders.
-	if strings.Count(html, `data-fuaran-row-count="2"`) < 2 {
-		t.Errorf("expected the chart and grid placeholders to each carry 2 resolved rows:\n%s", html)
+	// 2-row frame reaches both the chart and the grid. The chart is
+	// require-pre-lowered here, so it keeps its typed passthrough placeholder
+	// carrying the resolved count; the grid (Phase 668) renders the rows.
+	if !strings.Contains(html, `data-fuaran-ssr-placeholder="Chart" data-fuaran-row-count="2"`) {
+		t.Errorf("expected the chart placeholder to carry 2 resolved rows:\n%s", html)
+	}
+	if got := strings.Count(html, `<tr class="fuaran-grid-row">`); got != 2 {
+		t.Errorf("expected the grid to render 2 resolved rows, got %d:\n%s", got, html)
 	}
 }
 
@@ -151,5 +165,123 @@ func TestScalarTransform1x1Law(t *testing.T) {
 	empty := `{"id":"b","kind":{"$type":"Badge","label":{"$type":"Bound","binding":{"$type":"Transform","pipeline":[{"$type":"filter","pred":{"$type":"binary","left":{"$type":"col","name":"v"},"op":"eq","right":{"$type":"lit","cell":{"$type":"Str","value":"zzz"}}}}],"source":{"columns":{"v":{"validity":[true,true],"values":["a","b"]}},"schema":[{"name":"v","type":"string"}]}}},"variant":"Neutral"}}`
 	if h := RenderHTML(mustDecode(t, empty), nil); !strings.Contains(h, `fuaran-badge-neutral"></span>`) {
 		t.Errorf("an empty non-count result must render absence:\n%s", h)
+	}
+}
+
+// ── Phase 668 — the bound-grid render posture, pinned against the corpus ─────
+//
+// Two corpus grids sit either side of the declared boundary, and both are
+// pinned so the behaviour is a contract rather than an accident of whichever
+// branch happens to be taken: grid-field-named declares `field`-projected
+// columns over a Transform source (renders its rows), grid-transform declares
+// no columns at all (keeps the placeholder — nothing server-side to draw).
+
+func TestBoundGridRendersItsTransformRows(t *testing.T) {
+	node := loadFixtureNode(t, "grid-field-named")
+	html := RenderHTML(node, nil)
+
+	mustContain(t, html,
+		`<table class="fuaran-grid">`,
+		`<th class="fuaran-grid-header">Dept</th>`,
+		`<th class="fuaran-grid-header">Amount</th>`,
+		`<td class="fuaran-grid-cell"><span>eng</span></td>`,
+		`<td class="fuaran-grid-cell"><span>100</span></td>`,
+	)
+	if strings.Contains(html, "hydrates client-side") {
+		t.Errorf("a field-projected bound grid regressed to the hydration placeholder:\n%s", html)
+	}
+	if got := strings.Count(html, `<tr class="fuaran-grid-row">`); got != 1 {
+		t.Errorf("expected 1 rendered row, got %d:\n%s", got, html)
+	}
+}
+
+func TestBoundGridWithoutDeclaredColumnsKeepsThePlaceholder(t *testing.T) {
+	// grid-transform projects every cell through a closure that does not survive
+	// serialisation — it decodes with `columns: []`. There is no declarative
+	// projection to draw, so the placeholder stands, and its count is the
+	// RESOLVED one (filter → groupBy sum → sort leaves one row): the boundary is
+	// declared, and even at the boundary the compute ran.
+	node := loadFixtureNode(t, "grid-transform")
+	html := RenderHTML(node, nil)
+
+	mustContain(t, html,
+		`data-fuaran-ssr-placeholder="DataGrid"`,
+		`data-fuaran-row-count="1"`,
+		`[Grid: 1 rows `+emDash+` hydrates client-side]`,
+	)
+}
+
+func TestClosureOnlyColumnsKeepThePlaceholder(t *testing.T) {
+	// grid-1 has a resolvable Static row source but its single column projects
+	// through a closure (`value`, no `field`). No column declares a field, so the
+	// grid stays at the declared boundary rather than emitting blank cells.
+	node := loadFixtureNode(t, "grid-1")
+	html := RenderHTML(node, nil)
+
+	mustContain(t, html,
+		`data-fuaran-ssr-placeholder="DataGrid"`,
+		`data-fuaran-row-count="2"`,
+	)
+}
+
+// TestIslandsBoundGridMatchesTheStaticRender pins the islands contract's
+// mismatch-freedom property for a bound grid: the island boundary's static
+// children are the same resolved table the full static render emits, so a
+// hydrating client attaches rather than replacing a placeholder.
+func TestIslandsBoundGridMatchesTheStaticRender(t *testing.T) {
+	node := loadFixtureNode(t, "grid-field-named")
+	static := RenderHTML(node, nil)
+	islands, err := RenderWithIslands(node, nil, map[string]string{"grid-field-named": "grid-island"})
+	if err != nil {
+		t.Fatalf("RenderWithIslands: %v", err)
+	}
+	mustContain(t, islands,
+		`data-fuaran-island="grid-island"`,
+		`<td class="fuaran-grid-cell"><span>eng</span></td>`,
+	)
+	// The extracted table is the real one (it carries a resolved cell), so the
+	// comparison below cannot pass vacuously.
+	mustContain(t, gridTableOf(t, static), `<td class="fuaran-grid-cell"><span>eng</span></td>`)
+	if !strings.Contains(islands, gridTableOf(t, static)) {
+		t.Errorf("the island's static children diverged from the full static render:\nstatic:\n%s\nislands:\n%s", static, islands)
+	}
+}
+
+// gridTableOf extracts the rendered <table class="fuaran-grid">…</table> from a
+// render, failing when there is none (so a regression to the placeholder is a
+// failure rather than a vacuously-satisfied comparison).
+func gridTableOf(t *testing.T, html string) string {
+	t.Helper()
+	start := strings.Index(html, `<table class="fuaran-grid">`)
+	end := strings.Index(html, `</table>`)
+	if start < 0 || end < start {
+		t.Fatalf("no rendered grid table in:\n%s", html)
+	}
+	return html[start : end+len(`</table>`)]
+}
+
+// TestMetricTrendIsAResolvedScalarSlot — from the Phase 668 sibling-kind sweep.
+// Metric's `trend` is a scalar-bound slot exactly like its `value`, and this
+// host used to drop it entirely: no trend div was emitted at all, so a bound
+// trend rendered nothing and the markup diverged from every other host. Pinned
+// here in both directions — resolved, and emitted-empty when it cannot be.
+func TestMetricTrendIsAResolvedScalarSlot(t *testing.T) {
+	// A Transform ending in a global single-`count` agg → the 1×1 law resolves
+	// the lone cell, formatted through `trendFormat` (1 decimal place).
+	resolved := `{"id":"m","kind":{"$type":"Metric","label":"Signups","value":{"$type":"Static","value":42},"trend":{"$type":"Transform","pipeline":[{"$type":"groupBy","aggs":[{"fn":"count","name":"n","of":"v"}],"keys":[]}],"source":{"columns":{"v":{"validity":[true,true],"values":["a","b"]}},"schema":[{"name":"v","type":"string"}]}},"trendFormat":{"$type":"Number","decimals":1}}}`
+	mustContain(t, RenderHTML(mustDecode(t, resolved), nil),
+		`<div class="fuaran-metric-value">42</div>`,
+		`<div class="fuaran-metric-trend">2.0</div>`,
+	)
+
+	// An unresolvable trend still emits the div, empty — never an em-dash, and
+	// never a silently absent element.
+	unresolved := `{"id":"m","kind":{"$type":"Metric","label":"Signups","value":{"$type":"Static","value":42},"trend":{"$type":"Query","name":"nothing-here"}}}`
+	mustContain(t, RenderHTML(mustDecode(t, unresolved), nil), `<div class="fuaran-metric-trend"></div>`)
+
+	// A Metric that declares no trend emits no trend div (bytes unchanged).
+	none := `{"id":"m","kind":{"$type":"Metric","label":"Signups","value":{"$type":"Static","value":42}}}`
+	if html := RenderHTML(mustDecode(t, none), nil); strings.Contains(html, "fuaran-metric-trend") {
+		t.Errorf("a Metric with no declared trend must emit no trend div:\n%s", html)
 	}
 }

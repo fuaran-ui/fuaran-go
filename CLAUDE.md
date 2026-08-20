@@ -22,7 +22,10 @@ and *drives* wire trees. Post-651 charter wording (operator decision 2026-07-22)
 **go emits complete static output** — its static-HTML and islands emission
 resolve compute (`Transform` bindings, `Selection.defaultValue`) at render time
 (Phase 651), so a page's computed values are correct before any JS runs (and
-genuinely no-JS surfaces — email digests, ops reports — are complete). **Live
+genuinely no-JS surfaces — email digests, ops reports — are complete). A
+data-bound `DataGrid` renders its **rows** on the same reasoning (the
+completeness posture; the declared boundary — a closure-projected column, which
+cannot survive the wire — is written up in the README). **Live
 interactivity stays client-side** (islands hydration, or the server-driven
 driver's thin client). The line that does NOT move: go stays a **library, not a
 runtime** — `render(tree, data) → bytes` is a pure function; no UI session state,
