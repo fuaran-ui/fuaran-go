@@ -131,8 +131,14 @@ func (r *renderer) a11yAttrs(node wire.Node) []attr {
 		return nil
 	}
 	var out []attr
-	if label, ok := a11y.Fields["label"].(wire.Str); ok && label != "" {
-		out = append(out, attr{"aria-label", string(label)})
+	// `label` is a Binding<string> (WIRE_FORMAT §3.1; schema.json maps
+	// Accessibility.label to $ref: Binding), so the canonical form is
+	// {"$type":"Static","value":"Home"} and it resolves through the host
+	// sources exactly as the reference tiers do. The non-empty filter is
+	// theirs too: an empty accessible name is worse than none, because it
+	// silences the content that would otherwise have named the node.
+	if label, ok := a11yName(a11y.Fields["label"], r.sources); ok && label != "" {
+		out = append(out, attr{"aria-label", label})
 	}
 	if labelledBy, ok := a11y.Fields["labelledBy"].(wire.Str); ok {
 		out = append(out, attr{"aria-labelledby", string(labelledBy)})
@@ -164,6 +170,31 @@ func (r *renderer) a11yAttrs(node wire.Node) []attr {
 		out = append(out, attr{"aria-hidden", "true"})
 	}
 	return out
+}
+
+// a11yName resolves an accessibility name slot to its display string.
+//
+// The canonical form is a Binding<string>, resolved through the host sources
+// (Static inline, every keyed case from the map, an unwritten Selection/Filter
+// from its declared defaultValue) and then rendered by the same displayString
+// the text slots use — so a number or bool that reaches a name slot reads the
+// way it reads everywhere else, and a structured value yields "" and is
+// dropped by the caller's non-empty filter.
+//
+// A BARE STRING is ALSO accepted, deliberately, as a LENIENT SHORTHAND: it is
+// NOT canonical wire and no encoder emits it. It is kept because this host's
+// own fixtures have authored the slot that way since it landed, and refusing
+// it would break them without moving a single byte of anything an encoder
+// produces. Stated here rather than left ambiguous — the decision is "lenient
+// on the way in, canonical on the way out", the least breaking of the two.
+func a11yName(value wire.Value, sources BindingSources) (string, bool) {
+	if bare, ok := value.(wire.Str); ok {
+		return string(bare), true
+	}
+	if resolved := resolveBinding(value, sources); resolved != nil {
+		return displayString(resolved), true
+	}
+	return "", false
 }
 
 // forwardsToSemanticElement reports whether this kind renders a body that IS

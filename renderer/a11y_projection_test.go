@@ -84,6 +84,64 @@ func TestProjectionEmitsTheSixSlotsInReferenceOrder(t *testing.T) {
 	}
 }
 
+// `label` is a Binding<string>, so the CANONICAL authoring — the only form an
+// encoder emits — is a Static envelope. This host tested for a bare string, so
+// a canonical tree emitted no `aria-label` at all: not a subtle degradation,
+// since the node is then announced by its content or not at all. Nothing went
+// red because the fixtures authored the bare form the renderer happened to
+// accept, which is why both directions are pinned below.
+func TestLabelStaticBindingEmitsAriaLabel(t *testing.T) {
+	got := a11yWrapper(t, `"label":{"$type":"Static","value":"Home"}`, nil)
+	if !strings.Contains(got, `aria-label="Home"`) {
+		t.Errorf("a canonical Static label must emit the accessible name:\n%s", got)
+	}
+}
+
+// The other half: a keyed binding resolved from the host sources. A projection
+// that understood only Static would still silently drop every conditionally-
+// named node.
+func TestLabelResolvesThroughHostSources(t *testing.T) {
+	got := a11yWrapper(t, `"label":{"$type":"State","key":"navLabel"}`,
+		BindingSources{"navLabel": wire.Str("Primary navigation")})
+	if !strings.Contains(got, `aria-label="Primary navigation"`) {
+		t.Errorf("a host-resolved label binding must emit the accessible name:\n%s", got)
+	}
+}
+
+// The bare string stays accepted as a lenient, non-canonical shorthand (see
+// `a11yName`). This pins the decision so a later reader cannot mistake it for
+// an accident — and so dropping it becomes a deliberate act with a red test,
+// not a silent regression in the fixtures that already author it.
+func TestLabelAcceptsTheBareStringShorthand(t *testing.T) {
+	got := a11yWrapper(t, `"label":"Home"`, nil)
+	if !strings.Contains(got, `aria-label="Home"`) {
+		t.Errorf("the bare-string shorthand must still emit the accessible name:\n%s", got)
+	}
+}
+
+// An unresolved binding and an empty name both emit nothing: `aria-label=""`
+// suppresses the content that would otherwise have named the node, so it is
+// strictly worse than leaving the slot off.
+func TestLabelEmptyOrUnresolvedEmitsNothing(t *testing.T) {
+	cases := []struct {
+		name    string
+		section string
+		sources BindingSources
+	}{
+		{"empty bare", `"label":""`, nil},
+		{"empty static", `"label":{"$type":"Static","value":""}`, nil},
+		{"unresolved binding", `"label":{"$type":"State","key":"navLabel"}`, nil},
+		{"resolved empty", `"label":{"$type":"State","key":"navLabel"}`, BindingSources{"navLabel": wire.Str("")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := a11yWrapper(t, tc.section, tc.sources); strings.Contains(got, "aria-label") {
+				t.Errorf("must emit no aria-label:\n%s", got)
+			}
+		})
+	}
+}
+
 // `role` is an open vocabulary: the named ARIA roles and the custom escape both
 // travel as the raw string, so no host can tell them apart and every reference
 // host emits what it was handed. This host case-folded it, which silently
