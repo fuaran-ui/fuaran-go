@@ -24,6 +24,10 @@ type markdownFixture struct {
 	Description string `json:"description"`
 	Source      string `json:"source"`
 	HTML        string `json:"html"`
+	// Policy names the destination policy the render is performed under
+	// (WIRE_FORMAT.md §14.1). Absent means permissive — the pure source → html
+	// function this corpus has always pinned.
+	Policy string `json:"policy"`
 }
 
 type markdownCorpus struct {
@@ -31,8 +35,36 @@ type markdownCorpus struct {
 	Fixtures []markdownFixture `json:"fixtures"`
 }
 
+// egressPolicyFor maps a fixture's policy name to the policy the HOST
+// CONSTRUCTS. §14.1 is explicit that a policy is never carried on the wire — a
+// policy an emission can supply is one a hostile emission can widen — so the
+// corpus names a policy and each host builds it.
+//
+// An unrecognised name is a hard failure, never a fallback to permissive: a
+// silent fallback turns a fixture this host cannot evaluate into one it appears
+// to pass, which is the exact shape of a gate that certifies nothing.
+func egressPolicyFor(t *testing.T, name string) renderer.EgressPolicy {
+	t.Helper()
+	switch name {
+	case "", "permissive":
+		return renderer.PermissiveEgress()
+	case "denyNonLocal":
+		return renderer.DenyNonLocalEgress()
+	case "declaredExample":
+		return renderer.DenyNonLocalEgress().
+			AllowOrigin(renderer.ExactHost("cdn.example"), renderer.EgressMedia).
+			AllowOrigin(renderer.HostSuffix("docs.example"), renderer.EgressHyperlink)
+	default:
+		t.Fatalf("markdown fixture names destination policy %q, which this host does not construct — "+
+			"add it here rather than letting the fixture render under a policy it did not ask for", name)
+		return renderer.EgressPolicy{}
+	}
+}
+
 // TestMarkdownCorpus pins the GFM renderer to the shared corpus: a one-byte
-// divergence from the reference render turns this leg red.
+// divergence from the reference render turns this leg red. A fixture carrying a
+// `policy` is rendered under that policy (§14.1); one without is the pure
+// permissive case.
 func TestMarkdownCorpus(t *testing.T) {
 	corpus, _ := loadCorpus(t)
 	raw, err := os.ReadFile(filepath.Join(corpus, "markdown", "corpus.json"))
@@ -46,15 +78,39 @@ func TestMarkdownCorpus(t *testing.T) {
 	if len(m.Fixtures) == 0 {
 		t.Fatal("markdown corpus declares no fixtures")
 	}
+	nonPermissive := 0
 	for _, fx := range m.Fixtures {
+		if fx.Policy != "" && fx.Policy != "permissive" {
+			nonPermissive++
+		}
 		t.Run(fx.ID, func(t *testing.T) {
-			got := renderer.MarkdownToHTML(fx.Source)
+			policy := egressPolicyFor(t, fx.Policy)
+			got := renderer.MarkdownToHTMLWithEgress(policy, fx.Source)
 			if got != fx.HTML {
 				t.Errorf("render diverged: %s", firstDiff(got, fx.HTML))
 			}
+			// The pure function IS the permissive case, and this is what pins
+			// it: wherever the fixture's policy is permissive, MarkdownToHTML
+			// must reproduce the same bytes.
+			if policyIsPermissive(fx.Policy) {
+				if pure := renderer.MarkdownToHTML(fx.Source); pure != got {
+					t.Errorf("MarkdownToHTML is not the permissive case of MarkdownToHTMLWithEgress: %s",
+						firstDiff(pure, got))
+				}
+			}
 		})
 	}
+	// Without a non-permissive fixture the whole leg runs on the permissive
+	// path, and a host that never implemented §14.1 would be green here.
+	if nonPermissive == 0 {
+		t.Fatalf("the markdown corpus carries no non-permissive fixture (%d total) — "+
+			"the destination-policy leg is vacuous and cannot fail", len(m.Fixtures))
+	}
+	t.Logf("markdown corpus EXECUTED: %d fixtures, %d of them under a non-permissive destination policy",
+		len(m.Fixtures), nonPermissive)
 }
+
+func policyIsPermissive(name string) bool { return name == "" || name == "permissive" }
 
 // referenceHostNames are the spellings the F# reference host has shipped under.
 // The sibling was renamed once (fuaran → fuaran-dotnet) and the oracles' paths

@@ -19,6 +19,22 @@ import (
 // classes (never the host language's Unicode classifiers — their sets differ
 // at the edges). Byte-wise iteration is safe: every branch character is ASCII
 // and multi-byte UTF-8 bytes classify as "other" on every host.
+//
+// DESTINATION POLICY (WIRE_FORMAT.md §14.1). The scheme floor answers "is this
+// URL safe to have"; it does not answer "is this destination one the
+// composition declared". MarkdownToHTMLWithEgress consults an EgressPolicy for
+// every link (EgressHyperlink) and image (EgressMedia) destination, and a
+// refused one renders the inert about:blank#fuaran-egress-refused href plus a
+// data-fuaran-egress-refused marker naming the class and the host, never the
+// path or the query. The policy is THREADED through the renderers rather than
+// held in a package-level variable: a mutable global would be non-reentrant
+// under concurrent server renders, which is the one thing this host does all
+// the time. MarkdownToHTML survives as the permissive case — see its doc.
+//
+// THE SCHEME FLOOR'S OWN ANSWER IS UNCHANGED. A URL the floor rejects
+// (javascript:, an unknown scheme, a protocol-relative reference) still renders
+// the bare about:blank it always has, with no marker — see markdownDestination
+// for why that is a decision rather than an inconsistency.
 
 func mdIsWS(c byte) bool {
 	return c == ' ' || (c >= 9 && c <= 13)
@@ -42,6 +58,61 @@ func mdEscape(s string) string {
 	s = strings.ReplaceAll(s, ">", "&gt;")
 	s = strings.ReplaceAll(s, `"`, "&quot;")
 	return s
+}
+
+// ── Destination policy at the link / image seam ─────────────────────────────
+
+// egressMarker is one refusal attribute to splice in after every attribute the
+// element already carries.
+type egressMarker struct{ name, value string }
+
+// markdownDestination returns the href / src a markdown destination emits under
+// policy, plus the refusal markers to append.
+//
+// Three verdict groups, and the middle one is a deliberate decision rather than
+// an oversight:
+//
+//   - ALLOWED — the normalised URL, no marker. Identical to what
+//     SanitizeURLOrBlank returned before this seam existed, so a permissive
+//     render is byte-for-byte what it always was.
+//   - UNSAFE (the SCHEME FLOOR refused) — the bare "about:blank", no marker.
+//     The floor's answer is a different fact from a policy refusal: it says
+//     "this URL is not safe to render at all", it has said it in that exact
+//     spelling in every conformant host since the renderer shipped, and it is
+//     pinned by the shared sanitization corpus. Re-spelling it here would churn
+//     that corpus inside a change about EGRESS — mixing two decisions into one
+//     set of bytes, which is where a genuine divergence hides. The floor is
+//     unchanged; only the questions it never asked get the new shape.
+//   - REFUSED BY POLICY — the inert EgressRefusalURL plus a marker naming the
+//     class and, where there is one, the host. Never the path or the query: the
+//     query string of a refused exfiltration attempt is the payload itself.
+func markdownDestination(policy EgressPolicy, cls EgressClass, url string) (string, []egressMarker) {
+	verdict := policy.CheckDestination(cls, url)
+	switch verdict.Kind {
+	case EgressAllowed:
+		return verdict.URL, nil
+	case EgressUnsafeURL:
+		return "about:blank", nil
+	}
+	name, value, ok := verdict.RefusalMarker()
+	if !ok {
+		return EgressRefusalURL, nil
+	}
+	return EgressRefusalURL, []egressMarker{{name, value}}
+}
+
+// egressAttrs renders refusal markers as trailing HTML attributes. Emitted LAST
+// on the element so an adopting host's diff against the pre-policy bytes is a
+// pure suffix — every attribute that was there is still where it was.
+func egressAttrs(markers []egressMarker) string {
+	if len(markers) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, m := range markers {
+		sb.WriteString(` ` + m.name + `="` + mdEscape(m.value) + `"`)
+	}
+	return sb.String()
 }
 
 // ── Entity decoding (common subset; the rest is DEFERRED) ───────────────────
@@ -169,7 +240,7 @@ func isSchemeChar(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '+' || c == '.' || c == '-'
 }
 
-func scanAutolink(text string, i int) (inline, int, bool) {
+func scanAutolink(policy EgressPolicy, text string, i int) (inline, int, bool) {
 	close := strings.IndexByte(text[i:], '>')
 	if close < 0 {
 		return inline{}, 0, false
@@ -192,11 +263,26 @@ func scanAutolink(text string, i int) (inline, int, bool) {
 	}
 	looksEmail := !looksURI && strings.Contains(body, "@") && !strings.Contains(body, ":") && strings.IndexByte(body, '@') > 0
 	if looksURI {
-		safe := SanitizeURLOrBlank(body)
-		return inline{kind: "raw", text: `<a href="` + mdEscape(safe) + `">` + mdEscape(body) + "</a>"}, close + 1, true
+		safe, markers := markdownDestination(policy, EgressHyperlink, body)
+		return inline{kind: "raw",
+			text: `<a href="` + mdEscape(safe) + `"` + egressAttrs(markers) + ">" + mdEscape(body) + "</a>"}, close + 1, true
 	}
 	if looksEmail {
-		return inline{kind: "raw", text: `<a href="mailto:` + mdEscape(body) + `">` + mdEscape(body) + "</a>"}, close + 1, true
+		// An email autolink has no URL of its own — the `mailto:` is the
+		// renderer's, so the policy is asked about the destination the renderer
+		// is about to emit. On acceptance the ORIGINAL bytes are emitted rather
+		// than the normalised form, so a permissive render is unchanged to the
+		// byte.
+		verdict := policy.CheckDestination(EgressHyperlink, "mailto:"+body)
+		if verdict.Kind == EgressAllowed {
+			return inline{kind: "raw", text: `<a href="mailto:` + mdEscape(body) + `">` + mdEscape(body) + "</a>"}, close + 1, true
+		}
+		var markers []egressMarker
+		if name, value, ok := verdict.RefusalMarker(); ok {
+			markers = []egressMarker{{name, value}}
+		}
+		return inline{kind: "raw",
+			text: `<a href="` + mdEscape(EgressRefusalURL) + `"` + egressAttrs(markers) + ">" + mdEscape(body) + "</a>"}, close + 1, true
 	}
 	return inline{}, 0, false
 }
@@ -343,7 +429,7 @@ func plainText(nodes []inline) string {
 	return sb.String()
 }
 
-func scanBareAutolink(text string, i int) (inline, int, bool) {
+func scanBareAutolink(policy EgressPolicy, text string, i int) (inline, int, bool) {
 	n := len(text)
 	starts := func(p string) bool { return strings.HasPrefix(text[i:], p) }
 	if !starts("https://") && !starts("http://") && !starts("www.") {
@@ -364,8 +450,9 @@ func scanBareAutolink(text string, i int) (inline, int, bool) {
 	if strings.HasPrefix(raw, "www.") {
 		href = "http://" + raw
 	}
-	safe := SanitizeURLOrBlank(href)
-	return inline{kind: "raw", text: `<a href="` + mdEscape(safe) + `">` + mdEscape(raw) + "</a>"}, j, true
+	safe, markers := markdownDestination(policy, EgressHyperlink, href)
+	return inline{kind: "raw",
+		text: `<a href="` + mdEscape(safe) + `"` + egressAttrs(markers) + ">" + mdEscape(raw) + "</a>"}, j, true
 }
 
 // ── Tokenizer + emphasis resolution ─────────────────────────────────────────
@@ -382,7 +469,7 @@ type mdToken struct {
 
 func nodeToken(node inline) *mdToken { return &mdToken{node: node} }
 
-func tokenize(refs map[string]refDef, text string) []*mdToken {
+func tokenize(refs map[string]refDef, policy EgressPolicy, text string) []*mdToken {
 	var toks []*mdToken
 	n := len(text)
 	i := 0
@@ -402,25 +489,25 @@ func tokenize(refs map[string]refDef, text string) []*mdToken {
 	}
 	makeImage := func(labelText, url, title string, hasTitle bool) {
 		flush()
-		alt := plainText(parseInlines(refs, labelText))
-		safe := SanitizeURLOrBlank(url)
+		alt := plainText(parseInlines(refs, policy, labelText))
+		safe, markers := markdownDestination(policy, EgressMedia, url)
 		titleAttr := ""
 		if hasTitle {
 			titleAttr = ` title="` + mdEscape(title) + `"`
 		}
 		toks = append(toks, nodeToken(inline{kind: "raw",
-			text: `<img src="` + mdEscape(safe) + `" alt="` + mdEscape(alt) + `"` + titleAttr + " />"}))
+			text: `<img src="` + mdEscape(safe) + `" alt="` + mdEscape(alt) + `"` + titleAttr + egressAttrs(markers) + " />"}))
 	}
 	makeLink := func(labelText, url, title string, hasTitle bool) {
 		flush()
-		inner := renderInlines(parseInlines(refs, labelText))
-		safe := SanitizeURLOrBlank(url)
+		inner := renderInlines(parseInlines(refs, policy, labelText))
+		safe, markers := markdownDestination(policy, EgressHyperlink, url)
 		titleAttr := ""
 		if hasTitle {
 			titleAttr = ` title="` + mdEscape(title) + `"`
 		}
 		toks = append(toks, nodeToken(inline{kind: "raw",
-			text: `<a href="` + mdEscape(safe) + `"` + titleAttr + ">" + inner + "</a>"}))
+			text: `<a href="` + mdEscape(safe) + `"` + titleAttr + egressAttrs(markers) + ">" + inner + "</a>"}))
 	}
 
 	for i < n {
@@ -451,7 +538,7 @@ func tokenize(refs map[string]refDef, text string) []*mdToken {
 				i++
 			}
 		case c == '<':
-			if node, next, ok := scanAutolink(text, i); ok {
+			if node, next, ok := scanAutolink(policy, text, i); ok {
 				flush()
 				toks = append(toks, nodeToken(node))
 				i = next
@@ -578,7 +665,7 @@ func tokenize(refs map[string]refDef, text string) []*mdToken {
 			}
 			i++
 		case (c == 'h' || c == 'w') && (i == 0 || mdIsWS(prevChar()) || strings.IndexByte("(*_~", prevChar()) >= 0):
-			if node, next, ok := scanBareAutolink(text, i); ok {
+			if node, next, ok := scanBareAutolink(policy, text, i); ok {
 				flush()
 				toks = append(toks, nodeToken(node))
 				i = next
@@ -676,12 +763,12 @@ func processEmphasis(toks []*mdToken) []inline {
 	return result
 }
 
-func parseInlines(refs map[string]refDef, text string) []inline {
-	return processEmphasis(tokenize(refs, text))
+func parseInlines(refs map[string]refDef, policy EgressPolicy, text string) []inline {
+	return processEmphasis(tokenize(refs, policy, text))
 }
 
-func renderInlineText(refs map[string]refDef, text string) string {
-	return renderInlines(parseInlines(refs, text))
+func renderInlineText(refs map[string]refDef, policy EgressPolicy, text string) string {
+	return renderInlines(parseInlines(refs, policy, text))
 }
 
 // ── Block parsing ───────────────────────────────────────────────────────────
@@ -1149,23 +1236,23 @@ func alignAttr(a string) string {
 	return ""
 }
 
-func renderBlocks(refs map[string]refDef, blocks []mdBlock) string {
+func renderBlocks(refs map[string]refDef, policy EgressPolicy, blocks []mdBlock) string {
 	var sb strings.Builder
 	for _, b := range blocks {
-		sb.WriteString(renderBlock(refs, b))
+		sb.WriteString(renderBlock(refs, policy, b))
 	}
 	return sb.String()
 }
 
-func renderBlock(refs map[string]refDef, b mdBlock) string {
+func renderBlock(refs map[string]refDef, policy EgressPolicy, b mdBlock) string {
 	switch b.kind {
 	case "hr":
 		return "<hr />\n"
 	case "heading":
 		lvl := strconv.Itoa(b.level)
-		return "<h" + lvl + ">" + renderInlineText(refs, b.text) + "</h" + lvl + ">\n"
+		return "<h" + lvl + ">" + renderInlineText(refs, policy, b.text) + "</h" + lvl + ">\n"
 	case "paragraph":
-		return "<p>" + renderInlineText(refs, b.text) + "</p>\n"
+		return "<p>" + renderInlineText(refs, policy, b.text) + "</p>\n"
 	case "fenced":
 		cls := ""
 		if b.lang != "" {
@@ -1175,7 +1262,7 @@ func renderBlock(refs map[string]refDef, b mdBlock) string {
 	case "indented":
 		return "<pre><code>" + mdEscape(b.text) + "\n</code></pre>\n"
 	case "blockquote":
-		return "<blockquote>\n" + renderBlocks(refs, b.blocks) + "</blockquote>\n"
+		return "<blockquote>\n" + renderBlocks(refs, policy, b.blocks) + "</blockquote>\n"
 	case "table":
 		var sb strings.Builder
 		sb.WriteString(`<table class="fuaran-table"><thead><tr>`)
@@ -1184,7 +1271,7 @@ func renderBlock(refs map[string]refDef, b mdBlock) string {
 			if idx < len(b.aligns) {
 				a = b.aligns[idx]
 			}
-			sb.WriteString(`<th class="fuaran-table-header"` + alignAttr(a) + ">" + renderInlineText(refs, h) + "</th>")
+			sb.WriteString(`<th class="fuaran-table-header"` + alignAttr(a) + ">" + renderInlineText(refs, policy, h) + "</th>")
 		}
 		sb.WriteString("</tr></thead><tbody>")
 		for _, row := range b.rows {
@@ -1198,25 +1285,25 @@ func renderBlock(refs map[string]refDef, b mdBlock) string {
 				if idx < len(b.aligns) {
 					a = b.aligns[idx]
 				}
-				sb.WriteString(`<td class="fuaran-table-cell"` + alignAttr(a) + ">" + renderInlineText(refs, cell) + "</td>")
+				sb.WriteString(`<td class="fuaran-table-cell"` + alignAttr(a) + ">" + renderInlineText(refs, policy, cell) + "</td>")
 			}
 			sb.WriteString("</tr>")
 		}
 		sb.WriteString("</tbody></table>\n")
 		return sb.String()
 	case "bullet":
-		return "<ul>\n" + renderItems(refs, b.tight, b.items) + "</ul>\n"
+		return "<ul>\n" + renderItems(refs, policy, b.tight, b.items) + "</ul>\n"
 	case "ordered":
 		startAttr := ""
 		if b.level != 1 {
 			startAttr = ` start="` + strconv.Itoa(b.level) + `"`
 		}
-		return "<ol" + startAttr + ">\n" + renderItems(refs, b.tight, b.items) + "</ol>\n"
+		return "<ol" + startAttr + ">\n" + renderItems(refs, policy, b.tight, b.items) + "</ol>\n"
 	}
 	return ""
 }
 
-func renderItems(refs map[string]refDef, tight bool, items []listItem) string {
+func renderItems(refs map[string]refDef, policy EgressPolicy, tight bool, items []listItem) string {
 	var sb strings.Builder
 	for _, item := range items {
 		checkbox := ""
@@ -1233,25 +1320,25 @@ func renderItems(refs map[string]refDef, tight bool, items []listItem) string {
 			var inner strings.Builder
 			for _, blk := range item.blocks {
 				if blk.kind == "paragraph" {
-					inner.WriteString(renderInlineText(refs, blk.text))
+					inner.WriteString(renderInlineText(refs, policy, blk.text))
 				} else {
-					inner.WriteString("\n" + renderBlock(refs, blk))
+					inner.WriteString("\n" + renderBlock(refs, policy, blk))
 				}
 			}
 			sb.WriteString("<li" + liClass + ">" + checkbox + inner.String() + "</li>\n")
 		} else {
-			sb.WriteString("<li" + liClass + ">\n" + checkbox + renderBlocks(refs, item.blocks) + "</li>\n")
+			sb.WriteString("<li" + liClass + ">\n" + checkbox + renderBlocks(refs, policy, item.blocks) + "</li>\n")
 		}
 	}
 	return sb.String()
 }
 
-// MarkdownToHTML renders GFM markdown source to deterministic, cross-host
-// HTML (the corpus at wire-format-fixtures/markdown/corpus.json pins the
-// bytes). Escapes by construction — no raw-HTML passthrough; URLs via the
-// sanitiser — and the result still passes through sanitizeMarkdownHTML as
-// defence in depth.
-func MarkdownToHTML(source string) string {
+// MarkdownToHTMLWithEgress renders GFM markdown source to deterministic,
+// cross-host HTML, consulting policy for every link (EgressHyperlink) and image
+// (EgressMedia) destination the body names (WIRE_FORMAT.md §14.1). A refused
+// destination renders the inert EgressRefusalURL plus a marker naming the class
+// and the host — never the path or the query.
+func MarkdownToHTMLWithEgress(policy EgressPolicy, source string) string {
 	if source == "" {
 		return ""
 	}
@@ -1260,5 +1347,25 @@ func MarkdownToHTML(source string) string {
 	rawLines := strings.Split(normalized, "\n")
 	refs, lines := extractRefDefs(rawLines)
 	blocks := parseBlocks(lines)
-	return sanitizeMarkdownHTML(renderBlocks(refs, blocks))
+	return sanitizeMarkdownHTML(renderBlocks(refs, policy, blocks))
+}
+
+// MarkdownToHTML renders GFM markdown source to deterministic, cross-host
+// HTML (the corpus at wire-format-fixtures/markdown/corpus.json pins the
+// bytes). Escapes by construction — no raw-HTML passthrough; URLs via the
+// sanitiser — and the result still passes through sanitizeMarkdownHTML as
+// defence in depth.
+//
+// It IS the permissive case of MarkdownToHTMLWithEgress, byte-for-byte. Kept as
+// the pure source → html function rather than flipped to the denying default,
+// for the same reasons every posture inversion here is reached BY NAME: the
+// corpus is a cross-host byte-parity contract, so changing this function's
+// answer would rewrite existing fixtures in every host at once — a mass churn
+// is exactly where a real divergence hides; it is published surface on an
+// Apache-2.0 module, so a caller who wants the pure function should reach it
+// deliberately rather than meet a silent behaviour swap; and keeping it named
+// makes an unpolicied markdown render greppable, which is the property the
+// refusal shape exists to give.
+func MarkdownToHTML(source string) string {
+	return MarkdownToHTMLWithEgress(PermissiveEgress(), source)
 }
