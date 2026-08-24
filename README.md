@@ -88,9 +88,12 @@ Shipped:
   walk emitting the reference `fuaran-*` class vocabulary (parity-locked to
   the reference renderer, styled by the byte-copied reference CSS), the
   deterministic GFM markdown renderer (byte-pinned by the shared markdown
-  corpus), the URL/markdown sanitiser floor, and **islands partial-hydration
-  emission** (`RenderWithIslands`: per-island boundary wrappers + scoped
-  hydrate payloads; zero islands ⇒ byte-identical to a plain render).
+  corpus), the URL/markdown sanitiser floor, the **ambient default-deny
+  destination policy** (§14.1 — every emitted `href` / `src`, in a node or a
+  markdown body, checked with no caller opt-in; see below), and **islands
+  partial-hydration emission** (`RenderWithIslands`: per-island boundary
+  wrappers + scoped hydrate payloads; zero islands ⇒ byte-identical to a plain
+  render).
 - **`serverdriven`** — the server-driven interactivity tier: a driver that
   holds the tree + state, validates each client event default-deny by shape,
   runs the host handler for the TreeOps, applies them (Phase-415 apply) to keep
@@ -111,6 +114,91 @@ Shipped:
 
 Every roadmap tier for this host (codec → apply → validator → renderer →
 server-driven driver) is now shipped.
+
+## Destination policy — ambient default-deny
+
+A rendered URL is checked against a typed **destination policy** before it is
+emitted (`WIRE_FORMAT.md` §14.1). The scheme floor answers "is this URL safe to
+*have*"; the policy answers "is this destination one the composition
+*declared*", and only the second closes exfiltration:
+`https://collector.example/?s=<bound state>` passes every scheme check —
+allowlisted scheme, well-formed host, no script anywhere — and an `<img src>`
+pointed at it is contacted with **no user act at all**, because rendering *is*
+the request.
+
+**The policy is ambient, and the default is deny.** `RenderHTML` and
+`RenderWithIslands` render under `DenyNonLocalEgress()`: a decoded tree may
+point at its own origin and nowhere else, with no caller opt-in. A decoded tree
+is untrusted input and an emission cannot declare its own egress (a policy an
+emission can supply is one a hostile emission can widen), so absent a host's
+declaration it gets none.
+
+A host that needs a wider posture reaches for it **by name**:
+
+```go
+// Declares WHAT may be reached and FOR WHAT; default-deny for everything else.
+policy := renderer.DenyNonLocalEgress().
+    AllowOrigin(renderer.HostSuffix("cdn.example"), renderer.EgressMedia).
+    AllowOrigin(renderer.ExactHost("docs.example"), renderer.EgressHyperlink)
+
+html := renderer.RenderHTMLWithEgress(tree, sources, policy)
+// islands: renderer.RenderWithIslandsAndEgress(tree, sources, islands, policy)
+```
+
+`renderer.PermissiveEgress()` permits every destination — correct for a
+hand-authored tree where the author is the trust boundary, wrong for anything
+that renders a decoded one. Naming it is deliberate: a grep for `permissive`
+finds every host that widened its egress, in that host's own source.
+
+A refused destination renders `about:blank#fuaran-egress-refused` plus a
+`data-fuaran-egress-refused="<class>:<host>"` marker, so the refusal is visible
+in the document rather than only in the logs. The marker value carries the class
+and the host (or the scheme, or `local`) and **never the path or the query** —
+the query string of a refused exfiltration attempt is the payload itself.
+
+Four things about this host's adoption are declared rather than incidental:
+
+- **No route class.** `EgressRoute` exists in the policy vocabulary, but this
+  host is headless and static: it has no navigation runtime, emits no
+  tree-declared route as a URL, and renders every action-bearing node inert. So
+  there is no route call site to check here. The class stays in the vocabulary
+  because a policy must be able to *speak* about a route it hands to a client.
+- **No grid link column.** A bound `DataGrid` renders rich cell kinds
+  (including `Link`) as their **text** projection — this host's inert server
+  semantics — so no `href` is emitted from a grid cell and there is no
+  egress call site there. If a grid cell ever emits a real `href`, it takes the
+  `EgressHyperlink` class, like every other hyperlink.
+- **A `download` link is still a hyperlink.** `EgressHyperlink` is the class
+  even when `download` is set. The class names the **sink the browser reaches**,
+  and flipping one boolean on a tree must not change which rule applies.
+- **The two seams spell an UNSAFE url differently, on purpose.** At a node call
+  site (`Link` href, `Image` src) a URL the *scheme floor* refuses renders the
+  inert refusal URL plus an `unsafe-url` marker; inside a **markdown body** it
+  keeps the bare `about:blank` it has always emitted. The markdown bytes are
+  pinned by a cross-host corpus, and re-spelling them inside a change about
+  egress would churn a shared contract — which is where a real divergence
+  hides. The floor's own answer (`SanitizeURL` / `SanitizeURLOrBlank`) is
+  unchanged either way.
+
+One consequence worth stating because it surprises: a **protected email link**
+(`protection: "email"`) needs a policy that permits non-network destinations.
+`mailto:` is an egress channel — a body parameter carries arbitrary text off the
+machine — and it has no host a rule can name, so `DenyNonLocalEgress()` refuses
+it and the link renders as an ordinary refused anchor with **no address in the
+output at all**. The narrowest widening is `DenyNonLocalEgress()` with
+`AllowNonNetwork` set.
+
+The **island hydrate payload is deliberately unfiltered**: it is the island
+subtree's canonical wire JSON — the tree, not a rendering of it — and the client
+that consumes it is a conformant host applying its own policy at its own
+emission sites. Rewriting a destination inside the payload would hand the client
+a tree that no longer round-trips.
+
+Pinned by the corpus legs in `conformance/render_test.go`
+(`TestMarkdownCorpus` certifies the seam; `TestMarkdownCorpusAmbient` and
+`TestAmbientEgressAtTheNodeCallSites` certify that the ordinary entry points
+*reach* it with no policy named) and the policy tests in
+`renderer/egress_test.go`.
 
 ## Bound-grid posture — completeness
 

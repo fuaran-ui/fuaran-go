@@ -96,10 +96,34 @@ func islandScript(islandID string, node wire.Node) (string, error) {
 // static HTML. Islands maps a node id in the tree to its island id; a nil or
 // empty map returns exactly RenderHTML(node, sources) — no wrappers, no
 // scripts.
+//
+// The destination policy is the ambient DenyNonLocalEgress, exactly as on the
+// static path (WIRE_FORMAT.md §14.1) — the two surfaces must not differ, or a
+// host would widen its egress merely by marking an island. A wider posture is
+// reached BY NAME through RenderWithIslandsAndEgress.
+//
+// The embedded hydrate payload is the island subtree's CANONICAL WIRE JSON and
+// is deliberately not filtered: it is the tree, not a rendering of it, and the
+// client that consumes it is a conformant host applying its own policy at its
+// own emission sites. Rewriting a destination inside the payload would hand the
+// client a tree that no longer round-trips.
 func RenderWithIslands(node wire.Node, sources BindingSources, islands map[string]string) (string, error) {
+	return RenderWithIslandsAndEgress(node, sources, islands, DenyNonLocalEgress())
+}
+
+// RenderWithIslandsAndEgress is RenderWithIslands with an EXPLICIT destination
+// policy — the named opt-out from the ambient default-deny. See
+// RenderHTMLWithEgress for the postures a host reaches for and why the opt-out
+// is a named entry point rather than a parameter default.
+func RenderWithIslandsAndEgress(
+	node wire.Node,
+	sources BindingSources,
+	islands map[string]string,
+	policy EgressPolicy,
+) (string, error) {
 	fragments := make(map[string]wire.Node)
 	collectFragments(node, fragments)
-	r := &renderer{sources: sources, fragments: fragments, islands: islands}
+	r := &renderer{sources: sources, fragments: fragments, islands: islands, egress: policy}
 	staticHTML := r.renderNode(node)
 
 	var scripts strings.Builder

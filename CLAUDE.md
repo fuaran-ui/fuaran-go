@@ -73,7 +73,7 @@ fuaran-go/
 ├── wire/                 # Node / TreeOp codec: structural model + canonical encoder + decoders + DecodeError envelope
 ├── ops/                  # tree-op apply engine — Apply / CanApply, typed ApplyError, §3.4 nested paths
 ├── validator/            # pre-emit default-deny structural validator (shared codes + $-rooted paths)
-├── renderer/             # server-HTML + GFM markdown + sanitiser + islands emission + reference-CSS byte-copy
+├── renderer/             # server-HTML + GFM markdown + sanitiser + ambient egress policy + islands + reference-CSS byte-copy
 ├── serverdriven/         # server-driven driver + transport-neutral Channel (in-memory / SSE / stdlib WebSocket) + reconnect-replay
 ├── conformance/          # shared-corpus certification: all fixture legs + parity locks
 ├── go.mod
@@ -134,6 +134,31 @@ source; the shipped reference CSS byte-equal to the canonical artefact — both
 skip on a standalone checkout). The envelope and elicitation families land
 with their own roadmap tiers (`conformance` locates `../wire-format-fixtures/`
 and skips when absent).
+
+## Destination policy — ambient, default-deny
+
+Every URL this host emits is checked against a typed destination policy
+(`WIRE_FORMAT.md` §14.1) before it is written: the `Link` href
+(`EgressHyperlink`, including when `download` is set), the `Image` src
+(`EgressMedia`), and every link / image inside a markdown body (via the
+policy-taking `MarkdownToHTMLWithEgress`). The policy is a field on the
+per-render context — never a package-level variable, which would be
+non-reentrant under concurrent server renders.
+
+**`RenderHTML` / `RenderWithIslands` default to `DenyNonLocalEgress()` — no
+caller opt-in.** A wider posture is reached BY NAME through
+`RenderHTMLWithEgress` / `RenderWithIslandsAndEgress`, so `grep -i permissive`
+finds every widening in the host's own source. The one-call seam a new emission
+site adopts is `policy.SanitizeURLForEgress(class, url)`: it returns the URL to
+emit plus the refusal attribute pairs to splice, and replacing a
+`SanitizeURLOrBlank` call with it IS the adoption.
+
+**The declared divergences from the reference host — no route class, no grid
+link column, the `download` class choice, the two seams' different spelling of
+an unsafe URL, and the protected-email consequence — are written up in
+`README.md` ("Destination policy — ambient default-deny").** Keep them there:
+that file ships, and a divergence a reader cannot find is indistinguishable from
+a defect.
 
 ## Interactivity — server-friendly delivery for a headless host
 

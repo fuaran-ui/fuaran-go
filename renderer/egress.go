@@ -416,6 +416,37 @@ const EgressRefusalURL = "about:blank#fuaran-egress-refused"
 // a refused destination.
 const EgressRefusalAttribute = "data-fuaran-egress-refused"
 
+// SanitizeURLForEgress is the ONE-CALL RENDER SEAM: the URL to emit, plus the
+// attribute pairs that record a refusal in the document itself. An emission
+// site adopts the policy by replacing its SanitizeURLOrBlank call with this one
+// and splicing the returned pairs onto the element — which is the whole
+// adoption, per call site.
+//
+// A pair is (name, value), so the returned slice is spliceable by any host
+// whatever attribute type it builds — the exported analogue of the internal
+// attr list this package's own call sites use.
+//
+// It differs from markdownDestination in ONE verdict, deliberately: the UNSAFE
+// case (the scheme floor's own refusal) renders EgressRefusalURL with an
+// `unsafe-url` marker here, where the markdown seam keeps the bare
+// "about:blank" it has always emitted. The markdown bytes are pinned by a
+// cross-host corpus and re-spelling them would churn a shared contract inside a
+// change about egress; a node call site is pinned by nothing of the sort, and a
+// refused destination that is INVISIBLE in the document is exactly what the
+// refusal shape exists to end. The sibling hosts draw the line in the same
+// place, so the divergence is between the two seams, not between the hosts.
+func (p EgressPolicy) SanitizeURLForEgress(cls EgressClass, url string) (string, [][2]string) {
+	verdict := p.CheckDestination(cls, url)
+	if verdict.Kind == EgressAllowed {
+		return verdict.URL, nil
+	}
+	name, value, ok := verdict.RefusalMarker()
+	if !ok {
+		return EgressRefusalURL, nil
+	}
+	return EgressRefusalURL, [][2]string{{name, value}}
+}
+
 // RefusalMarker returns the attribute name and value recording this verdict,
 // and false when the destination was allowed. The VALUE names the class and —
 // where there is one — the host or the scheme; it never carries the URL.

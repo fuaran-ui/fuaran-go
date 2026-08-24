@@ -1,10 +1,57 @@
 package renderer
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The shared markdown corpus certifies the seam end-to-end; these cover the
 // policy's own decision rules directly, so a defect in one of them names itself
 // instead of surfacing as a diverged byte in a rendered document.
+
+// allowNonNetworkEgress is the NARROWEST widening a host reaches for: the
+// default-deny posture plus mailto: / tel: destinations, which have no host a
+// rule could name and so can only be permitted wholesale. Used by the tests
+// whose subject is a protected email link rather than the policy itself.
+func allowNonNetworkEgress() EgressPolicy {
+	p := DenyNonLocalEgress()
+	p.AllowNonNetwork = true
+	return p
+}
+
+// A protected email link is REACHABLE ONLY UNDER A POLICY THAT PERMITS THE
+// mailto:, and that is the ambient default working, not a regression.
+//
+// The href is policy-checked BEFORE the protection arm is chosen — the arm's
+// own test is `safeHref` starting with "mailto:", and a refused destination's
+// safeHref is the refusal URL. So under the default-deny an email-protected
+// link renders as an ordinary refused anchor carrying `hyperlink:mailto`, with
+// no address anywhere. That ordering is the reference host's, and it is the
+// safe one: the alternative would let a tree reach the entity-encoding arm —
+// which emits the address, obfuscated — under a policy that had refused the
+// destination.
+func TestProtectedEmailNeedsANonNetworkPolicy(t *testing.T) {
+	const json = `{"id":"plk","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"mailto:contact@example.com"},"label":"Email us","protection":"email"}}`
+	node := mustDecode(t, json)
+
+	refused := RenderHTML(node, nil)
+	if !strings.Contains(refused, `data-fuaran-egress-refused="hyperlink:mailto"`) {
+		t.Errorf("the ambient default did not refuse the mailto: destination:\n%s", refused)
+	}
+	if strings.Contains(refused, "fuaran-link-protected-wrap") {
+		t.Errorf("the protected arm was reached under a policy that refused the destination:\n%s", refused)
+	}
+	for _, banned := range []string{"contact@example.com", "&#99;&#111;&#110;&#116;&#97;&#99;&#116;"} {
+		if strings.Contains(refused, banned) {
+			t.Errorf("a refused protected link leaked the address (%q):\n%s", banned, refused)
+		}
+	}
+
+	permitted := RenderHTMLWithEgress(node, nil, allowNonNetworkEgress())
+	if !strings.Contains(permitted, "fuaran-link-protected-wrap") {
+		t.Errorf("the protected arm did not render under a policy permitting non-network egress:\n%s", permitted)
+	}
+}
 
 func TestHostSuffixMatchesAtLabelBoundaryOnly(t *testing.T) {
 	policy := DenyNonLocalEgress().AllowOrigin(HostSuffix("docs.example"), EgressHyperlink)

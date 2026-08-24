@@ -32,12 +32,30 @@ func TestHeadingRendersLevelAndClassVocabulary(t *testing.T) {
 func TestLinkSanitisesScriptScheme(t *testing.T) {
 	node := mustDecode(t, `{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"javascript:alert(1)"},"label":"Click"}}`)
 	html := RenderHTML(node, nil)
-	if !strings.Contains(html, `href="about:blank"`) {
+	// The scheme floor still refuses it; what changed is the SPELLING of the
+	// refusal at a node call site. Before the ambient policy landed this was a
+	// bare about:blank, indistinguishable from an authoring mistake; the call
+	// site now runs through SanitizeURLForEgress, so the floor's own refusal is
+	// recorded like every other one — the inert refusal URL plus an
+	// `unsafe-url` marker. The floor's ANSWER is unchanged (SanitizeURL and the
+	// sanitization corpus both still say about:blank); only this emission site
+	// says it in the fuller spelling. The markdown seam deliberately keeps the
+	// bare form — see SanitizeURLForEgress for why the two seams differ.
+	if !strings.Contains(html, `href="`+EgressRefusalURL+`"`) {
 		t.Errorf("script-scheme href not neutralised:\n%s", html)
 	}
+	if !strings.Contains(html, `data-fuaran-egress-refused="unsafe-url"`) {
+		t.Errorf("script-scheme refusal was not recorded in the document:\n%s", html)
+	}
+	// A safe REMOTE href is a policy question, not a floor question, so it needs
+	// the named opt-out — the ambient default denies it (see the ambient legs in
+	// conformance/render_test.go).
 	safe := mustDecode(t, `{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"https://example.org/x"},"label":"Click"}}`)
-	if !strings.Contains(RenderHTML(safe, nil), `href="https://example.org/x"`) {
-		t.Error("https href was not preserved")
+	if !strings.Contains(RenderHTMLWithEgress(safe, nil, PermissiveEgress()), `href="https://example.org/x"`) {
+		t.Error("https href was not preserved under a permissive policy")
+	}
+	if !strings.Contains(RenderHTML(safe, nil), `data-fuaran-egress-refused="hyperlink:example.org"`) {
+		t.Error("the ambient default did not refuse an undeclared remote href")
 	}
 }
 
@@ -46,7 +64,10 @@ func TestLinkProtectedEmailEmitsNoPlaintextAddress(t *testing.T) {
 	// every href/label character a decimal entity; no plaintext address or
 	// scheme anywhere in the output.
 	node := mustDecode(t, `{"id":"plk","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"mailto:contact@example.com"},"label":"Email us","protection":"email"}}`)
-	html := RenderHTML(node, nil)
+	// The narrowest widening — a policy that permits non-network destinations
+	// and nothing else. Under the ambient default the mailto: is refused before
+	// the protected arm is reached (see TestProtectedEmailNeedsANonNetworkPolicy).
+	html := RenderHTMLWithEgress(node, nil, allowNonNetworkEgress())
 	for _, want := range []string{
 		`<span class="fuaran-link-protected-wrap">`,
 		`<a class="fuaran-link fuaran-link-protected" href="&#109;&#97;&#105;&#108;&#116;&#111;&#58;`,

@@ -98,7 +98,14 @@ func TestNonForwardingKindKeepsTheProjectionOnTheWrapper(t *testing.T) {
 // arm owns in every tier. A stated limit, pinned so it stays deliberate.
 func TestProtectedEmailLinkA11yLandsOnTheWrapSpan(t *testing.T) {
 	node := mustDecode(t, `{"id":"plk","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"mailto:u@e.com"},"label":"u@e.com","protection":"email"},`+a11ySection+`}`)
-	html := RenderHTML(node, nil)
+	// The protected arm is reachable only when the policy PERMITS the mailto:.
+	// The ambient default denies non-network destinations (a mailto: body
+	// parameter carries arbitrary text off the machine and has no host a rule
+	// can name), so under RenderHTML this link refuses and renders the ordinary
+	// anchor — no wrap span to project onto. Naming the narrowest widening is
+	// what a host with a real mailto: surface does, and it is what this
+	// placement contract is about.
+	html := RenderHTMLWithEgress(node, nil, allowNonNetworkEgress())
 
 	if strings.Contains(wrapperTag(html), "aria-label") {
 		t.Errorf("the projection must not sit on the wrapper div:\n%s", wrapperTag(html))
