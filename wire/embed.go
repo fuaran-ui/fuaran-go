@@ -26,14 +26,18 @@ func ParseCanonical(text string) (raw any, err error) {
 // returns a *DecodeError.
 func DecodeOpValue(raw any) (op Obj, err error) {
 	defer recoverDecode(&err)
-	return decodeOpValue(raw, "$"), nil
+	w := newWalkState()
+	checkShape(raw)
+	return decodeOpValue(w, raw, "$"), nil
 }
 
 // DecodeNodeValue decodes a Node from an already-parsed value, for a tree
 // nested inside a larger document. Malformed input returns a *DecodeError.
 func DecodeNodeValue(raw any) (node Node, err error) {
 	defer recoverDecode(&err)
-	return decodeNodeValue(raw, "$"), nil
+	w := newWalkState()
+	checkShape(raw)
+	return decodeNodeValue(w, raw, "$"), nil
 }
 
 // ValueFromParsed converts an already-parsed JSON value (from ParseCanonical)

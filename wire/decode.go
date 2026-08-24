@@ -77,6 +77,11 @@ func recoverDecode(err *error) {
 // distinction via json.Number. Anything else — syntax errors, an empty input,
 // trailing content after the document — is INVALID_JSON at "$".
 func parseJSON(text string) any {
+	// §21 syntactic bound FIRST — before encoding/json, whose own nesting cap
+	// would otherwise report a too-deep document as a syntax error (rule 2
+	// forbids that classification for a well-formed document).
+	checkTextDepth(text)
+
 	dec := json.NewDecoder(strings.NewReader(text))
 	dec.UseNumber()
 	var raw any
@@ -180,7 +185,7 @@ func expectInt(raw any, path string) int64 {
 }
 
 // expectNumber accepts any JSON number (an integer or float literal).
-func expectNumber(raw any, path string) Value {
+func expectNumber(w *walkState, raw any, path string) Value {
 	n, ok := unwrapStaticAny(raw).(json.Number)
 	if !ok {
 		fail(CodeWrongType, path, "expected a number at "+path)
@@ -315,7 +320,7 @@ func fromJSON(raw any) Value {
 // the wire model has no null). A JSON null at ANY depth rejects as WRONG_TYPE
 // at the null's exact path. Keys are walked in sorted order so the reported
 // path is deterministic.
-func fromJSONStrict(raw any, path string) Value {
+func fromJSONStrict(w *walkState, raw any, path string) Value {
 	switch t := raw.(type) {
 	case nil:
 		failExpecting(
@@ -333,7 +338,7 @@ func fromJSONStrict(raw any, path string) Value {
 	case []any:
 		arr := make(Arr, len(t))
 		for i, item := range t {
-			arr[i] = fromJSONStrict(item, path+"["+strconv.Itoa(i)+"]")
+			arr[i] = fromJSONStrict(w, item, path+"["+strconv.Itoa(i)+"]")
 		}
 		return arr
 	case map[string]any:
@@ -348,7 +353,7 @@ func fromJSONStrict(raw any, path string) Value {
 			if tag != "" && k == "$type" {
 				continue
 			}
-			fields[k] = fromJSONStrict(t[k], path+"."+k)
+			fields[k] = fromJSONStrict(w, t[k], path+"."+k)
 		}
 		return Obj{Tag: tag, Fields: fields}
 	}
@@ -517,7 +522,7 @@ func isNumericZero(v Value) bool {
 // keep their $type objects (a Bound's inner binding decodes through the
 // binding normaliser; I18n args are structured JSON payload positions —
 // rule 12: no null — and are always present on the canonical wire).
-func decodeTextSource(raw any, path string) Value {
+func decodeTextSource(w *walkState, raw any, path string) Value {
 	if s, ok := raw.(string); ok {
 		return Str(s)
 	}
@@ -530,11 +535,11 @@ func decodeTextSource(raw any, path string) Value {
 		key := expectString(require(obj, "key", path), path+".key")
 		args := Value(Obj{Fields: map[string]Value{}})
 		if raw, ok := obj["args"]; ok {
-			args = fromJSONStrict(raw, path+".args")
+			args = fromJSONStrict(w, raw, path+".args")
 		}
 		return Obj{Tag: "I18n", Fields: map[string]Value{"args": args, "key": Str(key)}}
 	default: // Bound
-		binding := decodeBinding(require(obj, "binding", path), path+".binding")
+		binding := decodeBinding(w, require(obj, "binding", path), path+".binding")
 		return Obj{Tag: "Bound", Fields: map[string]Value{"binding": binding}}
 	}
 }
@@ -543,16 +548,16 @@ func decodeTextSource(raw any, path string) Value {
 
 // staticParser decodes a Binding.Static payload (and the bare-scalar/array
 // shape coercion) for one slot's typed shape.
-type staticParser func(raw any, path string) Value
+type staticParser func(w *walkState, raw any, path string) Value
 
 // objStatic is the obj-erased default: structural, null-lenient (§5).
-func objStatic(raw any, path string) Value {
+func objStatic(w *walkState, raw any, path string) Value {
 	return fromJSON(raw)
 }
 
 // floatStatic — a JSON number, the three non-finite sentinels, or the Static
 // envelope around either (the inverse-confusion unwrap).
-func floatStatic(raw any, path string) Value {
+func floatStatic(w *walkState, raw any, path string) Value {
 	raw = unwrapStaticAny(raw)
 	if n, ok := raw.(json.Number); ok {
 		return numberValue(n)
@@ -564,17 +569,17 @@ func floatStatic(raw any, path string) Value {
 	return nil
 }
 
-func boolStatic(raw any, path string) Value {
+func boolStatic(w *walkState, raw any, path string) Value {
 	return Bool(expectBool(raw, path))
 }
 
-func stringStatic(raw any, path string) Value {
+func stringStatic(w *walkState, raw any, path string) Value {
 	return Str(expectString(raw, path))
 }
 
 // stringOptStatic — a string option: null is a genuine None; the legacy
 // "<opaque>" sentinel stays the scalar sentinel string.
-func stringOptStatic(raw any, path string) Value {
+func stringOptStatic(w *walkState, raw any, path string) Value {
 	raw = unwrapStaticAny(raw)
 	if raw == nil {
 		return Null{}
@@ -588,19 +593,19 @@ func stringOptStatic(raw any, path string) Value {
 
 // decodeSelectOption — an option object, or the bare-string shorthand
 // ("A" IS {"label":"A","value":"A"} — the HTML <select> prior).
-func decodeSelectOption(raw any, path string) Value {
+func decodeSelectOption(w *walkState, raw any, path string) Value {
 	if s, ok := raw.(string); ok {
 		return Obj{Fields: map[string]Value{"label": Str(s), "value": Str(s)}}
 	}
 	obj := expectObject(raw, path)
-	label := decodeTextSource(require(obj, "label", path), path+".label")
+	label := decodeTextSource(w, require(obj, "label", path), path+".label")
 	value := expectString(require(obj, "value", path), path+".value")
 	return Obj{Fields: map[string]Value{"label": label, "value": Str(value)}}
 }
 
 // selectOptionsStatic — the typed option-list payload; "<opaque>" → a tagged
 // one-element placeholder; null → the empty typed list (§5 read-compat).
-func selectOptionsStatic(raw any, path string) Value {
+func selectOptionsStatic(w *walkState, raw any, path string) Value {
 	if raw == nil {
 		return Arr{}
 	}
@@ -610,14 +615,14 @@ func selectOptionsStatic(raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeSelectOption(item, path+"["+strconv.Itoa(i)+"]")
+		out[i] = decodeSelectOption(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
 
 // stringListStatic — "<opaque>" → a one-element placeholder list; null → the
 // empty typed list.
-func stringListStatic(raw any, path string) Value {
+func stringListStatic(w *walkState, raw any, path string) Value {
 	if raw == nil {
 		return Arr{}
 	}
@@ -633,7 +638,7 @@ func stringListStatic(raw any, path string) Value {
 }
 
 // floatSeqStatic — both "<opaque>" and null → the empty typed array.
-func floatSeqStatic(raw any, path string) Value {
+func floatSeqStatic(w *walkState, raw any, path string) Value {
 	if raw == nil {
 		return Arr{}
 	}
@@ -643,21 +648,21 @@ func floatSeqStatic(raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = expectNumber(item, path+"["+strconv.Itoa(i)+"]")
+		out[i] = expectNumber(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
 
-func decodeMapMarker(raw any, path string) Value {
+func decodeMapMarker(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
-	label := decodeTextSource(require(obj, "label", path), path+".label")
-	lat := expectNumber(require(obj, "latitude", path), path+".latitude")
-	lon := expectNumber(require(obj, "longitude", path), path+".longitude")
+	label := decodeTextSource(w, require(obj, "label", path), path+".label")
+	lat := expectNumber(w, require(obj, "latitude", path), path+".latitude")
+	lon := expectNumber(w, require(obj, "longitude", path), path+".longitude")
 	return Obj{Fields: map[string]Value{"label": label, "latitude": lat, "longitude": lon}}
 }
 
 // markerSeqStatic — both "<opaque>" and null → the empty typed array.
-func markerSeqStatic(raw any, path string) Value {
+func markerSeqStatic(w *walkState, raw any, path string) Value {
 	if raw == nil {
 		return Arr{}
 	}
@@ -667,7 +672,7 @@ func markerSeqStatic(raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeMapMarker(item, path+"["+strconv.Itoa(i)+"]")
+		out[i] = decodeMapMarker(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
@@ -695,7 +700,7 @@ func rowCell(raw any) Value {
 // is OMITTED (rule 4 — absence is structural, never "k":null), matching what the
 // reference encoders emit. Built structurally rather than via fromJSON so a cell
 // named "$type" stays a cell, never a discriminator.
-func decodeRow(raw any, path string) Value {
+func decodeRow(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	fields := make(map[string]Value, len(obj))
 	for k, v := range obj {
@@ -713,7 +718,7 @@ func decodeRow(raw any, path string) Value {
 // pre-typed host emitted, and an absent/null payload — normalise to the empty
 // feed (read-compat, indefinitely: that *was* the whole value the sentinel
 // carried). An empty feed encodes [], never null.
-func rowSeqStatic(raw any, path string) Value {
+func rowSeqStatic(w *walkState, raw any, path string) Value {
 	if raw == nil {
 		return Arr{}
 	}
@@ -723,12 +728,12 @@ func rowSeqStatic(raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeRow(item, path+"["+strconv.Itoa(i)+"]")
+		out[i] = decodeRow(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
 
-func decodeLocalFlushTrigger(raw any, path string) Value {
+func decodeLocalFlushTrigger(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, flushTriggerCases, CodeUnknownDUCase)
 	if tag == "OnDebounce" {
@@ -740,7 +745,7 @@ func decodeLocalFlushTrigger(raw any, path string) Value {
 
 // decodeInvokeArgs — the [{"addr","value"}] scalar pairs of Binding.Invoke /
 // Action.Invoke.
-func decodeInvokeArgs(raw any, path string) Value {
+func decodeInvokeArgs(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
@@ -758,8 +763,8 @@ func decodeInvokeArgs(raw any, path string) Value {
 // IS Static; the Bound wrapper unwraps in place), drops the 0.2.0 wire-omitted
 // closure sentinels (Query.accessor / Selection.accessor), renames the
 // field-name aliases, and decodes each case to its canonical shape.
-func decodeBindingWith(raw any, path string, parse staticParser) Value {
-	return decodeBindingTyped(raw, path, parse, false)
+func decodeBindingWith(w *walkState, raw any, path string, parse staticParser) Value {
+	return decodeBindingTyped(w, raw, path, parse, false)
 }
 
 // decodeBindingTyped is decodeBindingWith plus typedDefault, which extends the
@@ -768,10 +773,10 @@ func decodeBindingWith(raw any, path string, parse staticParser) Value {
 // the same typed parser. Opt-in per slot rather than global: only the rows slot
 // (fuaran#665) has a fixture pinning it, and flipping the pre-429 typed slots
 // onto it is a behaviour change of its own.
-func decodeBindingTyped(raw any, path string, parse staticParser, typedDefault bool) Value {
+func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, typedDefault bool) Value {
 	decodeDefault := func(raw any, p string) Value {
 		if typedDefault {
-			return parse(raw, p)
+			return parse(w, raw, p)
 		}
 		return fromJSON(raw)
 	}
@@ -781,7 +786,7 @@ func decodeBindingTyped(raw any, path string, parse staticParser, typedDefault b
 		// object, so a bare array or scalar can only mean Static. Objects stay
 		// strict (an object without $type is more plausibly a mistyped
 		// binding); null stays strict (ambiguous with absent).
-		return Obj{Tag: "Static", Fields: map[string]Value{"value": parse(raw, path)}}
+		return Obj{Tag: "Static", Fields: map[string]Value{"value": parse(w, raw, path)}}
 	}
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, bindingCases, CodeUnknownDUCase)
@@ -794,7 +799,7 @@ func decodeBindingTyped(raw any, path string, parse staticParser, typedDefault b
 		// []) that empty is emitted, so "no selection" and "selected nothing" stay
 		// distinguishable.
 		raw := obj["value"]
-		decoded := parse(raw, path+".value")
+		decoded := parse(w, raw, path+".value")
 
 		if _, isNull := decoded.(Null); isNull {
 			return Obj{Tag: "Static", Fields: map[string]Value{}}
@@ -857,16 +862,16 @@ func decodeBindingTyped(raw any, path string, parse staticParser, typedDefault b
 			argsObj := expectObject(raw, path+".args")
 			args := make(map[string]Value, len(argsObj))
 			for k, v := range argsObj {
-				args[k] = decodeBinding(v, path+".args."+k)
+				args[k] = decodeBinding(w, v, path+".args."+k)
 			}
 			fields["args"] = Obj{Fields: args}
 		}
 		return Obj{Tag: "I18n", Fields: fields}
 	case "Local":
-		initialFrom := decodeBindingWith(require(obj, "initialFrom", path), path+".initialFrom", parse)
+		initialFrom := decodeBindingWith(w, require(obj, "initialFrom", path), path+".initialFrom", parse)
 		flushOn := Value(Obj{Tag: "OnBlur", Fields: map[string]Value{}})
 		if raw, ok := obj["flushOn"]; ok {
-			flushOn = decodeLocalFlushTrigger(raw, path+".flushOn")
+			flushOn = decodeLocalFlushTrigger(w, raw, path+".flushOn")
 		}
 		return Obj{Tag: "Local", Fields: map[string]Value{
 			"flushOn":     flushOn,
@@ -878,7 +883,7 @@ func decodeBindingTyped(raw any, path string, parse staticParser, typedDefault b
 	case "Format":
 		format := fromJSON(require(obj, "format", path))
 		locale := fromJSON(require(obj, "locale", path))
-		source := decodeBindingWith(require(obj, "source", path), path+".source", floatStatic)
+		source := decodeBindingWith(w, require(obj, "source", path), path+".source", floatStatic)
 		return Obj{Tag: "Format", Fields: map[string]Value{"format": format, "locale": locale, "source": source}}
 	case "Transform":
 		// Phase 815 — normalise the two observed organic shapes (Static/Bound
@@ -903,7 +908,7 @@ func decodeBindingTyped(raw any, path string, parse staticParser, typedDefault b
 		var source Value
 		switch {
 		case liveTag != "":
-			b := decodeBinding(srcRawOrig, path+".source")
+			b := decodeBinding(w, srcRawOrig, path+".source")
 			_, hasCarried := srcRawOrig.(map[string]any)["defaultValue"]
 			if liveTag == "State" {
 				if hasCarried {
@@ -933,7 +938,7 @@ func decodeBindingTyped(raw any, path string, parse staticParser, typedDefault b
 		pipeline := atComputePath(path+".pipeline", func() Value { return decodeComputePipeline(pipeRaw) })
 		fields := map[string]Value{"pipeline": pipeline, "source": source}
 		if raw, ok := obj["params"]; ok {
-			params := decodeTransformParams(raw, path+".params")
+			params := decodeTransformParams(w, raw, path+".params")
 			if len(params) > 0 {
 				fields["params"] = params
 			}
@@ -941,13 +946,13 @@ func decodeBindingTyped(raw any, path string, parse staticParser, typedDefault b
 		return Obj{Tag: "Transform", Fields: fields}
 	case "Invoke":
 		capabilityID := expectString(require(obj, "capabilityId", path), path+".capabilityId")
-		args := decodeInvokeArgs(require(obj, "args", path), path+".args")
+		args := decodeInvokeArgs(w, require(obj, "args", path), path+".args")
 		return Obj{Tag: "Invoke", Fields: map[string]Value{"args": args, "capabilityId": Str(capabilityID)}}
 	case "Bound":
 		// The TextSource-wrapper convention transferred to a bare-Binding
 		// slot: Bound carries exactly one payload field, so the unwrap is
 		// one-to-one — decode the inner binding in place. Decode-only.
-		return decodeBindingWith(require(obj, "binding", path), path+".binding", parse)
+		return decodeBindingWith(w, require(obj, "binding", path), path+".binding", parse)
 	default: // "Data" — structural pass-through with a validated discriminator.
 		return fromJSON(raw)
 	}
@@ -957,7 +962,7 @@ func decodeBindingTyped(raw any, path string, parse staticParser, typedDefault b
 // param list, with the §3.6 map coercion: params are a NAME-KEYED SET
 // (ColExpr.Param lookup), so the name→binding map form coerces to the
 // canonical array (sorted by name); `value` aliases `from` at the element.
-func decodeTransformParams(raw any, path string) Arr {
+func decodeTransformParams(w *walkState, raw any, path string) Arr {
 	if m, ok := raw.(map[string]any); ok {
 		if _, tagged := m["$type"]; !tagged {
 			names := make([]string, 0, len(m))
@@ -967,7 +972,7 @@ func decodeTransformParams(raw any, path string) Arr {
 			sort.Strings(names)
 			out := make(Arr, len(names))
 			for i, name := range names {
-				from := decodeBinding(m[name], path+"."+name+".from")
+				from := decodeBinding(w, m[name], path+"."+name+".from")
 				out[i] = Obj{Fields: map[string]Value{"from": from, "name": Str(name)}}
 			}
 			return out
@@ -979,74 +984,74 @@ func decodeTransformParams(raw any, path string) Arr {
 		p := path + "[" + strconv.Itoa(i) + "]"
 		obj := expectObject(item, p)
 		name := expectString(require(obj, "name", p), p+".name")
-		from := decodeBinding(requireAliased(obj, "from", p, "value"), path+"."+name+".from")
+		from := decodeBinding(w, requireAliased(obj, "from", p, "value"), path+"."+name+".from")
 		out[i] = Obj{Fields: map[string]Value{"from": from, "name": Str(name)}}
 	}
 	return out
 }
 
-func decodeBinding(raw any, path string) Value {
-	return decodeBindingWith(raw, path, objStatic)
+func decodeBinding(w *walkState, raw any, path string) Value {
+	return decodeBindingWith(w, raw, path, objStatic)
 }
 
-func decodeBindingFloat(raw any, path string) Value {
-	return decodeBindingWith(raw, path, floatStatic)
+func decodeBindingFloat(w *walkState, raw any, path string) Value {
+	return decodeBindingWith(w, raw, path, floatStatic)
 }
 
-func decodeBindingBool(raw any, path string) Value {
-	return decodeBindingWith(raw, path, boolStatic)
+func decodeBindingBool(w *walkState, raw any, path string) Value {
+	return decodeBindingWith(w, raw, path, boolStatic)
 }
 
-func decodeBindingString(raw any, path string) Value {
-	return decodeBindingWith(raw, path, stringStatic)
+func decodeBindingString(w *walkState, raw any, path string) Value {
+	return decodeBindingWith(w, raw, path, stringStatic)
 }
 
-func decodeBindingStringOpt(raw any, path string) Value {
-	return decodeBindingWith(raw, path, stringOptStatic)
+func decodeBindingStringOpt(w *walkState, raw any, path string) Value {
+	return decodeBindingWith(w, raw, path, stringOptStatic)
 }
 
-func decodeBindingSelectOptions(raw any, path string) Value {
-	return decodeBindingWith(raw, path, selectOptionsStatic)
+func decodeBindingSelectOptions(w *walkState, raw any, path string) Value {
+	return decodeBindingWith(w, raw, path, selectOptionsStatic)
 }
 
-func decodeBindingStringList(raw any, path string) Value {
-	return decodeBindingWith(raw, path, stringListStatic)
+func decodeBindingStringList(w *walkState, raw any, path string) Value {
+	return decodeBindingWith(w, raw, path, stringListStatic)
 }
 
-func decodeBindingFloatSeq(raw any, path string) Value {
-	return decodeBindingWith(raw, path, floatSeqStatic)
+func decodeBindingFloatSeq(w *walkState, raw any, path string) Value {
+	return decodeBindingWith(w, raw, path, floatSeqStatic)
 }
 
-func decodeBindingMarkerSeq(raw any, path string) Value {
-	return decodeBindingWith(raw, path, markerSeqStatic)
+func decodeBindingMarkerSeq(w *walkState, raw any, path string) Value {
+	return decodeBindingWith(w, raw, path, markerSeqStatic)
 }
 
 // decodeBindingRows — the grid/chart rows slot. typedDefault is set because the
 // editable-grid authoring shape is a State-sourced rows array (the write-back
 // floor), so defaultValue carries rows exactly as value does and must take the
 // same normalisation.
-func decodeBindingRows(raw any, path string) Value {
-	return decodeBindingTyped(raw, path, rowSeqStatic, true)
+func decodeBindingRows(w *walkState, raw any, path string) Value {
+	return decodeBindingTyped(w, raw, path, rowSeqStatic, true)
 }
 
 // decodeRangePair reads a {min, max} pair (object or lenient two-element
 // array) into the canonical bare pair object.
-func decodeRangePair(raw any, path string) Value {
+func decodeRangePair(w *walkState, raw any, path string) Value {
 	if m, ok := raw.(map[string]any); ok {
 		mn, hasMin := m["min"]
 		mx, hasMax := m["max"]
 		if hasMin && hasMax {
 			return Obj{Fields: map[string]Value{
-				"max": expectNumber(mx, path+".max"),
-				"min": expectNumber(mn, path+".min"),
+				"max": expectNumber(w, mx, path+".max"),
+				"min": expectNumber(w, mn, path+".min"),
 			}}
 		}
 		fail(CodeWrongType, path, "expected an object with min and max numbers at "+path)
 	}
 	if arr, ok := raw.([]any); ok && len(arr) == 2 {
 		return Obj{Fields: map[string]Value{
-			"max": expectNumber(arr[1], path+"[1]"),
-			"min": expectNumber(arr[0], path+"[0]"),
+			"max": expectNumber(w, arr[1], path+"[1]"),
+			"min": expectNumber(w, arr[0], path+"[0]"),
 		}}
 	}
 	fail(CodeWrongType, path, "expected a range pair ({min, max} object or [min, max] array) at "+path)
@@ -1058,10 +1063,10 @@ func decodeRangePair(raw any, path string) Value {
 // and the two-element array are lenient forms of the same value; every other
 // binding case decodes normally (its State.defaultValue pair normalises to
 // the bare-pair shape via fromJSON pass-through).
-func decodeRangeValue(raw any, path string) Value {
+func decodeRangeValue(w *walkState, raw any, path string) Value {
 	if m, ok := raw.(map[string]any); ok {
 		if _, tagged := m["$type"]; !tagged {
-			return decodeRangePair(raw, path)
+			return decodeRangePair(w, raw, path)
 		}
 		obj := expectObject(raw, path)
 		tag := dispatch(obj, path, bindingCases, CodeUnknownDUCase)
@@ -1070,14 +1075,14 @@ func decodeRangeValue(raw any, path string) Value {
 			if !ok {
 				fail(CodeMissingField, path+".value", "Static binding missing value")
 			}
-			return decodeRangePair(v, path+".value")
+			return decodeRangePair(w, v, path+".value")
 		}
-		return decodeBindingWith(raw, path, decodeRangePair)
+		return decodeBindingWith(w, raw, path, decodeRangePair)
 	}
 	if _, ok := raw.([]any); ok {
-		return decodeRangePair(raw, path)
+		return decodeRangePair(w, raw, path)
 	}
-	return decodeBindingWith(raw, path, decodeRangePair)
+	return decodeBindingWith(w, raw, path, decodeRangePair)
 }
 
 // dateRangePairShape is the ExpectedShape hint carried by the ordered-pair
@@ -1095,7 +1100,7 @@ const dateRangePairShape = `ordered ISO-8601 pair ({"from": <iso>, "to": <iso>} 
 // chronological order, so strings.Compare (byte-wise, i.e. ordinal) is total
 // here for every variant — no date parsing, no locale. Only a literal pair is
 // checked; a bound pair's ordering is a runtime concern.
-func decodeDateRangePair(raw any, path string) Value {
+func decodeDateRangePair(w *walkState, raw any, path string) Value {
 	ordered := func(from, to string) Value {
 		if strings.Compare(from, to) > 0 {
 			failExpecting(
@@ -1131,10 +1136,10 @@ func decodeDateRangePair(raw any, path string) Value {
 // the same value; every other binding case decodes normally (its
 // State/Filter/Selection defaultValue pair passes through structurally, exactly
 // as Range does — the spec checks only a literal pair).
-func decodeDateRangeValue(raw any, path string) Value {
+func decodeDateRangeValue(w *walkState, raw any, path string) Value {
 	if m, ok := raw.(map[string]any); ok {
 		if _, tagged := m["$type"]; !tagged {
-			return decodeDateRangePair(raw, path)
+			return decodeDateRangePair(w, raw, path)
 		}
 		obj := expectObject(raw, path)
 		tag := dispatch(obj, path, bindingCases, CodeUnknownDUCase)
@@ -1143,14 +1148,14 @@ func decodeDateRangeValue(raw any, path string) Value {
 			if !ok {
 				fail(CodeMissingField, path+".value", "Static binding missing value")
 			}
-			return decodeDateRangePair(v, path+".value")
+			return decodeDateRangePair(w, v, path+".value")
 		}
-		return decodeBindingWith(raw, path, decodeDateRangePair)
+		return decodeBindingWith(w, raw, path, decodeDateRangePair)
 	}
 	if _, ok := raw.([]any); ok {
-		return decodeDateRangePair(raw, path)
+		return decodeDateRangePair(w, raw, path)
 	}
-	return decodeBindingWith(raw, path, decodeDateRangePair)
+	return decodeBindingWith(w, raw, path, decodeDateRangePair)
 }
 
 // ── Actions ─────────────────────────────────────────────────────────────────
@@ -1160,7 +1165,7 @@ func decodeDateRangeValue(raw any, path string) Value {
 // structured JSON payload positions per rule 12 — null-strict at the null's
 // exact path. Closure slots normalise to the "<closure>" sentinel; the
 // Dispatch msg sentinel is wire-omitted (0.2.0).
-func decodeAction(raw any, path string) Value {
+func decodeAction(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, actionCases, CodeUnknownDUCase)
 	switch tag {
@@ -1188,7 +1193,7 @@ func decodeAction(raw any, path string) Value {
 		return Obj{Tag: tag, Fields: fields}
 	case "Notify":
 		channel := expectString(require(obj, "channel", path), path+".channel")
-		payload := fromJSONStrict(require(obj, "payload", path), path+".payload")
+		payload := fromJSONStrict(w, require(obj, "payload", path), path+".payload")
 		return Obj{Tag: tag, Fields: map[string]Value{"channel": Str(channel), "payload": payload}}
 	case "Navigate":
 		// Field aliases: href / url / to — the HTML / router prior.
@@ -1212,21 +1217,21 @@ func decodeAction(raw any, path string) Value {
 		}
 		fields := map[string]Value{"key": Str(key)}
 		if hasValue {
-			fields["value"] = fromJSONStrict(rawValue, path+".value")
+			fields["value"] = fromJSONStrict(w, rawValue, path+".value")
 		}
 		if hasFrom {
-			fields["valueFrom"] = decodeBinding(rawFrom, path+".valueFrom")
+			fields["valueFrom"] = decodeBinding(w, rawFrom, path+".valueFrom")
 		}
 		return Obj{Tag: tag, Fields: fields}
 	case "AiTool":
 		name := expectString(require(obj, "toolName", path), path+".toolName")
-		args := fromJSONStrict(require(obj, "args", path), path+".args")
+		args := fromJSONStrict(w, require(obj, "args", path), path+".args")
 		return Obj{Tag: tag, Fields: map[string]Value{"args": args, "toolName": Str(name)}}
 	case "Chain":
 		arr := expectArray(require(obj, "ops", path), path+".ops")
 		ops := make(Arr, len(arr))
 		for i, item := range arr {
-			ops[i] = decodeAction(item, path+".ops["+strconv.Itoa(i)+"]")
+			ops[i] = decodeAction(w, item, path+".ops["+strconv.Itoa(i)+"]")
 		}
 		return Obj{Tag: tag, Fields: map[string]Value{"ops": ops}}
 	case "CommitLocal":
@@ -1246,14 +1251,14 @@ func decodeAction(raw any, path string) Value {
 		}}
 	default: // Invoke
 		capabilityID := expectString(require(obj, "capabilityId", path), path+".capabilityId")
-		args := decodeInvokeArgs(require(obj, "args", path), path+".args")
+		args := decodeInvokeArgs(w, require(obj, "args", path), path+".args")
 		return Obj{Tag: tag, Fields: map[string]Value{"args": args, "capabilityId": Str(capabilityID)}}
 	}
 }
 
 // ── Spec builder ────────────────────────────────────────────────────────────
 
-type fieldDecoder func(raw any, path string) Value
+type fieldDecoder func(w *walkState, raw any, path string) Value
 
 // fieldSpec drives simple table-driven decode (the TreeOp schemas): (field,
 // required, decoder), walked in declaration order so which defect surfaces
@@ -1268,14 +1273,18 @@ type fieldSpec struct {
 // keys were consumed so the unconsumed remainder can be preserved
 // structurally (§2 rule 2 tolerance) without resurrecting renamed aliases.
 type spec struct {
+	// w is this decode call's §21 walk state. It rides on the spec because the
+	// node-recursing field decoders (children, cases, default, state) are reached
+	// through the fieldDecoder table and have nowhere else to get it from.
+	w        *walkState
 	obj      map[string]any
 	path     string
 	fields   map[string]Value
 	consumed map[string]bool
 }
 
-func newSpec(obj map[string]any, path string) *spec {
-	return &spec{obj: obj, path: path, fields: make(map[string]Value, len(obj)), consumed: map[string]bool{"$type": true}}
+func newSpec(w *walkState, obj map[string]any, path string) *spec {
+	return &spec{w: w, obj: obj, path: path, fields: make(map[string]Value, len(obj)), consumed: map[string]bool{"$type": true}}
 }
 
 // take reads the canonical key or an alias, marking whichever was read as
@@ -1304,14 +1313,14 @@ func (s *spec) req(key string, dec fieldDecoder, aliases ...string) Value {
 	if !ok {
 		fail(CodeMissingField, s.path+"."+key, "missing required field '"+key+"'")
 	}
-	v := dec(raw, s.path+"."+key)
+	v := dec(s.w, raw, s.path+"."+key)
 	s.fields[key] = v
 	return v
 }
 
 func (s *spec) opt(key string, dec fieldDecoder, aliases ...string) {
 	if raw, ok := s.take(key, aliases...); ok {
-		s.fields[key] = dec(raw, s.path+"."+key)
+		s.fields[key] = dec(s.w, raw, s.path+"."+key)
 	}
 }
 
@@ -1320,7 +1329,7 @@ func (s *spec) opt(key string, dec fieldDecoder, aliases ...string) {
 // boundary so an explicit default normalises to the omitted canonical form.
 func (s *spec) optDrop(key string, dec fieldDecoder, isDefault func(Value) bool, aliases ...string) {
 	if raw, ok := s.take(key, aliases...); ok {
-		v := dec(raw, s.path+"."+key)
+		v := dec(s.w, raw, s.path+"."+key)
 		if !isDefault(v) {
 			s.fields[key] = v
 		}
@@ -1353,7 +1362,7 @@ func (s *spec) buildStrict(tag string) Obj {
 
 // ── Shared field decoders ───────────────────────────────────────────────────
 
-func decodeCellFormat(raw any, path string) Value {
+func decodeCellFormat(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	switch dispatch(obj, path, cellFormatCases, CodeUnknownDUCase) {
 	case "Duration":
@@ -1371,7 +1380,7 @@ func decodeCellFormat(raw any, path string) Value {
 	return fromJSON(raw)
 }
 
-func decodeColumnWidth(raw any, path string) Value {
+func decodeColumnWidth(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	dispatch(obj, path, columnWidthCases, CodeUnknownDUCase)
 	return fromJSON(raw)
@@ -1380,7 +1389,7 @@ func decodeColumnWidth(raw any, path string) Value {
 // decodeEmphasisEnum — the Emphasis style DU, with the §3.6 value aliases and
 // the cross-vocabulary bool coercion (true ⇒ Loud, false ⇒ Normal — the
 // same-name collision with the behavioural bool on Fact / LabelValueRow).
-func decodeEmphasisEnum(raw any, path string) Value {
+func decodeEmphasisEnum(w *walkState, raw any, path string) Value {
 	if b, ok := raw.(bool); ok {
 		if b {
 			return Str("Loud")
@@ -1394,7 +1403,7 @@ func decodeEmphasisEnum(raw any, path string) Value {
 // booleans pass through (a Static envelope unwraps); the Emphasis enum and
 // its aliases project one-to-one (Loud/Strong/Bold ⇒ true, the rest ⇒ false);
 // any other string is a didactic WRONG_TYPE naming both vocabularies.
-func decodeEmphasisFlag(raw any, path string) Value {
+func decodeEmphasisFlag(w *walkState, raw any, path string) Value {
 	if s, ok := raw.(string); ok {
 		switch s {
 		case "Loud", "Strong", "Bold":
@@ -1418,71 +1427,71 @@ func decodeEmphasisFlag(raw any, path string) Value {
 // to name six tones. Distinct from toneCases.hint(), which sorts.
 const toneVariantNames = "Default | Subdued | Brand | Success | Warning | Critical | Info"
 
-func decodeTone(raw any, path string) Value {
+func decodeTone(w *walkState, raw any, path string) Value {
 	return Str(enumStr(raw, path, toneCases, "tone", toneAliases))
 }
 
-func decodeWeight(raw any, path string) Value {
+func decodeWeight(w *walkState, raw any, path string) Value {
 	return Str(enumStr(raw, path, weightCases, "weight", noAliases))
 }
 
-func decodeString(raw any, path string) Value {
+func decodeString(w *walkState, raw any, path string) Value {
 	return Str(expectString(raw, path))
 }
 
-func decodeInt(raw any, path string) Value {
+func decodeInt(w *walkState, raw any, path string) Value {
 	return Int(expectInt(raw, path))
 }
 
-func decodeBool(raw any, path string) Value {
+func decodeBool(w *walkState, raw any, path string) Value {
 	return Bool(expectBool(raw, path))
 }
 
 func enumDecoder(allowed caseSet, name string, aliases map[string]string) fieldDecoder {
-	return func(raw any, path string) Value {
+	return func(w *walkState, raw any, path string) Value {
 		return Str(enumStr(raw, path, allowed, name, aliases))
 	}
 }
 
-func decodeChildren(raw any, path string) Value {
+func decodeChildren(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeNodeValue(item, path+"."+strconv.Itoa(i))
+		out[i] = decodeNodeValue(w, item, path+"."+strconv.Itoa(i))
 	}
 	return out
 }
 
-func decodeSingleNode(raw any, path string) Value {
-	return decodeNodeValue(raw, path)
+func decodeSingleNode(w *walkState, raw any, path string) Value {
+	return decodeNodeValue(w, raw, path)
 }
 
-func decodeSwitchCase(raw any, path string) Value {
+func decodeSwitchCase(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
-	child := decodeNodeValue(require(obj, "child", path), path+".child")
+	child := decodeNodeValue(w, require(obj, "child", path), path+".child")
 	match := expectString(require(obj, "match", path), path+".match")
 	return Obj{Fields: map[string]Value{"child": child, "match": Str(match)}}
 }
 
-func decodeSwitchCases(raw any, path string) Value {
+func decodeSwitchCases(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeSwitchCase(item, path+"["+strconv.Itoa(i)+"]")
+		out[i] = decodeSwitchCase(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
 
-func decodeTextSourceArray(raw any, path string) Value {
+func decodeTextSourceArray(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeTextSource(item, path+"."+strconv.Itoa(i))
+		out[i] = decodeTextSource(w, item, path+"."+strconv.Itoa(i))
 	}
 	return out
 }
 
-func decodeIntArray(raw any, path string) Value {
+func decodeIntArray(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
@@ -1491,7 +1500,7 @@ func decodeIntArray(raw any, path string) Value {
 	return out
 }
 
-func decodeStringArrayField(raw any, path string) Value {
+func decodeStringArrayField(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
@@ -1502,20 +1511,20 @@ func decodeStringArrayField(raw any, path string) Value {
 
 // decodeJSONValue is the strict structural decoder for structured JSON payload
 // positions (Custom props / contentHash / exposedNodeIds, Mount capabilities).
-func decodeJSONValue(raw any, path string) Value {
-	return fromJSONStrict(raw, path)
+func decodeJSONValue(w *walkState, raw any, path string) Value {
+	return fromJSONStrict(w, raw, path)
 }
 
 // decodeJSONPassthrough is the null-LENIENT structural decoder — for positions
 // that can legitimately carry a §5 obj-erased opaque seam (Mount inputs embed
 // whole node trees, whose Binding.Static values may be null).
-func decodeJSONPassthrough(raw any, _ string) Value {
+func decodeJSONPassthrough(w *walkState, raw any, _ string) Value {
 	return fromJSON(raw)
 }
 
 // decodeGuestChannel decodes Mount's guest channel: direction is a closed DU
 // (OutOnly | TwoWay); messageShape is an optional string riding on TwoWay.
-func decodeGuestChannel(raw any, path string) Value {
+func decodeGuestChannel(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	direction := expectString(require(obj, "direction", path), path+".direction")
 	if !channelDirectionCases.has(direction) {
@@ -1541,29 +1550,29 @@ func decodeGuestChannel(raw any, path string) Value {
 // Array positions use [i] bracket paths to match the reference reject paths
 // ($.kind.shapes[0].$type / $.kind.shapes[0].commands[0].$type).
 
-func decodeViewBox(raw any, path string) Value {
+func decodeViewBox(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	return Obj{Fields: map[string]Value{
-		"height": expectNumber(require(obj, "height", path), path+".height"),
-		"minX":   expectNumber(require(obj, "minX", path), path+".minX"),
-		"minY":   expectNumber(require(obj, "minY", path), path+".minY"),
-		"width":  expectNumber(require(obj, "width", path), path+".width"),
+		"height": expectNumber(w, require(obj, "height", path), path+".height"),
+		"minX":   expectNumber(w, require(obj, "minX", path), path+".minX"),
+		"minY":   expectNumber(w, require(obj, "minY", path), path+".minY"),
+		"width":  expectNumber(w, require(obj, "width", path), path+".width"),
 	}}
 }
 
-func decodeDrawPoint(raw any, path string) Value {
+func decodeDrawPoint(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	return Obj{Fields: map[string]Value{
-		"x": expectNumber(require(obj, "x", path), path+".x"),
-		"y": expectNumber(require(obj, "y", path), path+".y"),
+		"x": expectNumber(w, require(obj, "x", path), path+".x"),
+		"y": expectNumber(w, require(obj, "y", path), path+".y"),
 	}}
 }
 
-func decodeDrawPointArray(raw any, path string) Value {
+func decodeDrawPointArray(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeDrawPoint(item, path+"["+strconv.Itoa(i)+"]")
+		out[i] = decodeDrawPoint(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
@@ -1572,27 +1581,27 @@ func decodeDrawPointArray(raw any, path string) Value {
 // {} for an unstyled shape). fill/opacity/stroke/strokeWidth are Bindings; the
 // text-only fields (Label) are bare enum / number / string; markId (Phase 642)
 // is the keyed mark identity.
-func decodeDrawStyle(raw any, path string) Value {
+func decodeDrawStyle(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	fields := map[string]Value{}
 	for _, key := range []string{"fill", "stroke"} {
 		if v, ok := obj[key]; ok {
-			fields[key] = decodeBindingString(v, path+"."+key)
+			fields[key] = decodeBindingString(w, v, path+"."+key)
 		}
 	}
 	for _, key := range []string{"opacity", "strokeWidth"} {
 		if v, ok := obj[key]; ok {
-			fields[key] = decodeBindingFloat(v, path+"."+key)
+			fields[key] = decodeBindingFloat(w, v, path+"."+key)
 		}
 	}
 	if v, ok := obj["textAnchor"]; ok {
 		fields["textAnchor"] = Str(enumStr(v, path+".textAnchor", textAnchorCases, "textAnchor", noAliases))
 	}
 	if v, ok := obj["fontSize"]; ok {
-		fields["fontSize"] = expectNumber(v, path+".fontSize")
+		fields["fontSize"] = expectNumber(w, v, path+".fontSize")
 	}
 	if v, ok := obj["emphasis"]; ok {
-		fields["emphasis"] = decodeEmphasisEnum(v, path+".emphasis")
+		fields["emphasis"] = decodeEmphasisEnum(w, v, path+".emphasis")
 	}
 	if v, ok := obj["fontFamily"]; ok {
 		fields["fontFamily"] = Str(expectString(v, path+".fontFamily"))
@@ -1605,7 +1614,7 @@ func decodeDrawStyle(raw any, path string) Value {
 	// distinct present value, so this must key off presence in the object and
 	// never off the decoded number being non-zero.
 	if v, ok := obj["rotation"]; ok {
-		fields["rotation"] = expectNumber(v, path+".rotation")
+		fields["rotation"] = expectNumber(w, v, path+".rotation")
 	}
 	// tip (Phase 883) — the per-mark hover readout, a full TextSource (so a
 	// Bound envelope decodes here as well as the canonical bare-string
@@ -1614,117 +1623,117 @@ func decodeDrawStyle(raw any, path string) Value {
 	// tip is a distinct present value, so a non-empty test would drop it and
 	// re-encode to different bytes.
 	if v, ok := obj["tip"]; ok {
-		fields["tip"] = decodeTextSource(v, path+".tip")
+		fields["tip"] = decodeTextSource(w, v, path+".tip")
 	}
 	return Obj{Fields: fields}
 }
 
-func decodeCurveCommand(raw any, path string) Value {
+func decodeCurveCommand(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, curveCommandCases, CodeUnknownDUCase)
 	switch tag {
 	case "MoveTo", "LineTo":
 		return Obj{Tag: tag, Fields: map[string]Value{
-			"to": decodeDrawPoint(require(obj, "to", path), path+".to"),
+			"to": decodeDrawPoint(w, require(obj, "to", path), path+".to"),
 		}}
 	case "CubicTo":
 		return Obj{Tag: tag, Fields: map[string]Value{
-			"control1": decodeDrawPoint(require(obj, "control1", path), path+".control1"),
-			"control2": decodeDrawPoint(require(obj, "control2", path), path+".control2"),
-			"to":       decodeDrawPoint(require(obj, "to", path), path+".to"),
+			"control1": decodeDrawPoint(w, require(obj, "control1", path), path+".control1"),
+			"control2": decodeDrawPoint(w, require(obj, "control2", path), path+".control2"),
+			"to":       decodeDrawPoint(w, require(obj, "to", path), path+".to"),
 		}}
 	case "QuadraticTo":
 		return Obj{Tag: tag, Fields: map[string]Value{
-			"control": decodeDrawPoint(require(obj, "control", path), path+".control"),
-			"to":      decodeDrawPoint(require(obj, "to", path), path+".to"),
+			"control": decodeDrawPoint(w, require(obj, "control", path), path+".control"),
+			"to":      decodeDrawPoint(w, require(obj, "to", path), path+".to"),
 		}}
 	default: // Close
 		return Obj{Tag: "Close", Fields: map[string]Value{}}
 	}
 }
 
-func decodeCurveCommandArray(raw any, path string) Value {
+func decodeCurveCommandArray(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeCurveCommand(item, path+"["+strconv.Itoa(i)+"]")
+		out[i] = decodeCurveCommand(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
 
-func decodeShape(raw any, path string) Value {
+func decodeShape(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, shapeCases, CodeUnknownDUCase)
 	var style Value = Obj{Fields: map[string]Value{}}
 	if v, ok := obj["style"]; ok {
-		style = decodeDrawStyle(v, path+".style")
+		style = decodeDrawStyle(w, v, path+".style")
 	}
 	switch tag {
 	case "Group":
 		return Obj{Tag: tag, Fields: map[string]Value{
-			"children": decodeShapeArray(require(obj, "children", path), path+".children"),
+			"children": decodeShapeArray(w, require(obj, "children", path), path+".children"),
 			"style":    style,
 		}}
 	case "Rectangle":
 		fields := map[string]Value{
-			"height": expectNumber(require(obj, "height", path), path+".height"),
+			"height": expectNumber(w, require(obj, "height", path), path+".height"),
 			"style":  style,
-			"width":  expectNumber(require(obj, "width", path), path+".width"),
-			"x":      expectNumber(require(obj, "x", path), path+".x"),
-			"y":      expectNumber(require(obj, "y", path), path+".y"),
+			"width":  expectNumber(w, require(obj, "width", path), path+".width"),
+			"x":      expectNumber(w, require(obj, "x", path), path+".x"),
+			"y":      expectNumber(w, require(obj, "y", path), path+".y"),
 		}
 		if v, ok := obj["cornerRadius"]; ok {
-			fields["cornerRadius"] = expectNumber(v, path+".cornerRadius")
+			fields["cornerRadius"] = expectNumber(w, v, path+".cornerRadius")
 		}
 		return Obj{Tag: tag, Fields: fields}
 	case "Line":
 		return Obj{Tag: tag, Fields: map[string]Value{
 			"style": style,
-			"x1":    expectNumber(require(obj, "x1", path), path+".x1"),
-			"x2":    expectNumber(require(obj, "x2", path), path+".x2"),
-			"y1":    expectNumber(require(obj, "y1", path), path+".y1"),
-			"y2":    expectNumber(require(obj, "y2", path), path+".y2"),
+			"x1":    expectNumber(w, require(obj, "x1", path), path+".x1"),
+			"x2":    expectNumber(w, require(obj, "x2", path), path+".x2"),
+			"y1":    expectNumber(w, require(obj, "y1", path), path+".y1"),
+			"y2":    expectNumber(w, require(obj, "y2", path), path+".y2"),
 		}}
 	case "Polyline", "Polygon":
 		return Obj{Tag: tag, Fields: map[string]Value{
-			"points": decodeDrawPointArray(require(obj, "points", path), path+".points"),
+			"points": decodeDrawPointArray(w, require(obj, "points", path), path+".points"),
 			"style":  style,
 		}}
 	case "Curve":
 		return Obj{Tag: tag, Fields: map[string]Value{
-			"commands": decodeCurveCommandArray(require(obj, "commands", path), path+".commands"),
+			"commands": decodeCurveCommandArray(w, require(obj, "commands", path), path+".commands"),
 			"style":    style,
 		}}
 	case "Circle":
 		return Obj{Tag: tag, Fields: map[string]Value{
-			"cx":    expectNumber(require(obj, "cx", path), path+".cx"),
-			"cy":    expectNumber(require(obj, "cy", path), path+".cy"),
-			"r":     expectNumber(require(obj, "r", path), path+".r"),
+			"cx":    expectNumber(w, require(obj, "cx", path), path+".cx"),
+			"cy":    expectNumber(w, require(obj, "cy", path), path+".cy"),
+			"r":     expectNumber(w, require(obj, "r", path), path+".r"),
 			"style": style,
 		}}
 	case "Ellipse":
 		return Obj{Tag: tag, Fields: map[string]Value{
-			"cx":    expectNumber(require(obj, "cx", path), path+".cx"),
-			"cy":    expectNumber(require(obj, "cy", path), path+".cy"),
-			"rx":    expectNumber(require(obj, "rx", path), path+".rx"),
-			"ry":    expectNumber(require(obj, "ry", path), path+".ry"),
+			"cx":    expectNumber(w, require(obj, "cx", path), path+".cx"),
+			"cy":    expectNumber(w, require(obj, "cy", path), path+".cy"),
+			"rx":    expectNumber(w, require(obj, "rx", path), path+".rx"),
+			"ry":    expectNumber(w, require(obj, "ry", path), path+".ry"),
 			"style": style,
 		}}
 	default: // Label
 		return Obj{Tag: tag, Fields: map[string]Value{
 			"style": style,
-			"text":  decodeTextSource(require(obj, "text", path), path+".text"),
-			"x":     expectNumber(require(obj, "x", path), path+".x"),
-			"y":     expectNumber(require(obj, "y", path), path+".y"),
+			"text":  decodeTextSource(w, require(obj, "text", path), path+".text"),
+			"x":     expectNumber(w, require(obj, "x", path), path+".x"),
+			"y":     expectNumber(w, require(obj, "y", path), path+".y"),
 		}}
 	}
 }
 
-func decodeShapeArray(raw any, path string) Value {
+func decodeShapeArray(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeShape(item, path+"["+strconv.Itoa(i)+"]")
+		out[i] = decodeShape(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
@@ -1798,17 +1807,17 @@ func isAutoBoundValue(ab controlAutoBind, kindTag string, v Value) bool {
 // only when present (a present value normalises to the "<closure>" sentinel);
 // an absent `value` is the context's auto-binding (left absent — the canonical
 // omitted form); a present value that IS exactly the auto-binding drops.
-func decodeFormFieldKind(raw any, path string, ab controlAutoBind) Value {
+func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, formFieldCases, CodeUnknownDUCase)
-	s := newSpec(obj, path)
+	s := newSpec(w, obj, path)
 
 	handler := func(name string) {
 		s.sentinel(name)
 	}
 	valueSlot := func(dec fieldDecoder) {
 		if raw, ok := s.take("value"); ok {
-			v := dec(raw, path+".value")
+			v := dec(w, raw, path+".value")
 			if !isAutoBoundValue(ab, tag, v) {
 				s.set("value", v)
 			}
@@ -1856,7 +1865,7 @@ func decodeFormFieldKind(raw any, path string, ab controlAutoBind) Value {
 	case "Range":
 		handler("onChange")
 		if raw, ok := s.take("value"); ok {
-			v := decodeRangeValue(raw, path+".value")
+			v := decodeRangeValue(w, raw, path+".value")
 			if !isAutoBoundValue(ab, tag, v) {
 				s.set("value", v)
 			}
@@ -1875,7 +1884,7 @@ func decodeFormFieldKind(raw any, path string, ab controlAutoBind) Value {
 		// forgotten one fails byte-comparison rather than erroring.
 		handler("onChange")
 		if raw, ok := s.take("value"); ok {
-			v := decodeDateRangeValue(raw, path+".value")
+			v := decodeDateRangeValue(w, raw, path+".value")
 			if !isAutoBoundValue(ab, tag, v) {
 				s.set("value", v)
 			}
@@ -1888,19 +1897,19 @@ func decodeFormFieldKind(raw any, path string, ab controlAutoBind) Value {
 	return s.buildStrict(tag)
 }
 
-func expectNumberField(raw any, path string) Value {
-	return expectNumber(raw, path)
+func expectNumberField(w *walkState, raw any, path string) Value {
+	return expectNumber(w, raw, path)
 }
 
-func decodeFormField(raw any, path string) Value {
+func decodeFormField(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
-	s := newSpec(obj, path)
+	s := newSpec(w, obj, path)
 	// Field alias: name — the HTML-forms prior for the field's identity. The
 	// id decodes first so the auto-bind context can use it.
 	idV := s.req("id", decodeString, "name")
 	id := string(idV.(Str))
 	if raw, ok := s.take("kind"); ok {
-		s.set("kind", decodeFormFieldKind(raw, path+".kind", controlAutoBind{formFieldID: true, name: id}))
+		s.set("kind", decodeFormFieldKind(w, raw, path+".kind", controlAutoBind{formFieldID: true, name: id}))
 	} else {
 		fail(CodeMissingField, path+".kind", "missing required field 'kind'")
 	}
@@ -1910,23 +1919,23 @@ func decodeFormField(raw any, path string) Value {
 	return s.buildStrict("")
 }
 
-func decodeFormFields(raw any, path string) Value {
+func decodeFormFields(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeFormField(item, path+"["+strconv.Itoa(i)+"]")
+		out[i] = decodeFormField(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
 
-func decodeFilterItem(raw any, path string) Value {
+func decodeFilterItem(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
-	s := newSpec(obj, path)
+	s := newSpec(w, obj, path)
 	// The chip name decodes first so the Filter auto-bind can use it.
 	nameV := s.req("name", decodeString)
 	name := string(nameV.(Str))
 	if raw, ok := s.take("kind"); ok {
-		s.set("kind", decodeFormFieldKind(raw, path+".kind", controlAutoBind{filterChip: true, name: name}))
+		s.set("kind", decodeFormFieldKind(w, raw, path+".kind", controlAutoBind{filterChip: true, name: name}))
 	} else {
 		fail(CodeMissingField, path+".kind", "missing required field 'kind'")
 	}
@@ -1934,11 +1943,11 @@ func decodeFilterItem(raw any, path string) Value {
 	return s.buildStrict("")
 }
 
-func decodeFilterItems(raw any, path string) Value {
+func decodeFilterItems(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeFilterItem(item, path+"["+strconv.Itoa(i)+"]")
+		out[i] = decodeFilterItem(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
@@ -1972,17 +1981,17 @@ func hasAnyKey(obj map[string]any, keys []string) bool {
 // offending KEY and value in the terms the author wrote them, and teaches the
 // seven legal names. A non-string value is a WRONG_TYPE from decodeTone and
 // already reports at the right path, so it passes through untouched.
-func decodeToneMap(raw any, path string) Value {
+func decodeToneMap(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	fields := make(map[string]Value, len(obj))
 	for key, v := range obj {
 		entryPath := path + "." + key
-		fields[key] = reissueToneMapEntry(v, entryPath, key)
+		fields[key] = reissueToneMapEntry(w, v, entryPath, key)
 	}
 	return Obj{Fields: fields}
 }
 
-func reissueToneMapEntry(raw any, entryPath, key string) (out Value) {
+func reissueToneMapEntry(w *walkState, raw any, entryPath, key string) (out Value) {
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -2000,14 +2009,14 @@ func reissueToneMapEntry(raw any, entryPath, key string) (out Value) {
 			toneVariantNames,
 		)
 	}()
-	return decodeTone(raw, entryPath)
+	return decodeTone(w, raw, entryPath)
 }
 
 // decodeTonedPill — the shared body of the canonical TonedPill case and the
 // Pill-tagged §16 shorthand below. ONE reader, so the two spellings cannot drift
 // apart in what they accept.
-func decodeTonedPill(obj map[string]any, path string) Value {
-	s := newSpec(obj, path)
+func decodeTonedPill(w *walkState, obj map[string]any, path string) Value {
+	s := newSpec(w, obj, path)
 	// `field` names the row property that is both the pill's label and the map key.
 	s.req("field", decodeString)
 	s.req("map", decodeToneMap, toneMapKeys[1:]...)
@@ -2021,7 +2030,7 @@ func decodeTonedPill(obj map[string]any, path string) Value {
 // decodeCellKindErased — a column's cell kind. Closure-bearing cases normalise
 // to their canonical sentinel shapes; TonedPill (Phase 750) is the one case with
 // no closure in it, which is exactly why it survives the wire.
-func decodeCellKindErased(raw any, path string) Value {
+func decodeCellKindErased(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, cellKindCases, CodeUnknownDUCase)
 	// Lenient-ingest (WIRE_FORMAT.md §16, Phase 750): "pill" is the WORD for the
@@ -2031,11 +2040,11 @@ func decodeCellKindErased(raw any, path string) Value {
 	// tone map is the unambiguous tell: a closure `Pill` carries only labelFn/toneFn
 	// and can never carry one.
 	if tag == "Pill" && hasAnyKey(obj, toneMapKeys[:]) {
-		return decodeTonedPill(obj, path)
+		return decodeTonedPill(w, obj, path)
 	}
 	switch tag {
 	case "TonedPill":
-		return decodeTonedPill(obj, path)
+		return decodeTonedPill(w, obj, path)
 	case "Text", "Numeric", "Date":
 		return Obj{Tag: tag, Fields: map[string]Value{}}
 	case "Editable":
@@ -2043,7 +2052,7 @@ func decodeCellKindErased(raw any, path string) Value {
 	case "Checkbox":
 		return Obj{Tag: tag, Fields: map[string]Value{"get": Str(closureSentinel), "onToggle": Str(closureSentinel)}}
 	case "Button":
-		label := decodeTextSource(require(obj, "label", path), path+".label")
+		label := decodeTextSource(w, require(obj, "label", path), path+".label")
 		return Obj{Tag: tag, Fields: map[string]Value{"label": label, "onClick": Str(closureSentinel)}}
 	case "ButtonGroup":
 		arr := expectArray(require(obj, "buttons", path), path+".buttons")
@@ -2051,7 +2060,7 @@ func decodeCellKindErased(raw any, path string) Value {
 		for i, item := range arr {
 			p := path + ".buttons[" + strconv.Itoa(i) + "]"
 			bObj := expectObject(item, p)
-			label := decodeTextSource(require(bObj, "label", p), p+".label")
+			label := decodeTextSource(w, require(bObj, "label", p), p+".label")
 			buttons[i] = Obj{Fields: map[string]Value{"label": label, "onClick": Str(closureSentinel)}}
 		}
 		return Obj{Tag: tag, Fields: map[string]Value{"buttons": buttons}}
@@ -2114,9 +2123,9 @@ var gridNearMisses = [][2]string{
 	{"behavior", "sibling fields on the grid (sortStateKey / pageStateKey / pageSize / editStateKey / defaultSort) — grid behaviour is not a nested record"},
 }
 
-func decodeColumnErased(raw any, path string) Value {
+func decodeColumnErased(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
-	s := newSpec(obj, path)
+	s := newSpec(w, obj, path)
 	// Field aliases: `type` for `kind` (the universal JSON prior); `header` /
 	// `title` for `label` (the react-table / antd prior). Phase 460 —
 	// format/width omitted-when-default.
@@ -2135,11 +2144,11 @@ func decodeColumnErased(raw any, path string) Value {
 	return s.buildStrict("")
 }
 
-func decodeColumns(raw any, path string) Value {
+func decodeColumns(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeColumnErased(item, path+"["+strconv.Itoa(i)+"]")
+		out[i] = decodeColumnErased(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
@@ -2150,7 +2159,7 @@ func decodeColumns(raw any, path string) Value {
 // what schema.json's `minimum: 0` says. An index PAST the end of `headers` is
 // deliberately accepted — a relation between sibling values is not something a
 // per-object codec judges.
-func decodeDefaultSort(raw any, path string) Value {
+func decodeDefaultSort(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	column := expectInt(require(obj, "column", path), path+".column")
 	if column < 0 {
@@ -2163,7 +2172,7 @@ func decodeDefaultSort(raw any, path string) Value {
 // decodeGridPageSize — Phase 862: how many rows a page holds. A page of zero or
 // fewer rows names no page at all, so a non-positive (or non-integral) value is
 // WRONG_TYPE, which is also what schema.json's `minimum: 1` says.
-func decodeGridPageSize(raw any, path string) Value {
+func decodeGridPageSize(w *walkState, raw any, path string) Value {
 	n := expectInt(raw, path)
 	if n < 1 {
 		fail(CodeWrongType, path, "expected an integer page size of 1 or more at "+path)
@@ -2175,20 +2184,20 @@ func decodeGridPageSize(raw any, path string) Value {
 // grid (also the shape the legacy Table decode-upgrade reads), plus the
 // Phase 801 optional sort-intent slots. Both omitted re-encodes byte-identically
 // to the pre-801 wire.
-func decodeStaticRows(raw any, path string) Value {
+func decodeStaticRows(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
-	headers := decodeTextSourceArray(require(obj, "headers", path), path+".headers")
+	headers := decodeTextSourceArray(w, require(obj, "headers", path), path+".headers")
 	rowsArr := expectArray(require(obj, "rows", path), path+".rows")
 	rows := make(Arr, len(rowsArr))
 	for i, row := range rowsArr {
-		rows[i] = decodeTextSourceArray(row, path+".rows["+strconv.Itoa(i)+"]")
+		rows[i] = decodeTextSourceArray(w, row, path+".rows["+strconv.Itoa(i)+"]")
 	}
 	fields := map[string]Value{"headers": headers, "rows": rows}
 	if raw, ok := obj["sortable"]; ok {
 		fields["sortable"] = Bool(expectBool(raw, path+".sortable"))
 	}
 	if raw, ok := obj["defaultSort"]; ok {
-		fields["defaultSort"] = decodeDefaultSort(raw, path+".defaultSort")
+		fields["defaultSort"] = decodeDefaultSort(w, raw, path+".defaultSort")
 	}
 	return Obj{Fields: fields}
 }
@@ -2208,7 +2217,7 @@ func isNoneCellFormat(v Value) bool { return isTagOnly(v, "None") }
 //
 // Populated in init(): several builders recurse back through decodeNodeValue,
 // which a package-level composite literal would report as a cycle.
-var kindBuilders map[string]func(obj map[string]any, path string) Obj
+var kindBuilders map[string]func(w *walkState, obj map[string]any, path string) Obj
 
 // requiredKindFields mirrors the typed decoders' required sets for the
 // validator's constructed-tree checks (see RequiredKindFields).
@@ -2250,16 +2259,16 @@ var requiredKindFields = map[string][]string{
 }
 
 func init() {
-	kindBuilders = map[string]func(obj map[string]any, path string) Obj{
-		"Heading": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+	kindBuilders = map[string]func(w *walkState, obj map[string]any, path string) Obj{
+		"Heading": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("level", decodeInt)
 			s.req("text", decodeTextSource)
 			s.req("variant", enumDecoder(headingVariantCases, "variant", headingVariantAliases))
 			return s.build("Heading")
 		},
-		"Markdown": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Markdown": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("text", decodeTextSource)
 			return s.build("Markdown")
 		},
@@ -2267,8 +2276,8 @@ func init() {
 		// is reserved for collection feeds and is NOT accepted here — clean
 		// break); `data` stays as the web-prior alias. Phase 460 — the
 		// stylistic fields are omitted-when-default on both boundaries.
-		"Metric": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Metric": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("label", decodeTextSource)
 			s.req("value", decodeBindingFloat, "data")
 			s.optDrop("format", decodeCellFormat, isNoneCellFormat)
@@ -2284,8 +2293,8 @@ func init() {
 		// A labeled TEXT fact: `value` is a TextSource, so static / Bound /
 		// I18n values ride the label vocabulary. Only label + value required;
 		// tone / emphasis omitted-when-default on BOTH boundaries.
-		"Fact": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Fact": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("label", decodeTextSource)
 			s.req("value", decodeTextSource)
 			s.optDrop("tone", decodeTone, isDefaultTone)
@@ -2294,8 +2303,8 @@ func init() {
 			s.opt("icon", decodeString)
 			return s.build("Fact")
 		},
-		"LabelValueRow": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"LabelValueRow": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("label", decodeTextSource)
 			s.req("value", decodeBindingFloat, "data")
 			s.optDrop("format", decodeCellFormat, isNoneCellFormat)
@@ -2306,14 +2315,14 @@ func init() {
 			s.opt("help", decodeTextSource)
 			return s.build("LabelValueRow")
 		},
-		"Badge": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Badge": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("label", decodeTextSource)
 			s.req("variant", enumDecoder(badgeVariantCases, "variant", badgeVariantAliases))
 			return s.build("Badge")
 		},
-		"Callout": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Callout": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("body", decodeTextSource)
 			// 0.2.0 — dismissable omitted-when-false; Phase 460 — tone
 			// omitted-when-default. `title` aliases `heading`.
@@ -2323,8 +2332,8 @@ func init() {
 			s.opt("icon", decodeString)
 			return s.build("Callout")
 		},
-		"Progress": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Progress": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("fraction", decodeBindingFloat)
 			// 0.2.0 — indeterminate omitted-when-false.
 			s.optDrop("indeterminate", decodeBool, isFalseValue)
@@ -2333,8 +2342,8 @@ func init() {
 			s.opt("caveat", decodeTextSource)
 			return s.build("Progress")
 		},
-		"Toast": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Toast": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			// 0.2.0 — the one omit-when-TRUE: a toast is dismissable unless
 			// said otherwise.
 			s.optDrop("dismissable", decodeBool, isTrueValue)
@@ -2343,16 +2352,16 @@ func init() {
 			s.optDrop("tone", decodeTone, isDefaultTone)
 			return s.build("Toast")
 		},
-		"Skeleton": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Skeleton": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("rows", decodeInt)
 			return s.build("Skeleton")
 		},
 		// Phase 821 — the standalone icon-only display kind. `size`
 		// omitted-when-`Medium`; `tone` omitted-when-default (the Phase 460
 		// discipline); `label` omitted-when-decorative.
-		"Icon": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Icon": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("icon", decodeString)
 			s.optDrop("size", enumDecoder(iconSizeCases, "size", noAliases), isMediumIconSize)
 			s.optDrop("tone", decodeTone, isDefaultTone)
@@ -2360,15 +2369,15 @@ func init() {
 			return s.build("Icon")
 		},
 		// source is a §5 typed Static float-series position; `data` aliases.
-		"Sparkline": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Sparkline": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("source", decodeBindingFloatSeq, "data")
 			return s.build("Sparkline")
 		},
 		// source is a §5 typed Static marker-list position; `data` / `markers`
 		// alias.
-		"Map": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Map": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("centreLatitude", expectNumberField)
 			s.req("centreLongitude", expectNumberField)
 			s.req("source", decodeBindingMarkerSeq, "data", "markers")
@@ -2376,8 +2385,8 @@ func init() {
 			s.sentinel("onMarkerClick")
 			return s.build("Map")
 		},
-		"Link": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Link": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("download", decodeBool)
 			s.req("href", decodeBindingString)
 			s.req("label", decodeTextSource)
@@ -2388,21 +2397,21 @@ func init() {
 			s.opt("target", decodeString)
 			return s.build("Link")
 		},
-		"Image": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Image": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("alt", decodeTextSource)
 			s.req("src", decodeBindingString)
 			s.req("variant", enumDecoder(imageVariantCases, "variant", noAliases))
 			return s.build("Image")
 		},
-		"List": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"List": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("items", decodeTextSourceArray)
 			s.req("ordered", decodeBool)
 			return s.build("List")
 		},
-		"CodeBlock": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"CodeBlock": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("code", decodeString)
 			s.req("copyable", decodeBool)
 			s.req("highlightLines", decodeIntArray)
@@ -2410,8 +2419,8 @@ func init() {
 			s.req("lineNumbers", decodeBool)
 			return s.build("CodeBlock")
 		},
-		"Math": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Math": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("display", enumDecoder(mathDisplayCases, "display", noAliases))
 			s.req("source", decodeString)
 			return s.build("Math")
@@ -2419,8 +2428,8 @@ func init() {
 		// Phases 524 / 642 — geometry static; the closed Shape / CurveCommand
 		// DUs default-deny an unknown discriminator; DrawStyle carries the
 		// bindings + the optional markId.
-		"Drawing": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Drawing": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.opt("description", decodeTextSource)
 			s.req("shapes", decodeShapeArray)
 			s.req("style", decodeDrawStyle)
@@ -2432,8 +2441,8 @@ func init() {
 		// control is declarative; present as the "<closure>" sentinel when
 		// closure-authored. `options` / `data` alias `source`. Phase 291 —
 		// multiple omitted-when-false; values omitted when absent.
-		"Select": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Select": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("label", decodeTextSource)
 			s.sentinel("onChange")
 			s.req("source", decodeBindingSelectOptions, "options", "data")
@@ -2448,8 +2457,8 @@ func init() {
 		// onDismiss is optional and — unlike the closure-sentinel handlers — a
 		// genuine wire-survivable Action, so it decodes null-strict when
 		// present. `title` aliases `heading`.
-		"Modal": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Modal": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("children", decodeChildren)
 			s.req("dismissable", decodeBool)
 			s.opt("onDismiss", decodeAction)
@@ -2457,16 +2466,16 @@ func init() {
 			s.opt("heading", decodeTextSource, "title")
 			return s.build("Modal")
 		},
-		"ScrollArea": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"ScrollArea": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("children", decodeChildren)
 			s.req("orientation", enumDecoder(scrollOrientationCases, "orientation", noAliases))
 			s.opt("maxHeight", decodeInt)
 			s.opt("maxWidth", decodeInt)
 			return s.build("ScrollArea")
 		},
-		"Button": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Button": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("label", decodeTextSource)
 			s.req("onClick", decodeAction)
 			s.req("variant", enumDecoder(buttonVariantCases, "variant", buttonVariantAliases))
@@ -2474,21 +2483,21 @@ func init() {
 			s.opt("disabled", decodeBindingBool)
 			return s.build("Button")
 		},
-		"Form": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Form": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("fields", decodeFormFields)
 			s.req("onSubmit", decodeAction)
 			s.req("submitLabel", decodeTextSource)
 			s.opt("disabled", decodeBindingBool)
 			return s.build("Form")
 		},
-		"Filters": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Filters": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("items", decodeFilterItems)
 			return s.build("Filters")
 		},
-		"FileUpload": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"FileUpload": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("accept", decodeStringArrayField)
 			s.req("label", decodeTextSource)
 			s.req("multiple", decodeBool)
@@ -2500,8 +2509,8 @@ func init() {
 			return s.build("FileUpload")
 		},
 		// 0.2.0 — editable omitted-when-false; `data` / `rows` alias `source`.
-		"DataGrid": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"DataGrid": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("columns", decodeColumns)
 			s.optDrop("editable", decodeBool, isFalseValue)
 			// Phase 934 — declarative row reorder; omitted-when-false, the same
@@ -2536,13 +2545,13 @@ func init() {
 		},
 		// `stacked` is carried on the wire; a legacy wire predating the field
 		// decodes to (and re-encodes with) the default false.
-		"Chart": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Chart": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("kind", enumDecoder(chartKindCases, "kind", noAliases))
 			s.req("source", decodeBindingRows, "data")
 			stacked := Value(Bool(false))
 			if raw, ok := s.take("stacked"); ok {
-				stacked = decodeBool(raw, path+".stacked")
+				stacked = decodeBool(w, raw, path+".stacked")
 			}
 			s.set("stacked", stacked)
 			s.req("xField", decodeString)
@@ -2551,8 +2560,8 @@ func init() {
 			s.sentinel("onPointClick")
 			return s.build("Chart")
 		},
-		"Custom": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Custom": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("moduleId", decodeString)
 			s.req("componentId", decodeString)
 			s.opt("props", decodeJSONValue)
@@ -2569,13 +2578,13 @@ func init() {
 		// this host's encoder is generic). Both absent keeps the stateKey
 		// MISSING_FIELD, so the reject fixture's error is unchanged; `on` wins
 		// when both are present.
-		"Switch": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Switch": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("cases", decodeSwitchCases)
 			s.req("default", decodeSingleNode)
 			if raw, ok := s.take("on"); ok {
 				s.take("stateKey") // consumed — `on` is authoritative
-				on := decodeBinding(raw, path+".on")
+				on := decodeBinding(w, raw, path+".on")
 				if o, isObj := on.(Obj); isObj && o.Tag == "State" && len(o.Fields) == 1 {
 					s.set("stateKey", o.Fields["key"])
 				} else {
@@ -2589,8 +2598,8 @@ func init() {
 		// Isolation/embedding boundary (§4o). inputs passes through WITHOUT
 		// null-strictness — it embeds whole node trees whose Binding.Static
 		// values are §5 opaque seams.
-		"Mount": func(obj map[string]any, path string) Obj {
-			s := newSpec(obj, path)
+		"Mount": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
 			s.req("scopeId", decodeString)
 			s.req("channel", decodeGuestChannel)
 			s.req("capabilities", decodeJSONValue)
@@ -2648,8 +2657,8 @@ func decodeBoxLayout(raw any, path string) Obj {
 	}
 }
 
-func decodeBox(obj map[string]any, path string) Obj {
-	children := decodeChildren(require(obj, "children", path), path+".children")
+func decodeBox(w *walkState, obj map[string]any, path string) Obj {
+	children := decodeChildren(w, require(obj, "children", path), path+".children")
 	role := enumStr(require(obj, "role", path), path+".role", boxRoleCases, "role", noAliases)
 	layout := decodeBoxLayout(require(obj, "layout", path), path+".layout")
 	fields := map[string]Value{
@@ -2659,22 +2668,22 @@ func decodeBox(obj map[string]any, path string) Obj {
 	}
 	// `title` aliases `heading` (the web prior for a card's caption).
 	if raw, ok := optAliased(obj, "heading", "title"); ok {
-		fields["heading"] = decodeTextSource(raw, path+".heading")
+		fields["heading"] = decodeTextSource(w, raw, path+".heading")
 	}
 	return Obj{Tag: "Box", Fields: fields}
 }
 
 // ── Kind / style / state / node envelope ────────────────────────────────────
 
-func decodeKind(raw any, path string) Obj {
+func decodeKind(w *walkState, raw any, path string) Obj {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, knownKinds, CodeWrongNodeKind)
 	switch {
 	case tag == "Box":
-		return decodeBox(obj, path)
+		return decodeBox(w, obj, path)
 	}
 	if builder, ok := kindBuilders[tag]; ok {
-		return builder(obj, path)
+		return builder(w, obj, path)
 	}
 	// Recognised kind without a typed decoder yet — accept structurally.
 	fields := make(map[string]Value, len(obj))
@@ -2690,21 +2699,21 @@ func decodeKind(raw any, path string) Obj {
 // boundaries (Phase 147 role/voice; Phase 460 emphasis/tone/weight): an
 // absent field restores the identity default, and a present explicit default
 // normalises to the omitted form.
-func decodeStyle(raw any, path string) Obj {
+func decodeStyle(w *walkState, raw any, path string) Obj {
 	obj := expectObject(raw, path)
 	fields := map[string]Value{}
 	if raw, ok := obj["emphasis"]; ok {
-		if v := decodeEmphasisEnum(raw, path+".emphasis"); !isStr(v, "Normal") {
+		if v := decodeEmphasisEnum(w, raw, path+".emphasis"); !isStr(v, "Normal") {
 			fields["emphasis"] = v
 		}
 	}
 	if raw, ok := obj["tone"]; ok {
-		if v := decodeTone(raw, path+".tone"); !isStr(v, "Default") {
+		if v := decodeTone(w, raw, path+".tone"); !isStr(v, "Default") {
 			fields["tone"] = v
 		}
 	}
 	if raw, ok := obj["weight"]; ok {
-		if v := decodeWeight(raw, path+".weight"); !isStr(v, "Standard") {
+		if v := decodeWeight(w, raw, path+".weight"); !isStr(v, "Standard") {
 			fields["weight"] = v
 		}
 	}
@@ -2721,14 +2730,14 @@ func decodeStyle(raw any, path string) Obj {
 	return Obj{Fields: fields}
 }
 
-func decodeState(raw any, path string) Obj {
+func decodeState(w *walkState, raw any, path string) Obj {
 	obj := expectObject(raw, path)
 	fields := make(map[string]Value)
 	if raw, ok := obj["onLoading"]; ok {
-		fields["onLoading"] = decodeNodeValue(raw, path+".onLoading")
+		fields["onLoading"] = decodeNodeValue(w, raw, path+".onLoading")
 	}
 	if raw, ok := obj["onEmpty"]; ok {
-		fields["onEmpty"] = decodeNodeValue(raw, path+".onEmpty")
+		fields["onEmpty"] = decodeNodeValue(w, raw, path+".onEmpty")
 	}
 	if _, ok := obj["onError"]; ok {
 		// The rendering closure is opaque — the canonical form is the sentinel.
@@ -2740,7 +2749,11 @@ func decodeState(raw any, path string) Obj {
 // decodeNodeValue decodes a node envelope, applying the §8 NodeId invariants.
 // `state` and `style` are omitted when empty / all-default (§3.1) — a decoded
 // empty/default section normalises to the omitted form.
-func decodeNodeValue(raw any, path string) Node {
+func decodeNodeValue(w *walkState, raw any, path string) Node {
+	// §21 node-depth + total-node bounds, on the way DOWN (rule 4).
+	w.enterNode(path)
+	defer w.exitNode()
+
 	obj := expectObject(raw, path)
 
 	rawID, ok := obj["id"]
@@ -2759,16 +2772,16 @@ func decodeNodeValue(raw any, path string) Node {
 	if !ok {
 		fail(CodeMissingField, path+".kind", "missing required field 'kind'")
 	}
-	kind := decodeKind(rawKind, path+".kind")
+	kind := decodeKind(w, rawKind, path+".kind")
 
 	extras := make(map[string]Value)
 	if raw, ok := obj["state"]; ok {
-		if state := decodeState(raw, path+".state"); len(state.Fields) > 0 {
+		if state := decodeState(w, raw, path+".state"); len(state.Fields) > 0 {
 			extras["state"] = state
 		}
 	}
 	if raw, ok := obj["style"]; ok {
-		if style := decodeStyle(raw, path+".style"); len(style.Fields) > 0 {
+		if style := decodeStyle(w, raw, path+".style"); len(style.Fields) > 0 {
 			extras["style"] = style
 		}
 	}

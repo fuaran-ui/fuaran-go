@@ -19,7 +19,8 @@ func (Node) isValue() {}
 func DecodeNode(canonicalJSON string) (node Node, err error) {
 	defer recoverDecode(&err)
 	raw := parseJSON(canonicalJSON)
-	return decodeNodeValue(raw, "$"), nil
+	checkShape(raw)
+	return decodeNodeValue(newWalkState(), raw, "$"), nil
 }
 
 // EncodeNode re-encodes a decoded Node to canonical wire JSON, byte-identical

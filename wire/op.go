@@ -24,7 +24,7 @@ func KnownOpKinds() []string {
 // reserved sentinel is the canonical encoder's marker for an in-process-only
 // payload that was never wire-representable: replaying it would apply the
 // sentinel TEXT as live data, so it rejects by name.
-func opJSONValue(raw any, path string) Value {
+func opJSONValue(w *walkState, raw any, path string) Value {
 	if s, ok := raw.(string); ok && (s == opaqueSentinel || s == closureSentinel) {
 		failExpecting(
 			CodeWrongType,
@@ -34,26 +34,26 @@ func opJSONValue(raw any, path string) Value {
 			"a wire-representable JSON value (the sentinels are reserved vocabulary)",
 		)
 	}
-	return fromJSONStrict(raw, path)
+	return fromJSONStrict(w, raw, path)
 }
 
-func decodeKindField(raw any, path string) Value {
-	return decodeKind(raw, path)
+func decodeKindField(w *walkState, raw any, path string) Value {
+	return decodeKind(w, raw, path)
 }
 
-func decodeNodeField(raw any, path string) Value {
-	return decodeNodeValue(raw, path)
+func decodeNodeField(w *walkState, raw any, path string) Value {
+	return decodeNodeValue(w, raw, path)
 }
 
-func decodeStyleField(raw any, path string) Value {
-	return decodeStyle(raw, path)
+func decodeStyleField(w *walkState, raw any, path string) Value {
+	return decodeStyle(w, raw, path)
 }
 
-func decodeStateField(raw any, path string) Value {
-	return decodeState(raw, path)
+func decodeStateField(w *walkState, raw any, path string) Value {
+	return decodeState(w, raw, path)
 }
 
-func decodeIDList(raw any, path string) Value {
+func decodeIDList(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
@@ -62,11 +62,11 @@ func decodeIDList(raw any, path string) Value {
 	return out
 }
 
-func decodeOpList(raw any, path string) Value {
+func decodeOpList(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeOpValue(item, path+"."+strconv.Itoa(i))
+		out[i] = decodeOpValue(w, item, path+"."+strconv.Itoa(i))
 	}
 	return out
 }
@@ -127,13 +127,19 @@ func init() {
 	}
 }
 
-func decodeOpValue(raw any, path string) Obj {
+func decodeOpValue(w *walkState, raw any, path string) Obj {
+	// The op axis, counted separately from the node axis and held to the same
+	// ceiling — §21.5's note for implementers, since Batch makes this function
+	// self-recursive and the syntactic bound only LOOKS like cover for it.
+	w.enterOp(path)
+	defer w.exitOp()
+
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, opCases, CodeUnknownDUCase)
 	fields := make(map[string]Value)
 	for _, fs := range opSchemas[tag] {
 		if raw, ok := obj[fs.name]; ok {
-			fields[fs.name] = fs.dec(raw, path+"."+fs.name)
+			fields[fs.name] = fs.dec(w, raw, path+"."+fs.name)
 		} else if fs.required {
 			fail(CodeMissingField, path+"."+fs.name, "missing required field '"+fs.name+"'")
 		}
@@ -147,7 +153,8 @@ func decodeOpValue(raw any, path string) Obj {
 func DecodeOp(canonicalJSON string) (op Obj, err error) {
 	defer recoverDecode(&err)
 	raw := parseJSON(canonicalJSON)
-	return decodeOpValue(raw, "$"), nil
+	checkShape(raw)
+	return decodeOpValue(newWalkState(), raw, "$"), nil
 }
 
 // EncodeOp re-encodes a decoded TreeOp to canonical wire JSON, byte-identical
