@@ -24,3 +24,8 @@ Thumbs.db
 
 # Synced corpus snapshot (follow-up: offline snapshot + drift guard)
 conformance/corpus/
+
+# Decoder-fuzz repro cases are RUN OUTPUT: written by the harness when it finds a
+# counterexample, so `git status` surfaces them, and regenerated on demand from the
+# recorded seed. They are a prompt to act, never a source artefact.
+wire/fuzz-repros/

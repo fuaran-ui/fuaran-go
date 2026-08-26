@@ -135,6 +135,44 @@ skip on a standalone checkout). The envelope and elicitation families land
 with their own roadmap tiers (`conformance` locates `../wire-format-fixtures/`
 and skips when absent).
 
+### Decoder robustness fuzz (`wire/decoderfuzz_test.go`)
+
+The refusal contract — decoding is TOTAL, so a malformed or hostile input yields a structured typed
+error, never a panic and never a hang — asserted against **generated** hostile input rather than
+against the curated reject corpus alone. A curated corpus is evidence about the author's
+imagination.
+
+**Two harnesses, and the pairing is the point.** `TestDecoderFuzz` drives a deterministic
+(SplitMix64) stream over the five named input families, so the classes are covered reproducibly on
+every `go test`. `FuzzDecodeNode` / `FuzzDecodeOp` are native `testing.F` targets over the same entry
+points, **seeded from that same generated stream** — so a plain `go test` replays the seed corpus and
+covers the same families, while `go test -fuzz=FuzzDecodeNode -fuzztime=10m ./wire` adds
+coverage-guided mutation. That second half is why this leg is a native harness rather than a port of
+another host's generator: the toolchain ships coverage guidance and a port would throw it away.
+
+- **The bounded run IS the PR gate** — it landed in a package `go test ./...` already runs, so no
+  workflow change was needed and the CI quarantine patterns do not touch it.
+- **The long run + its machine-readable record:** `FUARAN_FUZZ_LONG=1 FUARAN_FUZZ_ITERATIONS=250000
+  FUARAN_FUZZ_EVIDENCE=<file> go test ./wire -run TestDecoderFuzz -timeout 90m`.
+- **The go-red self-test is permanent, and so is its inverse** — five mutants, one per invariant,
+  each asserted to be PARTIAL.
+- **The allocation invariant is measured, not proxied, where it bites.**
+  `TestDecoderFuzzAllocationBudget` reads `runtime.MemStats` over the pathological family;
+  `ReadMemStats` stops the world, so the main stream carries the cheap output-amplification proxy
+  instead. Neither half is the whole invariant.
+- **This host's hostile alphabet carries invalid UTF-8** — a WTF-8 lone surrogate, a bare
+  continuation byte, `0xFF` — because a Go string is a byte sequence. Two of the sibling hosts
+  cannot hold those inputs at all, so this is coverage only this leg has, not a difference to
+  smooth away.
+- **The `duplicate-key` mutator and the `NaN` / `Infinity` / `1e999` / `+1` tokens are generated
+  deliberately, and nothing here asserts which answer is right.** Those are §20 "Decode
+  determinism", landed PROPOSED and not yet ratified; crash-freedom on them is in scope, agreement
+  is not.
+
+`cmd/refusal-report` is the companion emitter: this host's refusal class for every reject fixture, as
+JSON, for a cross-host runner that compares the hosts to each other rather than each to the corpus in
+isolation.
+
 ## Destination policy — ambient, default-deny
 
 Every URL this host emits is checked against a typed destination policy
