@@ -3,6 +3,7 @@ package wire
 import (
 	"encoding/json"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -184,13 +185,46 @@ func expectInt(raw any, path string) int64 {
 	return i
 }
 
-// expectNumber accepts any JSON number (an integer or float literal).
-func expectNumber(w *walkState, raw any, path string) Value {
-	n, ok := unwrapStaticAny(raw).(json.Number)
-	if !ok {
-		fail(CodeWrongType, path, "expected a number at "+path)
+// nonFiniteSentinel maps the three §5/§7 quoted sentinels to their float value.
+// §7 is symmetric with §5: a float slot accepts BOTH a JSON number and the
+// quoted spelling this host itself emits for a non-finite. Without it a document
+// this host encodes is one this host cannot read back — `decode → encode →
+// decode` does not close on any non-finite number, and a peer host's canonical
+// output is undecodable here.
+//
+// It returns the float rather than the sentinel string so decode is idempotent
+// at the TREE level and not merely at the byte level: the bare overflowing
+// literal `-1e999` already decodes to Float(-Inf) via numberValue, so answering
+// a re-decode of its own canonical form with Str would hand a consumer a float
+// the first time and a string the second.
+func nonFiniteSentinel(s string) (float64, bool) {
+	switch s {
+	case "NaN":
+		return math.NaN(), true
+	case "Infinity":
+		return math.Inf(1), true
+	case "-Infinity":
+		return math.Inf(-1), true
 	}
-	return numberValue(n)
+	return 0, false
+}
+
+// expectNumber accepts any JSON number (an integer or float literal), or one of
+// the three §7 non-finite sentinel strings. It is the FLOAT-slot choke point —
+// integer slots go through expectInt, which gates on isIntegerLiteral and so is
+// unreachable from here: a sentinel at an integer slot stays a WRONG_TYPE.
+func expectNumber(w *walkState, raw any, path string) Value {
+	raw = unwrapStaticAny(raw)
+	if n, ok := raw.(json.Number); ok {
+		return numberValue(n)
+	}
+	if s, ok := raw.(string); ok {
+		if f, isSentinel := nonFiniteSentinel(s); isSentinel {
+			return Float(f)
+		}
+	}
+	fail(CodeWrongType, path, "expected a number at "+path)
+	return nil
 }
 
 func isIntegerLiteral(lit string) bool {
@@ -556,17 +590,14 @@ func objStatic(w *walkState, raw any, path string) Value {
 }
 
 // floatStatic — a JSON number, the three non-finite sentinels, or the Static
-// envelope around either (the inverse-confusion unwrap).
+// envelope around either (the inverse-confusion unwrap). Delegates to
+// expectNumber so a Binding's float payload and a typed float slot answer the
+// same way: this slot already round-tripped before, but it did so by keeping the
+// sentinel as a STRING, which would leave a Static float scalar carrying Str
+// where a Static float SEQUENCE element (floatSeqStatic, which walks
+// expectNumber) carries Float — an inconsistency inside one family.
 func floatStatic(w *walkState, raw any, path string) Value {
-	raw = unwrapStaticAny(raw)
-	if n, ok := raw.(json.Number); ok {
-		return numberValue(n)
-	}
-	if s, ok := raw.(string); ok && (s == "NaN" || s == "Infinity" || s == "-Infinity") {
-		return Str(s)
-	}
-	fail(CodeWrongType, path, "expected a number at "+path)
-	return nil
+	return expectNumber(w, raw, path)
 }
 
 func boolStatic(w *walkState, raw any, path string) Value {
@@ -1901,8 +1932,110 @@ func expectNumberField(w *walkState, raw any, path string) Value {
 	return expectNumber(w, raw, path)
 }
 
+// `FormFieldKind` names the CONTROL; `FormField.rule` names the ACCEPTED SET.
+// The two enums plus the cross-field operand, then the policy layer above the
+// structural shape. Parity-locked with the reference host's `decodeFieldRule` /
+// `formFieldNearMisses` and with the TypeScript tier's.
+var (
+	textFormatCases = newCaseSet("email", "url", "tel")
+	compareOpCases  = newCaseSet("eq", "neq", "lt", "lte", "gt", "gte")
+)
+
+func decodeTextFormat(w *walkState, raw any, path string) Value {
+	return Str(enumStr(raw, path, textFormatCases, "TextFormat", nil))
+}
+
+func decodeCompareOp(w *walkState, raw any, path string) Value {
+	return Str(enumStr(raw, path, compareOpCases, "CompareOp", nil))
+}
+
+// decodeCompareRule — the cross-field operand. `against` is a Binding, and that
+// IS the cross-field mechanism rather than an accident of typing: any read slot
+// may take a Binding, and the auto-bind rule already puts every form field's
+// value in State under the field's own id, so {"$type":"State","key":"<sibling
+// id>"} reads the sibling with no coordination vocabulary at all.
+func decodeCompareRule(w *walkState, raw any, path string) Value {
+	obj := expectObject(raw, path)
+	s := newSpec(w, obj, path)
+	s.req("op", decodeCompareOp)
+	s.req("against", decodeBinding)
+	return s.buildStrict("")
+}
+
+// decodeFieldRule — a field's declared constraint. Every slot is optional
+// structurally, and two shapes are refused here as POLICY:
+//
+//   - a rule with every slot absent. A rule that constrains nothing is a defect,
+//     not a no-op: it decodes, validates and renders while declaring nothing,
+//     which is the fake-affordance shape the near-miss table also forecloses,
+//     arriving through an empty object instead of a wrong key. `message` alone
+//     does not rescue it — the message is the prose shown when some OTHER slot
+//     is unmet, so a message-only rule is the help-text failure wearing the new
+//     vocabulary's clothes.
+//   - `minLength` above `maxLength`. The ordered-pair rule applied to a length
+//     pair: an inverted bound admits no value at all, so the field can never be
+//     submitted and the form is dead on arrival.
+//
+// Neither is a shape — both are relations BETWEEN slots — which is why they live
+// here rather than in the structural layer.
+func decodeFieldRule(w *walkState, raw any, path string) Value {
+	obj := expectObject(raw, path)
+	s := newSpec(w, obj, path)
+	s.opt("format", decodeTextFormat)
+	s.opt("pattern", decodeString)
+	s.opt("minLength", decodeInt)
+	s.opt("maxLength", decodeInt)
+	s.opt("compare", decodeCompareRule)
+	s.opt("message", decodeTextSource)
+	built := s.buildStrict("")
+
+	constrains := false
+	for _, k := range []string{"format", "pattern", "minLength", "maxLength", "compare"} {
+		if _, ok := built.Fields[k]; ok {
+			constrains = true
+			break
+		}
+	}
+	if !constrains {
+		fail(
+			CodeWrongType,
+			path,
+			"a rule that constrains nothing is a defect, not a no-op — declare at least one of "+
+				"format / pattern / minLength / maxLength / compare, or omit 'rule' entirely",
+		)
+	}
+
+	minV, hasMin := built.Fields["minLength"]
+	maxV, hasMax := built.Fields["maxLength"]
+	if hasMin && hasMax {
+		lo, hi := int64(minV.(Int)), int64(maxV.(Int))
+		if lo > hi {
+			fail(
+				CodeWrongType,
+				path,
+				"minLength "+strconv.FormatInt(lo, 10)+" is above maxLength "+strconv.FormatInt(hi, 10)+
+					" — an inverted length bound admits no value at all, so the field could never be submitted",
+			)
+		}
+	}
+	return built
+}
+
+// formFieldNearMisses — the rule slot's rejected spellings. Small and enumerated
+// for the same reason the grid's set is: tolerance of unknown keys is right for a
+// field a future profile may add and wrong for a near miss of one that exists,
+// because the tree then decodes and renders while constraining nothing.
+var formFieldNearMisses = [][2]string{
+	{"validation", "rule"},
+	{"constraints", "rule"},
+	{"validate", "rule"},
+}
+
 func decodeFormField(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
+	// The near-miss check runs BEFORE the rule decode, so a field carrying both
+	// `validation` and a well-formed `rule` still names the ignored key.
+	checkNearMisses(obj, path, formFieldNearMisses)
 	s := newSpec(w, obj, path)
 	// Field alias: name — the HTML-forms prior for the field's identity. The
 	// id decodes first so the auto-bind context can use it.
@@ -1916,6 +2049,7 @@ func decodeFormField(w *walkState, raw any, path string) Value {
 	s.req("label", decodeTextSource)
 	s.req("required", decodeBool)
 	s.opt("help", decodeTextSource)
+	s.opt("rule", decodeFieldRule)
 	return s.buildStrict("")
 }
 

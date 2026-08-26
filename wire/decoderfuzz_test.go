@@ -684,41 +684,8 @@ type fuzzVerdict struct {
 	detail string
 }
 
-// fuzzKnownNonFiniteHole names the ONE defect this harness is permitted to
-// observe without failing, and it is named rather than numbered so a reader
-// meets the reason at the point of the exclusion.
-//
-// The wire specification's §7 requires a decoder to accept the quoted `"NaN"` /
-// `"Infinity"` / `"-Infinity"` sentinels at a float slot, and §5 requires every
-// host to EMIT them. This host emits them and does not accept them at every such
-// slot — so `decode → encode → decode` does not close on a document carrying a
-// non-finite number, and this harness finds one within a few thousand generated
-// inputs (`{"…","viewBox":{…,"width":-1e999}}` reduces to exactly that).
-//
-// It is EXCLUDED here for three reasons, and none of them is that it is
-// unimportant. It is already recorded in the specification as a §7 conformance
-// defect rather than an open question. It spans more than this host, so fixing
-// it here alone would manufacture a new divergence of precisely the kind the
-// cross-host parity work exists to close. And the phase that shipped this
-// harness declares itself additive — evidence and gates — so widening a
-// decoder's accept set across every float slot is not its change to make.
-//
-// The exclusion is deliberately keyed on the CAUSE (a non-finite sentinel in the
-// canonical form), not on a fixture id or an iteration number: the seed pool is
-// the shared corpus, so the generated stream renumbers whenever the corpus
-// moves, and an exclusion keyed to an iteration would silence a different defect
-// next week. It is COUNTED and PRINTED on every run, and it disappears on its own
-// the moment the decoder accepts what it emits.
-const fuzzKnownNonFiniteHole = "known-nonfinite-roundtrip-hole"
-
-func fuzzIsKnownNonFiniteHole(canonical string) bool {
-	return strings.Contains(canonical, `"NaN"`) ||
-		strings.Contains(canonical, `"Infinity"`) ||
-		strings.Contains(canonical, `"-Infinity"`)
-}
-
 func (v fuzzVerdict) isCounterexample() bool {
-	return v.kind != "rejected" && v.kind != "clean" && v.kind != fuzzKnownNonFiniteHole
+	return v.kind != "rejected" && v.kind != "clean"
 }
 
 type fuzzBudgets struct {
@@ -786,9 +753,6 @@ func fuzzCheck(subject fuzzSubject, budgets fuzzBudgets, input string) (m fuzzMe
 	}
 	if result.reDecodedCode != "" {
 		detail := "the decoder's own output re-decodes as " + result.reDecodedCode
-		if fuzzIsKnownNonFiniteHole(result.canonical) {
-			return fuzzMeasured{fuzzVerdict{fuzzKnownNonFiniteHole, detail}, elapsed, len(result.canonical)}
-		}
 		return fuzzMeasured{fuzzVerdict{"canonical-refused", detail}, elapsed, len(result.canonical)}
 	}
 	if result.canonical != result.reDecoded {
@@ -838,10 +802,7 @@ type fuzzRunStats struct {
 	Host                      string         `json:"host"`
 	EntryPoints               []string       `json:"entryPoints"`
 	Counterexamples           int            `json:"counterexamples"`
-	// The one EXCLUDED defect class, counted and published rather than dropped:
-	// an exclusion nobody can see reads as "found nothing".
-	KnownNonFiniteHoles int    `json:"knownNonFiniteRoundTripHoles"`
-	GeneratedAt         string `json:"generatedAt"`
+	GeneratedAt               string         `json:"generatedAt"`
 
 	finds []fuzzCounterexample
 }
@@ -975,8 +936,6 @@ func fuzzRun(subjects []fuzzSubject, budgets fuzzBudgets, cfg fuzzConfig, seed u
 				stats.RejectCodes[m.verdict.detail]++
 			case "clean":
 				stats.Accepted++
-			case fuzzKnownNonFiniteHole:
-				stats.KnownNonFiniteHoles++
 			default:
 				payload := g.payload
 				if minimiseFinds {
@@ -1013,10 +972,10 @@ func fuzzSummarise(s fuzzRunStats) string {
 		perIteration = s.Inputs / s.Iterations
 	}
 	return fmt.Sprintf(
-		"%d inputs (%d iterations x %d entry points) in %.1f s — accepted %d, refused [%s], %d counterexamples, "+
-			"%d known non-finite round-trip holes (§7, EXCLUDED); max decode %.0f ms; max canonical amplification %.1f x",
+		"%d inputs (%d iterations x %d entry points) in %.1f s — accepted %d, refused [%s], %d counterexamples; "+
+			"max decode %.0f ms; max canonical amplification %.1f x",
 		s.Inputs, s.Iterations, perIteration, s.ElapsedSeconds, s.Accepted, strings.Join(codes, " "),
-		len(s.finds), s.KnownNonFiniteHoles, s.MaxDecodeMs, s.MaxCanonicalAmplification)
+		len(s.finds), s.MaxDecodeMs, s.MaxCanonicalAmplification)
 }
 
 // ─── The gate ───────────────────────────────────────────────────────────────
@@ -1276,12 +1235,6 @@ func fuzzAssertTotal(t *testing.T, subject fuzzSubject, input string) {
 		return
 	}
 	if result.reDecodedCode != "" {
-		if fuzzIsKnownNonFiniteHole(result.canonical) {
-			// The one excluded class — see fuzzKnownNonFiniteHole. Skipped rather
-			// than passed silently, so `go test -fuzz` reports how often the
-			// coverage-guided engine reaches it.
-			t.Skip("known §7 non-finite round-trip hole")
-		}
 		t.Fatalf("%s: the decoder's own canonical output re-decodes as %s: %q", subject.name, result.reDecodedCode, input)
 	}
 	if result.canonical != result.reDecoded {
