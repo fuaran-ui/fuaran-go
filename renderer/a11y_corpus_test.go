@@ -58,12 +58,17 @@ func a11yCorpusCases() []a11yCorpusCase {
 			// spelling a fold bug once rewrote. `off` is a real liveRegion
 			// token, not an absence.
 			//
-			// `aria-label` is a MEASURED DIVERGENCE, not an omission — see
-			// TestA11yStateBoundNameIsThisHostsDeclaredDivergence below.
+			// `aria-label` is here because the name is a `Binding.State` whose
+			// declared default now RESOLVES at the render floor (WIRE_FORMAT
+			// §24, operator ruling 2026-08-26 / fuaran#1064). It was absent
+			// from this list until then, as a measured cross-tier divergence;
+			// TestA11yStateBoundNameResolvesLikeEveryOtherTier below carries the
+			// account of why it flipped.
 			fixture: "a11y-wrapper-state-bound",
 			want: []string{
 				`role="doc-pageFooter"`,
 				`aria-live="off"`,
+				`aria-label="Site footer"`,
 			},
 			absentFromCarrier: []string{`aria-hidden`},
 		},
@@ -131,36 +136,44 @@ func TestA11yCorpusProjectionLandsOnTheRightElement(t *testing.T) {
 	}
 }
 
-// TestA11yStateBoundNameIsThisHostsDeclaredDivergence pins the one place the
-// corpus family shows this host emitting something different from every other.
+// TestA11yStateBoundNameResolvesLikeEveryOtherTier is the POSITIVE successor to
+// TestA11yStateBoundNameIsThisHostsDeclaredDivergence, which pinned the opposite
+// answer until the operator ruled on 2026-08-26 (fuaran#1064).
 //
-// `a11y-wrapper-state-bound`'s accessible name is a `Binding.State` carrying a
-// declared `defaultValue` of "Site footer". Measured 2026-08-26 across all five
-// render tiers: the reference host, TypeScript, Python and Rust all resolve an
-// unwritten `State` to its declared default and emit
-// `aria-label="Site footer"`; this host emits NO `aria-label` at all.
+// What it used to record: `a11y-wrapper-state-bound` carries its accessible name
+// as a `Binding.State` with a declared `defaultValue` of "Site footer", and all
+// five render tiers were measured — the reference host, TypeScript, Python and
+// Rust emitted `aria-label="Site footer"`, and this host emitted no `aria-label`
+// at all. That was never an a11y defect: `resolveBinding` declined the `State`
+// default GENERALLY and the name slot merely inherited it.
 //
-// It is NOT an a11y defect, which is why it is pinned here rather than fixed.
-// `resolveBinding` in bindings.go declines the `State` default GENERALLY — its
-// comment records the choice ("State keeps the go host's established
-// em-dash-until-resolved posture") and the a11y name slot merely inherits it.
-// Changing it would move every bound text slot this host renders, which is a
-// binding-resolution parity question rather than an accessibility one.
+// Why it flipped, stated here because the old note argued the other way and a
+// reader deserves the reason rather than a silent inversion. Not the four-to-one
+// count — that measures what implementers find natural, not what is right. Two
+// things settled it. First, the carve-out was inconsistent with this host's OWN
+// charter: Phase 651's completeness posture already resolved
+// `Selection.defaultValue` and `Filter.defaultValue` at render time, so one
+// function resolved two of three declared defaults and skipped the third. Second,
+// the specification was silent on `State` resolution while normatively fixing the
+// behaviour of its own declared mirror, `Binding.Filter.defaultValue` (§1.1) — so
+// NEITHER posture was non-conformant, and that was the actual defect. It is now
+// stated on the original as WIRE_FORMAT §24, so this leg pins a rule rather
+// than a local preference.
 //
-// Asserted in BOTH directions on purpose. Losing `role` / `aria-live` here
-// would be a regression; gaining `aria-label` would mean the host-wide posture
-// changed and this note has gone stale. Either way the leg goes red and
-// somebody reads this comment, which is the whole point of writing a divergence
-// down rather than leaving the slot unasserted.
-func TestA11yStateBoundNameIsThisHostsDeclaredDivergence(t *testing.T) {
+// The pin stays two-sided, in the shape the rule has rather than the shape the
+// divergence had: the name must now be PRESENT and correct, and the rest of the
+// trait must still land. A host that regressed `resolveBinding` would lose the
+// first; one that broke the trait projection would lose the second; and the two
+// have different repairs, which is why they are not one assertion.
+func TestA11yStateBoundNameResolvesLikeEveryOtherTier(t *testing.T) {
 	node := loadFixtureNode(t, "a11y-wrapper-state-bound")
 	wrapper := wrapperTag(RenderHTML(node, nil))
 
-	if strings.Contains(wrapper, "aria-label") {
-		t.Errorf("this host now resolves a State-bound accessible name — the recorded "+
-			"divergence is stale and the posture note in bindings.go needs revisiting:\n%s", wrapper)
+	if !strings.Contains(wrapper, `aria-label="Site footer"`) {
+		t.Errorf("an unwritten State-bound accessible name must resolve to its declared "+
+			"default (WIRE_FORMAT §24, operator ruling 2026-08-26):\n%s", wrapper)
 	}
-	// The rest of the trait is unaffected by the posture and must still land.
+	// The rest of the trait was never affected by the posture and must still land.
 	for _, want := range []string{`role="doc-pageFooter"`, `aria-live="off"`} {
 		if !strings.Contains(wrapper, want) {
 			t.Errorf("wrapper missing %q:\n%s", want, wrapper)

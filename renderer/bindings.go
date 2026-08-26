@@ -51,8 +51,9 @@ func renderText(text wire.Value, sources BindingSources) string {
 
 // resolveBinding resolves a decoded binding to its value, or nil when not
 // resolvable: Static → its embedded value; every keyed case → the host sources
-// map when the identity key is present; an unwritten Selection / Filter → its
-// declared defaultValue (Phase 629); otherwise nil (the "NotResolved" branch).
+// map when the identity key is present; an unwritten Selection / Filter / State
+// → its declared defaultValue (Phase 629; State added by fuaran#1064);
+// otherwise nil (the "NotResolved" branch).
 func resolveBinding(binding wire.Value, sources BindingSources) wire.Value {
 	obj, ok := binding.(wire.Obj)
 	if !ok {
@@ -69,8 +70,30 @@ func resolveBinding(binding wire.Value, sources BindingSources) wire.Value {
 	// Phase 629 — an unwritten Selection / Filter resolves to its declared
 	// defaultValue (resolution-time defaulting IS the preselected mechanism, so
 	// preselected master-detail renders resolved without any store seeding).
-	// State keeps the go host's established em-dash-until-resolved posture.
-	if obj.Tag == "Selection" || obj.Tag == "Filter" {
+	//
+	// fuaran#1064 — STATE JOINS THEM, by operator ruling (2026-08-26). This arm
+	// used to read "State keeps the go host's established em-dash-until-resolved
+	// posture", and that carve-out was the one place this host rendered
+	// differently from every other tier: `a11y-wrapper-state-bound` carries its
+	// accessible name as a `Binding.State` with a declared default, and four
+	// render tiers emitted `aria-label="Site footer"` while this one emitted no
+	// `aria-label` at all.
+	//
+	// What settled it was not the four-to-one count — that is evidence about what
+	// implementers find natural, not about what is right — but that the carve-out
+	// was inconsistent with THIS host's own charter: Phase 651's completeness
+	// posture already resolves the two sibling defaults above at render time, so
+	// one function was resolving two of three declared defaults and skipping the
+	// third. The specification was silent on `State` resolution while normatively
+	// fixing the behaviour of its own declared mirror, `Binding.Filter.defaultValue`
+	// (§1.1) — so neither posture was non-conformant, which was the actual defect.
+	// WIRE_FORMAT §24 now states the rule on the original.
+	//
+	// A declared default is AUTHORED DATA, not store state, so resolving it costs
+	// this host no session state and does not touch the library-not-a-runtime line:
+	// the rule is correct-before-hydration, and hydration may re-resolve but never
+	// first-fill.
+	if obj.Tag == "Selection" || obj.Tag == "Filter" || obj.Tag == "State" {
 		if dv, ok := obj.Fields["defaultValue"]; ok {
 			return dv
 		}

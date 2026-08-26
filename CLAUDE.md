@@ -20,7 +20,8 @@ reconnect-replay).
 primarily a **headless backend/orchestrator host** — a Go service reads, writes,
 and *drives* wire trees. Post-651 charter wording (operator decision 2026-07-22):
 **go emits complete static output** — its static-HTML and islands emission
-resolve compute (`Transform` bindings, `Selection.defaultValue`) at render time
+resolve compute (`Transform` bindings, and the declared defaults of
+`Selection` / `Filter` / `State` — the last added 2026-08-26, see below) at render time
 (Phase 651), so a page's computed values are correct before any JS runs (and
 genuinely no-JS surfaces — email digests, ops reports — are complete). A
 data-bound `DataGrid` renders its **rows** on the same reasoning (the
@@ -205,6 +206,19 @@ resolve compute at render time (Phase 651), so computed values are correct befor
 any JS runs — and *drives* wire trees that a conformant client then makes live.
 Live interactivity stays client-side; the Go program authors no client code and
 holds no per-user UI state between calls (`render(tree, data) → bytes` is pure).
+
+**Declared defaults resolve here, all three of them (2026-08-26).** A `Binding`
+carrying a `defaultValue` — `Selection`, `Filter`, and since this date `State` —
+resolves to that value when its slot is unwritten, per `WIRE_FORMAT.md` §24. The
+`State` arm was previously carved out under an "unresolved until written" posture,
+which was the one place this host rendered differently from every other tier; the
+carve-out did not survive contact with the completeness posture above, since one
+function was resolving two of three declared defaults and skipping the third. It
+does **not** move the library-not-a-runtime line: a declared default is authored
+data that travels in the document, not session state, so resolving it costs this
+host no state at all. The order is normative and unchanged — host sources first,
+the declared default only when the slot is unwritten, so hydration re-resolves and
+never first-fills.
 Two client tiers suit a Go server especially well and keep the browser client
 generic:
 

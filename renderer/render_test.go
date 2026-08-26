@@ -105,15 +105,60 @@ func TestModalClosedCarriesHiddenAttribute(t *testing.T) {
 	}
 }
 
+// TestUnresolvedBindingPlaceholdersAndSourcesResolve pins the em-dash placeholder
+// for a binding that genuinely CANNOT resolve, and the host-source path that
+// resolves one that can.
+//
+// The fixture carries a State with NO defaultValue, and that is the whole point of
+// the change fuaran#1064 made here. Until then this test used a State carrying
+// `defaultValue: 0` and asserted the em-dash — which pinned the carve-out, not the
+// placeholder. Under WIRE_FORMAT §24 a declared default RESOLVES (see
+// TestStateDefaultResolvesAtTheRenderFloor below), so a defaulted State is no
+// longer an example of "unresolved" and asserting the placeholder on one would be
+// asserting the opposite of the rule. Absence of a default is what "unresolved"
+// means now, and that is what this pins.
 func TestUnresolvedBindingPlaceholdersAndSourcesResolve(t *testing.T) {
-	tree := `{"id":"m1","kind":{"$type":"Metric","label":"Users","value":{"$type":"State","defaultValue":0,"key":"users"}}}`
+	tree := `{"id":"m1","kind":{"$type":"Metric","label":"Users","value":{"$type":"State","key":"users"}}}`
 	bare := RenderHTML(mustDecode(t, tree), nil)
 	if !strings.Contains(bare, `<div class="fuaran-metric-value">—</div>`) {
-		t.Errorf("unresolved binding must placeholder to the em-dash:\n%s", bare)
+		t.Errorf("a State with no declared default must placeholder to the em-dash:\n%s", bare)
 	}
 	resolved := RenderHTML(mustDecode(t, tree), BindingSources{"users": wire.Int(42)})
 	if !strings.Contains(resolved, `<div class="fuaran-metric-value">42</div>`) {
 		t.Errorf("host source did not resolve:\n%s", resolved)
+	}
+}
+
+// TestStateDefaultResolvesAtTheRenderFloor pins WIRE_FORMAT §24 — the operator
+// ruling of 2026-08-26 (fuaran#1064), which closed the one place this host rendered
+// differently from every other tier.
+//
+// Three legs, because the rule has three edges and a single assertion would pin the
+// easy one:
+//
+//   - a declared default RESOLVES with no sources at all — the rule itself, and the
+//     leg that would have failed before the ruling;
+//   - a host source still WINS over the default — hydration re-resolves, it does not
+//     lose to authored data, and a naive implementation that checked the default
+//     before the sources map would pass leg 1 and silently break every live State;
+//   - no default and no source still placeholders — the ruling widened what resolves,
+//     it did not abolish the unresolved branch.
+func TestStateDefaultResolvesAtTheRenderFloor(t *testing.T) {
+	withDefault := `{"id":"m1","kind":{"$type":"Metric","label":"Users","value":{"$type":"State","defaultValue":7,"key":"users"}}}`
+
+	bare := RenderHTML(mustDecode(t, withDefault), nil)
+	if !strings.Contains(bare, `<div class="fuaran-metric-value">7</div>`) {
+		t.Errorf("an unwritten State must resolve to its declared default (WIRE_FORMAT §24):\n%s", bare)
+	}
+
+	written := RenderHTML(mustDecode(t, withDefault), BindingSources{"users": wire.Int(42)})
+	if !strings.Contains(written, `<div class="fuaran-metric-value">42</div>`) {
+		t.Errorf("a written State must beat its declared default — hydration re-resolves:\n%s", written)
+	}
+
+	noDefault := `{"id":"m1","kind":{"$type":"Metric","label":"Users","value":{"$type":"State","key":"users"}}}`
+	if html := RenderHTML(mustDecode(t, noDefault), nil); !strings.Contains(html, `<div class="fuaran-metric-value">—</div>`) {
+		t.Errorf("a State with neither a default nor a source is still unresolved:\n%s", html)
 	}
 }
 
