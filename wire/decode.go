@@ -408,6 +408,7 @@ var (
 	dateVariantCases       = newCaseSet("Date", "Time", "DateTime")
 	styleRoleCases         = newCaseSet("None", "Eyebrow", "Data", "Lede", "Caption")
 	fontVoiceCases         = newCaseSet("Default", "Display", "Structural")
+	liveRegionCases        = newCaseSet("polite", "assertive", "off")
 	imageVariantCases      = newCaseSet("Default", "Avatar", "Rounded")
 	linkProtectionCases    = newCaseSet("email") // Phase 812 — anti-scraper render strategy
 	scrollOrientationCases = newCaseSet("Vertical", "Horizontal", "Both")
@@ -2864,6 +2865,38 @@ func decodeStyle(w *walkState, raw any, path string) Obj {
 	return Obj{Fields: fields}
 }
 
+// decodeAccessibility decodes the §3.1 Accessibility trait. It used to be
+// `fromJSON` — a structural pass-through, so every malformed payload decoded
+// with its value preserved verbatim and this host answered 0 of the corpus's
+// six a11y reject vectors. `label` / `hidden` are ordinary `Binding` slots
+// (the 2026-08-25 §3.1 ruling), so they route through the typed binding
+// decoders and the §3.6 bare-scalar coercion applies to their SHAPE while the
+// slot's own type still governs the value; `liveRegion` is a closed token set;
+// `role` is open to any role NAME but not to any VALUE.
+func decodeAccessibility(w *walkState, raw any, path string) Obj {
+	obj := expectObject(raw, path)
+	fields := make(map[string]Value)
+	if raw, ok := obj["label"]; ok {
+		fields["label"] = decodeBindingString(w, raw, path+".label")
+	}
+	if raw, ok := obj["labelledBy"]; ok {
+		fields["labelledBy"] = Str(expectString(raw, path+".labelledBy"))
+	}
+	if raw, ok := obj["describedBy"]; ok {
+		fields["describedBy"] = Str(expectString(raw, path+".describedBy"))
+	}
+	if raw, ok := obj["role"]; ok {
+		fields["role"] = Str(expectString(raw, path+".role"))
+	}
+	if raw, ok := obj["liveRegion"]; ok {
+		fields["liveRegion"] = Str(enumStr(raw, path+".liveRegion", liveRegionCases, "liveRegion", noAliases))
+	}
+	if raw, ok := obj["hidden"]; ok {
+		fields["hidden"] = decodeBindingBool(w, raw, path+".hidden")
+	}
+	return Obj{Fields: fields}
+}
+
 func decodeState(w *walkState, raw any, path string) Obj {
 	obj := expectObject(raw, path)
 	fields := make(map[string]Value)
@@ -2920,7 +2953,7 @@ func decodeNodeValue(w *walkState, raw any, path string) Node {
 		}
 	}
 	if raw, ok := obj["accessibility"]; ok {
-		extras["accessibility"] = fromJSON(raw)
+		extras["accessibility"] = decodeAccessibility(w, raw, path+".accessibility")
 	}
 	return Node{ID: id, Kind: kind, Extras: extras}
 }
