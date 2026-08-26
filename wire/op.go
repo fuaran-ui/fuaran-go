@@ -127,6 +127,44 @@ func init() {
 	}
 }
 
+// opRetiredFields — the RETIRED positional slot per op (Phase 687, closing the
+// window Phase 681 opened).
+//
+// Phase 681 removed the field and every host then ACCEPTED AND IGNORED it so
+// each could adopt independently. Silence was the whole mechanism: the loop in
+// decodeOpValue walks the op's schema and never looks at anything else, so *not
+// reading it* was the tolerance. That is why closing the window cannot be done
+// by deletion — there was never a read to delete, and the field would go on
+// decoding silently forever. The close is an explicit refusal BY NAME, on the
+// checkNearMisses pattern and for its reason: a key that no-ops is worse than
+// one that fails, because the op decodes, applies, and puts the node somewhere
+// other than where the ordinal asked.
+var opRetiredFields = map[string]string{
+	"InsertChild": "position",
+	"MoveNode":    "newPosition",
+}
+
+// checkRetiredPositional runs BEFORE the schema loop, mirroring the FormField
+// near-miss ordering, so an op carrying both a retired ordinal and some other
+// defect names the ordinal rather than reporting a defect the author would fix
+// without ever learning the field is gone. The ordering is identical in all
+// five hosts, so which defect surfaces first is deterministic.
+func checkRetiredPositional(obj map[string]any, tag, path string) {
+	name, governed := opRetiredFields[tag]
+	if !governed {
+		return
+	}
+	if _, present := obj[name]; present {
+		failExpecting(
+			CodeWrongType,
+			path+"."+name,
+			"'"+name+"' was removed from the wire format — "+tag+
+				" appends, and order is stated by naming ids with ReorderChildren",
+			"a Batch of the structural op followed by ReorderChildren",
+		)
+	}
+}
+
 func decodeOpValue(w *walkState, raw any, path string) Obj {
 	// The op axis, counted separately from the node axis and held to the same
 	// ceiling — §21.5's note for implementers, since Batch makes this function
@@ -136,6 +174,7 @@ func decodeOpValue(w *walkState, raw any, path string) Obj {
 
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, opCases, CodeUnknownDUCase)
+	checkRetiredPositional(obj, tag, path)
 	fields := make(map[string]Value)
 	for _, fs := range opSchemas[tag] {
 		if raw, ok := obj[fs.name]; ok {
