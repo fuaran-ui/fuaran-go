@@ -601,6 +601,15 @@ func floatStatic(w *walkState, raw any, path string) Value {
 	return expectNumber(w, raw, path)
 }
 
+// intStatic — an integer literal, or the Static envelope around one. The
+// deliberate asymmetry with floatStatic above: expectInt gates on
+// isIntegerLiteral and never reaches nonFiniteSentinel, so an integer slot has no
+// non-finite form at all. §7 confines the sentinels to a float slot, and the
+// published schema widened only there for the same reason.
+func intStatic(w *walkState, raw any, path string) Value {
+	return Int(expectInt(raw, path))
+}
+
 func boolStatic(w *walkState, raw any, path string) Value {
 	return Bool(expectBool(raw, path))
 }
@@ -1028,6 +1037,17 @@ func decodeBinding(w *walkState, raw any, path string) Value {
 
 func decodeBindingFloat(w *walkState, raw any, path string) Value {
 	return decodeBindingWith(w, raw, path, floatStatic)
+}
+
+// decodeBindingInt — the INTEGER-slot Binding, and the reason it is not
+// decodeBindingFloat with a narrower name. §7's two accept sets differ: a float
+// slot takes a JSON number OR one of the three non-finite sentinel spellings, an
+// integer slot takes an integer literal and nothing else. `intStatic` therefore
+// routes to expectInt, which gates on isIntegerLiteral and never consults
+// nonFiniteSentinel — so `"NaN"` at Tabs.activeIndex is WRONG_TYPE, which is what
+// `reject-binding-int-sentinel-string` pins.
+func decodeBindingInt(w *walkState, raw any, path string) Value {
+	return decodeBindingWith(w, raw, path, intStatic)
 }
 
 func decodeBindingBool(w *walkState, raw any, path string) Value {
@@ -2703,6 +2723,27 @@ func init() {
 			s.opt("contentHash", decodeJSONValue)
 			s.opt("exposedNodeIds", decodeJSONValue)
 			return s.build("Custom")
+		},
+		// Tabs / Stepper — typed for ONE slot each, and structural for the
+		// rest (`build` preserves every unconsumed key, so the round-trip
+		// bytes are unchanged). Both were wholly structural before Phase 1064,
+		// which is why this host answered `reject-binding-int-bool` and
+		// `reject-binding-int-sentinel-string` by ACCEPTING them while it
+		// refused every float vector: the typed float parsers existed and were
+		// routed, and these two kinds had no typed decoder to route anything
+		// through. The Binding<int> slot is the whole of what is typed here —
+		// making `activeStep` REQUIRED (as the reference host does) is a
+		// MISSING_FIELD parity question with no fixture behind it, and is
+		// deliberately not smuggled in alongside.
+		"Tabs": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
+			s.opt("activeIndex", decodeBindingInt)
+			return s.build("Tabs")
+		},
+		"Stepper": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
+			s.opt("activeStep", decodeBindingInt)
+			return s.build("Stepper")
 		},
 		// State-bound conditional child. Duplicate match values are NOT a
 		// decode error (first-match-wins; the validator flags them).
