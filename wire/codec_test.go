@@ -89,6 +89,69 @@ func TestSmallNodeRoundTrip(t *testing.T) {
 	}
 }
 
+// Phase 867 — `Metric.trendPolarity`, and specifically the three claims that a
+// corpus round-trip alone CANNOT make about it.
+//
+// This host's spec builder preserves unconsumed keys structurally, so
+// `metric-inverted-polarity.json` round-tripped byte-for-byte here before a line
+// of this phase was written — the fixture passed while the field was modelled
+// nowhere. A green round-trip is therefore evidence about the ENCODER and says
+// nothing about whether the slot is understood. What follows is the part the
+// fixture cannot reach: that the vocabulary is CLOSED, that the default is
+// dropped, and that a declared non-default survives as a typed value.
+func TestMetricTrendPolarity(t *testing.T) {
+	const declared = `{"id":"m","kind":{"$type":"Metric","label":"Avg wait","trend":{"$type":"Static","value":-0.0734},"trendPolarity":"LowerIsBetter","value":{"$type":"Static","value":80}}}`
+
+	node, err := DecodeNode(declared)
+	if err != nil {
+		t.Fatalf("DecodeNode: %v", err)
+	}
+	out, err := EncodeNode(node)
+	if err != nil {
+		t.Fatalf("EncodeNode: %v", err)
+	}
+	if out != declared {
+		t.Errorf("declared polarity did not round-trip:\n got %s\nwant %s", out, declared)
+	}
+	// The typed claim the round-trip cannot make: it is a decoded Str in the
+	// slot, not an untyped passthrough of whatever bytes arrived.
+	if got, ok := node.Kind.Fields["trendPolarity"].(Str); !ok || string(got) != "LowerIsBetter" {
+		t.Errorf("trendPolarity = %#v, want Str(\"LowerIsBetter\")", node.Kind.Fields["trendPolarity"])
+	}
+
+	// §3.6.1 clause 4 — an absent slot IS HigherIsBetter, so an explicit default
+	// normalises away rather than riding to the wire as a redundant byte.
+	const explicitDefault = `{"id":"m","kind":{"$type":"Metric","label":"L","trendPolarity":"HigherIsBetter","value":{"$type":"Static","value":1}}}`
+	const omitted = `{"id":"m","kind":{"$type":"Metric","label":"L","value":{"$type":"Static","value":1}}}`
+	node, err = DecodeNode(explicitDefault)
+	if err != nil {
+		t.Fatalf("DecodeNode (explicit default): %v", err)
+	}
+	if out, err = EncodeNode(node); err != nil {
+		t.Fatalf("EncodeNode: %v", err)
+	} else if out != omitted {
+		t.Errorf("explicit default did not normalise away:\n got %s\nwant %s", out, omitted)
+	}
+
+	// The vocabulary is CLOSED. `Neutral` is the reserved case and is refused
+	// exactly like a name nobody has ever proposed — pinned by name, because the
+	// day it is admitted this line is what says the admission was deliberate.
+	for _, bad := range []string{"Neutral", "lowerisbetter", "Inverted"} {
+		input := `{"id":"m","kind":{"$type":"Metric","label":"L","trendPolarity":"` + bad + `","value":{"$type":"Static","value":1}}}`
+		_, err := DecodeNode(input)
+		var derr *DecodeError
+		if !errors.As(err, &derr) {
+			t.Fatalf("trendPolarity %q: expected a *DecodeError, got %v", bad, err)
+		}
+		if derr.Code != CodeUnknownDUCase {
+			t.Errorf("trendPolarity %q: code = %s, want %s", bad, derr.Code, CodeUnknownDUCase)
+		}
+		if want := "$.kind.trendPolarity"; !strings.HasPrefix(derr.Path, want) {
+			t.Errorf("trendPolarity %q: path = %q, want prefix %q", bad, derr.Path, want)
+		}
+	}
+}
+
 func TestBatchOpRoundTrip(t *testing.T) {
 	in := `{"$type":"Batch","ops":[{"$type":"RemoveNode","target":"m1"},{"$type":"UpdateProp","path":"Label","target":"m2","value":"New"}]}`
 	op, err := DecodeOp(in)

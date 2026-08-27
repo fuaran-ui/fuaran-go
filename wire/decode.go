@@ -421,6 +421,12 @@ var (
 	// Phase 801 — the closed two-value sort direction on staticRows.defaultSort.
 	// Lower-case on the wire, unlike most enums here.
 	sortDirectionCases = newCaseSet("asc", "desc")
+	// Phase 867 — Metric.trendPolarity: which way the measured quantity IMPROVES.
+	// TWO cases, and the absence of a third is deliberate: `Neutral` is RESERVED
+	// and is not admitted, which is the whole reason the slot is an enum rather
+	// than an `inverted: bool` — admitting it later is then a bare-string
+	// addition here, not a type replacement across every host.
+	trendPolarityCases = newCaseSet("HigherIsBetter", "LowerIsBetter")
 
 	// Drawing (Phase 524) — the closed Shape / CurveCommand DUs. An unrecognised
 	// discriminator is UNKNOWN_DU_CASE (the typed-surface default-deny).
@@ -2367,6 +2373,9 @@ func isFalseValue(v Value) bool     { return isBool(v, false) }
 func isTrueValue(v Value) bool      { return isBool(v, true) }
 func isNoneCellFormat(v Value) bool { return isTagOnly(v, "None") }
 
+// Phase 867 — §3.6.1 clause 4: an absent `trendPolarity` IS `HigherIsBetter`.
+func isHigherIsBetter(v Value) bool { return isStr(v, "HigherIsBetter") }
+
 // kindBuilders holds the typed per-kind decoders. Kinds absent here (and from
 // the dedicated Box / legacy handlers) decode structurally.
 //
@@ -2441,6 +2450,18 @@ func init() {
 			s.optDrop("emphasis", decodeEmphasisEnum, isNormalEmphasis)
 			s.opt("trend", decodeBindingFloat)
 			s.opt("trendFormat", decodeCellFormat)
+			// Phase 867 — the direction-of-good declaration. Omitted-when-default
+			// on BOTH boundaries (§3.6.1 clause 4: an absent slot IS
+			// `HigherIsBetter`), so an explicitly-spelled default normalises away
+			// and a tree that never mentions polarity keeps its bytes.
+			//
+			// It is decoded rather than left to `build`'s structural passthrough,
+			// and that is the point of this arm: passthrough round-trips the key
+			// byte-for-byte while modelling nothing, so a misspelt case would ride
+			// through to the renderer and be read as an unrecognised polarity —
+			// green corpus, wrong tree. The closed set refuses it at the boundary
+			// the way every other bare enum here is refused.
+			s.optDrop("trendPolarity", enumDecoder(trendPolarityCases, "trendPolarity", noAliases), isHigherIsBetter)
 			s.opt("icon", decodeString)
 			s.opt("subtext", decodeTextSource)
 			return s.build("Metric")

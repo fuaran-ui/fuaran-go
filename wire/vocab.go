@@ -37,6 +37,11 @@ func HeadingVariants() []string { return append([]string(nil), headingVariantCas
 // IconSizes returns the IconSize bare-enum vocabulary (Phase 821).
 func IconSizes() []string { return append([]string(nil), iconSizeCases.names...) }
 
+// TrendPolarities returns the TrendPolarity bare-enum vocabulary (Phase 867) —
+// the Metric slot declaring which way the measured quantity IMPROVES. Two cases;
+// `Neutral` is reserved and deliberately not among them.
+func TrendPolarities() []string { return append([]string(nil), trendPolarityCases.names...) }
+
 // RequiredKindFields returns, per kind discriminator, the wire fields the
 // contract requires (the same required set the decoder enforces on wire
 // input). The validator uses it to catch a CONSTRUCTED tree that would fail
