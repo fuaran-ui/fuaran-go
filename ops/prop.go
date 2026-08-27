@@ -30,6 +30,7 @@ var (
 	orientationSet    = nameSet(wire.Orientations())
 	badgeVariantSet   = nameSet(wire.BadgeVariants())
 	headingVariantSet = nameSet(wire.HeadingVariants())
+	trendPolaritySet  = nameSet(wire.TrendPolarities())
 
 	columnWidthSet = map[string]bool{"Auto": true, "Fixed": true, "Flex": true}
 )
@@ -163,6 +164,7 @@ var (
 	coerceOrientation    = coerceEnum(orientationSet, wire.Orientations())
 	coerceBadgeVariant   = coerceEnum(badgeVariantSet, wire.BadgeVariants())
 	coerceHeadingVariant = coerceEnum(headingVariantSet, wire.HeadingVariants())
+	coerceTrendPolarity  = coerceEnum(trendPolaritySet, wire.TrendPolarities())
 )
 
 // propFields maps (PascalCase op path) -> (camelCase wire key, coercer) per
@@ -184,8 +186,14 @@ var propFields = map[string]map[string]fieldEntry{
 		"Emphasis":    {wireKey: "emphasis", coerce: coerceEmphasisEnum},
 		"Trend":       {wireKey: "trend", coerce: coerceBindingNumber},
 		"TrendFormat": {wireKey: "trendFormat", coerce: coerceCellFormat},
-		"Icon":        {wireKey: "icon", coerce: coerceString},
-		"Subtext":     {wireKey: "subtext", coerce: coerceTextSource},
+		// Phase 867 — the direction-of-good declaration, settable through the
+		// same UpdateProp surface the reference engine exposes it on. Closed
+		// vocabulary: an unrecognised polarity is refused here rather than
+		// written into the tree, which is what keeps rejection parity with the
+		// reference's `tryTrendPolarity` coercion.
+		"TrendPolarity": {wireKey: "trendPolarity", coerce: coerceTrendPolarity},
+		"Icon":          {wireKey: "icon", coerce: coerceString},
+		"Subtext":       {wireKey: "subtext", coerce: coerceTextSource},
 	},
 	"Heading": {
 		"Level":   {wireKey: "level", coerce: coerceInt},

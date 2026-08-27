@@ -149,6 +149,47 @@ func TestBatchAbortsAllOrNothing(t *testing.T) {
 	}
 }
 
+// Phase 867 — `UpdateProp Metric.TrendPolarity`, both arms.
+//
+// The reference engine exposes the slot on its UpdateProp surface with a closed
+// coercion (`tryTrendPolarity`), so this host owes both halves of that: the legal
+// case is written, and an illegal one is REFUSED rather than written. Refusal is
+// the half worth a test — a coercer that accepted any string would pass every
+// round-trip in the suite while letting an op put a word the renderer cannot read
+// into the one slot whose whole job is to be readable.
+func TestMetricTrendPolarityProp(t *testing.T) {
+	metric := func(polarity string) string {
+		slot := ""
+		if polarity != "" {
+			slot = `"trendPolarity":"` + polarity + `",`
+		}
+		return `{"id":"m","kind":{"$type":"Metric","label":"Avg wait","trend":{"$type":"Static","value":-0.0734},` +
+			slot + `"value":{"$type":"Static","value":80}}}`
+	}
+	set := func(v wire.Value) wire.Obj {
+		return wire.Obj{Tag: "UpdateProp", Fields: map[string]wire.Value{
+			"path": wire.Str("TrendPolarity"), "target": wire.Str("m"), "value": v,
+		}}
+	}
+
+	after, err := Apply(set(wire.Str("LowerIsBetter")), mustDecode(t, metric("")))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got, want := mustEncode(t, after), metric("LowerIsBetter"); got != want {
+		t.Errorf("polarity not set:\n got %s\nwant %s", got, want)
+	}
+
+	// `Neutral` is the reserved case; the other two are a wrong-cased spelling
+	// and a plausible synonym. All three are outside the closed set, so all three
+	// are a kind mismatch — the same class the reference's coercion returns.
+	for _, bad := range []wire.Value{wire.Str("Neutral"), wire.Str("lowerIsBetter"), wire.Int(-1)} {
+		if got := applyErrCode(t, set(bad), mustDecode(t, metric(""))); got != CodeKindMismatch {
+			t.Errorf("TrendPolarity = %v: code = %s, want KindMismatch", bad, got)
+		}
+	}
+}
+
 func TestNestedTabHeaderLabel(t *testing.T) {
 	tabs := func(second string) string {
 		return `{"id":"analysis-tabs","kind":{"$type":"Tabs","children":[` +
