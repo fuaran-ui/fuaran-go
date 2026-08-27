@@ -10,10 +10,15 @@
     "FUARAN-EMPTY-ID",
     "FUARAN069",
     "FUARAN082",
-    "FUARAN083"
+    "FUARAN083",
+    "FUARAN100"
   ],
   "abstentionDefault": "Not ported. This is an honest 'not yet', not a principled exclusion: the set above is whichever rules this host happened to need, and an unported rule is a gap.",
-  "abstained": {},
+  "abstained": {
+    "FUARAN099": "Requires a projection this host's walk does not build. The rule stands on two tree-wide facts — which state keys the form's own fields OWN, and whether anything ANYWHERE in the tree writes the compared key — and this validator is a per-node structural walk with no write-key projection and no traversal into a binding's interior. Its severity makes a partial port worse than none: FUARAN099 is the family's only Error, so an under-informed implementation would REFUSE a correct document. Reachable once a tree-wide write projection exists here, which is the same prerequisite FUARAN101 and FUARAN105 name.",
+    "FUARAN101": "Same missing projection as FUARAN099, reached from the other side: the rule compares a rule's literal operand against what the field's CONTROL already declares as its bound, which means reading into the control's value binding and deciding whether two sources for one bound can disagree. This walk does not descend a binding's interior, so the comparison has no operands to make. Abstained rather than approximated — a version that fired on the presence of a literal alone would report every legitimate literal compare in the corpus.",
+    "FUARAN105": "Abstained, on the same grounds the reference's TypeScript tier abstained and for the same reason the rule is worth having. FUARAN105 reasons from the ABSENCE of a writer: it fires where a Transform's own source is a State key that declares no default AND nothing in the tree writes it. This host's walk has neither half — it does not descend into a Binding to reach a Transform's source slot, and it computes no tree-wide write-key or opacity projection. That is not merely under-reporting. With no write projection, the absence test is trivially true everywhere, so a partial port would fire on every tree that legitimately writes the key — turning a Warning about a real defect into noise on correct documents. Recorded here rather than left to `abstentionDefault` because the phase that shipped the code asked each host for a stance, and silence is the one answer that is not one."
+  },
   "otherFamilies": {
     "ast-walker": [
       "FUARAN050"
@@ -21,5 +26,5 @@
   },
   "otherFamiliesNote": "Codes this host raises that belong to the reference's BUILD-TIME source-AST walker, not the pre-emit family enumerated in the vocabulary. Recorded so the gate reads them as a different family rather than as a code this host invented. That second family is not yet enumerated; until it is, this list is a declaration of intent, not something the gate can verify.",
   "machineChecked": true,
-  "machineCheckedNote": "The FUARAN code is a first-class field on `Finding`, so `implemented` above is checked against what the validator actually raises: `validator/coverage_test.go` fails on a code raised but not declared, a code declared but not raised, and a code this host invented that is absent from the canonical vocabulary and not declared as another family. Recovered by source scan of `Code:` positions rather than by running the validator, because running it would only find the rules some fixture happens to trigger — and the rules no fixture reaches are precisely the ones a coverage check must not miss."
+  "machineCheckedNote": "The FUARAN code is a first-class field on `Finding`, so `implemented` above is checked against what the validator actually raises: `validator/coverage_test.go` fails on a code raised but not declared, a code declared but not raised, a code this host invented that is absent from the canonical vocabulary and not declared as another family, and — since the Phase 869 adoption — an `abstained` entry naming a code that is not in the vocabulary or that is also claimed as implemented. Recovered by source scan of `Code:` positions rather than by running the validator, because running it would only find the rules some fixture happens to trigger — and the rules no fixture reaches are precisely the ones a coverage check must not miss."
 }

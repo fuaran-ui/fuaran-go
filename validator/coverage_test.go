@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -110,8 +111,10 @@ func TestEveryDeclaredCodeIsRaised(t *testing.T) {
 	}
 }
 
-// A code this host invented would otherwise look like coverage.
-func TestRaisedCodesAreInTheCanonicalVocabulary(t *testing.T) {
+// canonicalVocabulary is the shared defect vocabulary, located by walking up to
+// the corpus clone. Skips when the corpus is absent (standalone checkout).
+func canonicalVocabulary(t *testing.T) map[string]bool {
+	t.Helper()
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -145,6 +148,52 @@ func TestRaisedCodesAreInTheCanonicalVocabulary(t *testing.T) {
 	for _, e := range vocab.Codes {
 		known[e.Code] = true
 	}
+	return known
+}
+
+// An ABSTENTION is a claim too, and until Phase 869 nothing checked it. A
+// declaration abstaining from a code the vocabulary does not carry names a rule
+// nobody has to write; one abstaining from a code this host also implements is
+// simply two answers to one question. Both read as coverage discipline while
+// being neither, which is the exact failure mode the implemented-side checks
+// above exist to stop — measured on the other side of the ledger.
+func TestAbstentionsAreRealAndUnclaimed(t *testing.T) {
+	known := canonicalVocabulary(t)
+	d := declaration(t)
+	implemented := map[string]bool{}
+	for _, c := range d.Implemented {
+		implemented[c] = true
+	}
+	var phantom, contradicted []string
+	for code := range d.Abstained {
+		if !known[code] {
+			phantom = append(phantom, code)
+		}
+		if implemented[code] {
+			contradicted = append(contradicted, code)
+		}
+	}
+	sort.Strings(phantom)
+	sort.Strings(contradicted)
+	if len(phantom) > 0 {
+		t.Errorf("abstained from %v, which the canonical vocabulary does not carry — "+
+			"an abstention from a rule that does not exist is not coverage information", phantom)
+	}
+	if len(contradicted) > 0 {
+		t.Errorf("%v are declared BOTH implemented and abstained — the declaration "+
+			"answers one question twice", contradicted)
+	}
+	for code, reason := range d.Abstained {
+		if strings.TrimSpace(reason) == "" {
+			t.Errorf("abstention from %s carries no reason; a bare abstention is the "+
+				"silent divergence the declaration exists to prevent", code)
+		}
+	}
+}
+
+// A code this host invented would otherwise look like coverage.
+func TestRaisedCodesAreInTheCanonicalVocabulary(t *testing.T) {
+	known := canonicalVocabulary(t)
 	// Other-family codes are declared as belonging to a family the vocabulary does
 	// not enumerate, so they are exempt by declaration rather than by omission.
 	exempt := map[string]bool{}

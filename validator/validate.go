@@ -100,6 +100,7 @@ func walk(node wire.Node, path string, findings *[]Finding, seen map[string]bool
 	}
 
 	checkInertControl(node, node.Kind, kindPath, findings)
+	checkFieldRules(node, node.Kind, kindPath, findings)
 
 	for _, entry := range childNodes(node.Kind, kindPath) {
 		walk(entry.node, entry.path, findings, seen)
@@ -262,6 +263,102 @@ func inert(kind wire.Obj, handler, slot string) bool {
 		return false
 	}
 	return !isWriteBackTarget(kind.Fields[slot])
+}
+
+// ── FUARAN100 — the unhonourable rule slot (Phase 864 field-rule vocabulary) ──
+
+// ruleSlotHonour records, per form-control discriminator, which FieldRule slots
+// that control can honour. It mirrors the reference host's table case-for-case.
+//
+// `compare` is absent on purpose, in both hosts: it compares the field's VALUE,
+// which every control has, so there is no control that cannot honour it. The
+// name in the map key is the WIRE discriminator, because that is the name a
+// message shows the author.
+//
+// This table is the whole reason this rule is portable here where its two
+// siblings are not. FUARAN099 and FUARAN101 reason about what the rest of the
+// TREE does — which keys a form owns, what writes them — and this host's walk
+// holds no such projection (see validator-coverage.json). FUARAN100 reasons
+// about one field against a fixed table, and that is decidable with the field in
+// hand. It is also a statement about the LANGUAGE's control semantics ("a
+// pattern on a Checkbox") rather than about any renderer's capability, which is
+// why a host with a thinner form projection than the reference still owes it.
+var ruleSlotHonour = map[string]struct{ format, textBounds bool }{
+	"Text":            {format: true, textBounds: true},
+	"TextArea":        {format: false, textBounds: true},
+	"Number":          {},
+	"Checkbox":        {},
+	"Toggle":          {},
+	"Choice":          {},
+	"RangedNumber":    {},
+	"Range":           {},
+	"SegmentedChoice": {},
+	"Date":            {},
+	"DateRange":       {},
+}
+
+// checkFieldRules raises FUARAN100 (Warning) for each FieldRule slot the
+// declaring field's control cannot honour: dead intent, where the author
+// declared a constraint, the tree carries it, and no renderer has anywhere to
+// put it. Warning rather than Error because the projection is a host's — a
+// native surface may honour a length bound on a control an HTML renderer cannot.
+func checkFieldRules(node wire.Node, kind wire.Obj, path string, findings *[]Finding) {
+	if kind.Tag != "Form" {
+		return
+	}
+	fields, ok := kind.Fields["fields"].(wire.Arr)
+	if !ok {
+		return
+	}
+	for i, item := range fields {
+		field, ok := item.(wire.Obj)
+		if !ok {
+			continue
+		}
+		rule, ok := field.Fields["rule"].(wire.Obj)
+		if !ok {
+			continue
+		}
+		fieldKind, ok := field.Fields["kind"].(wire.Obj)
+		if !ok {
+			continue
+		}
+		// An unrecognised control is left alone rather than reported: this rule
+		// says a KNOWN control cannot honour a slot, and "I do not know this
+		// control" is not that claim.
+		honour, known := ruleSlotHonour[fieldKind.Tag]
+		if !known {
+			continue
+		}
+		fieldID := "?"
+		if s, ok := field.Fields["id"].(wire.Str); ok {
+			fieldID = string(s)
+		}
+		fieldPath := fmt.Sprintf("%s.fields[%d].rule", path, i)
+
+		report := func(slot string) {
+			*findings = append(*findings, Finding{
+				Code: "FUARAN100", Path: fieldPath + "." + slot,
+				Message: fmt.Sprintf(
+					"form '%s' field '%s' declares rule.%s on a %s control, which cannot honour it — "+
+						"the constraint is carried and never applied (dead intent); move the rule to a "+
+						"text control, or drop the slot. If a host you target DOES honour it, this "+
+						"warning is expected and can be ignored",
+					node.ID, fieldID, slot, fieldKind.Tag),
+				Severity: SeverityWarning,
+			})
+		}
+		// Declaration order, matching the reference's emission order so a tree
+		// with several unhonourable slots reports them in the same sequence.
+		if _, has := rule.Fields["format"]; has && !honour.format {
+			report("format")
+		}
+		for _, slot := range [...]string{"pattern", "minLength", "maxLength"} {
+			if _, has := rule.Fields[slot]; has && !honour.textBounds {
+				report(slot)
+			}
+		}
+	}
 }
 
 // checkInertControl raises FUARAN069 (Warning) for a control that cannot act,
