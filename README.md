@@ -234,6 +234,54 @@ node, not a special case for grids. The line stays where Phase 651 drew it:
 markup, and sorting / paging / editing remain the client's. Pinned by the
 bound-grid tests in `renderer/transform_test.go`.
 
+## Server-driven hand-off — what the driver hands a client, and what it never holds
+
+The bound-grid section above ends on "sorting / paging / editing remain the
+client's". That sentence is easy to read as a limitation of the *renderer*. It is
+not: it is a line that runs through the whole host, and the server-driven driver
+is where a reader would most reasonably expect it to have been quietly crossed.
+So, stated for each interactive verb the declarative grid + form vocabulary adds.
+
+**The driver's total state is the tree plus the host's closure.** `Session` holds
+a `wire.Node` and a `Handler`; `Connection` adds a frame sequence number and a
+bounded replay buffer, which are *transport* state — what to resend after a
+reconnect — and carry no UI meaning. There is no page cursor, no sort cursor, no
+per-field validity or dirty set, no focus, no scroll position, and no per-user
+model. A frame is the applied `TreeOp` list itself; a conformant client
+re-renders by applying those ops with the same apply engine every host ships.
+
+**Sorting, paging and cell-edit commits do not reach this driver at all.** The
+event-legitimacy table (`legitimateEvents`) has no `DataGrid` entry, so a sort
+click, a page change or an edit commit addressed to a grid is refused as
+`IllegitimateEvent` before any handler runs. That is default-deny working as
+designed rather than a gap, and it is the reference driver's table too — neither
+host routes grid interaction through the live channel. What the client is handed
+instead is the **declaration**: `sortable` per column, the grid's sort and page
+state keys, the declared read-only columns and the edit destination all ride the
+wire as data, and the *resolved initial state* — the declared sort applied, page
+one resolved — is already in the emitted bytes. A host that wants a server
+round-trip for a sort drives the corresponding State key from a node that does
+take an event, which is a composition the vocabulary already supports.
+
+**Form events do reach it, and the driver decides nothing about them.** A `Form`
+accepts `submit`, `change` and `input`; the driver checks the node exists and the
+event is legitimate, then hands the event to the host's `Handler`, applies
+whatever ops come back, and refuses the step if any of them does not apply. It
+runs no field rule. A `rule` declared on a form field — `format`, `pattern`, the
+length bounds, a cross-field `compare` — is decoded, re-encoded and (for the
+slots a control can honour) validated pre-emit, but it is **not enforced by this
+driver**: enforcement is the host's decision function. This is a real divergence
+from the reference driver, which re-checks declared rules server-side
+unconditionally, and it is recorded rather than closed — see "Known gaps" below.
+
+**Known gaps, named so their absence is a decision rather than a claim.** The
+form projection is a generic labelled `<input>`: this host emits neither the
+control's `type` nor its `required` state nor its declared `rule` as HTML
+constraint attributes, so adding rule attributes alone would put one constraint
+on a control that models none of the others. And the driver has no server-side
+re-check of field rules. Both are form-fidelity work, older and wider than the
+rule vocabulary that made them visible.
+
 ## Chart-lowering posture — require-pre-lowered
 
 A resolved `Drawing` node renders as first-party inline SVG on every host, this

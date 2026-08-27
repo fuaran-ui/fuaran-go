@@ -232,6 +232,15 @@ generic:
   thin generic client; interactions round-trip to Go. The server side is
   render-runtime-free.
 
+**What the driver hands a client per interactive verb — and what it never holds
+— is written up in `README.md` ("Server-driven hand-off").** Keep it there and
+keep it current: the no-session-state line is a design commitment, and the
+declarative grid + form vocabulary is exactly the shape that would erode it one
+convenient cursor at a time. The two load-bearing claims (grid sort / page /
+edit-commit are refused before any handler runs; a form's declared field `rule`
+is carried and enforced by the host rather than the driver) are pinned by tests
+in `serverdriven/driver_test.go`, so the doc cannot drift silently.
+
 Both are shipped. **Server-driven frame contract — a Go-host divergence worth
 knowing:** where the F# host lowers each step to browser DOM patches (it owns a
 server-side HTML-fragment renderer keyed to `data-fuaran-node-id`), the Go
