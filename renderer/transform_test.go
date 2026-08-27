@@ -269,9 +269,12 @@ func TestMetricTrendIsAResolvedScalarSlot(t *testing.T) {
 	// A Transform ending in a global single-`count` agg → the 1×1 law resolves
 	// the lone cell, formatted through `trendFormat` (1 decimal place).
 	resolved := `{"id":"m","kind":{"$type":"Metric","label":"Signups","value":{"$type":"Static","value":42},"trend":{"$type":"Transform","pipeline":[{"$type":"groupBy","aggs":[{"fn":"count","name":"n","of":"v"}],"keys":[]}],"source":{"columns":{"v":{"validity":[true,true],"values":["a","b"]}},"schema":[{"name":"v","type":"string"}]}},"trendFormat":{"$type":"Number","decimals":1}}}`
+	// Phase 867 — a RESOLVED trend now carries its sentiment. `+2.0` under the
+	// default (omitted) polarity is an improvement.
 	mustContain(t, RenderHTML(mustDecode(t, resolved), nil),
 		`<div class="fuaran-metric-value">42</div>`,
-		`<div class="fuaran-metric-trend">2.0</div>`,
+		`<div class="fuaran-metric-trend fuaran-metric-trend-improving">`+
+			`<span class="fuaran-metric-trend-glyph" role="img" aria-label="improving">▲</span>2.0</div>`,
 	)
 
 	// An unresolvable trend still emits the div, empty — never an em-dash, and
@@ -283,5 +286,73 @@ func TestMetricTrendIsAResolvedScalarSlot(t *testing.T) {
 	none := `{"id":"m","kind":{"$type":"Metric","label":"Signups","value":{"$type":"Static","value":42}}}`
 	if html := RenderHTML(mustDecode(t, none), nil); strings.Contains(html, "fuaran-metric-trend") {
 		t.Errorf("a Metric with no declared trend must emit no trend div:\n%s", html)
+	}
+}
+
+// TestMetricTrendSentiment — Phase 867's composition rule, WIRE_FORMAT.md §3.6.1.
+//
+// The defect this closes was not a missing field: `.fuaran-metric-trend` carried
+// exactly ONE class and the stylesheet painted it success-green unconditionally,
+// so a −7.34% error rate read green (accidentally right) and a −7.34% revenue
+// read green (confidently wrong). A polarity slot decoded but not rendered would
+// have changed nothing observable, which is why the render leg is the deliverable
+// and the codec arm alone is not.
+//
+// The expected bytes are derived from the reference server renderer's own source
+// (attribute order class → role → aria-label; the glyph span first, the numeric
+// text after it as a sibling), so this pins CROSS-HOST markup rather than merely
+// this host's self-consistency.
+func TestMetricTrendSentiment(t *testing.T) {
+	metric := func(polarity, trend string) string {
+		slot := ""
+		if polarity != "" {
+			slot = `,"trendPolarity":"` + polarity + `"`
+		}
+		return `{"id":"m","kind":{"$type":"Metric","label":"Avg wait","tone":"Warning",` +
+			`"trend":{"$type":"Static","value":` + trend + `},` +
+			`"trendFormat":{"$type":"Percent","decimals":2}` + slot +
+			`,"value":{"$type":"Static","value":80}}}`
+	}
+	trendDiv := func(sentiment, glyph, text string) string {
+		return `<div class="fuaran-metric-trend fuaran-metric-trend-` + sentiment + `">` +
+			`<span class="fuaran-metric-trend-glyph" role="img" aria-label="` + sentiment + `">` +
+			glyph + `</span>` + text + `</div>`
+	}
+
+	// The corpus fixture's own case: a FALLING wait time under LowerIsBetter is
+	// an improvement. This one node is the whole argument for the slot.
+	mustContain(t, RenderHTML(mustDecode(t, metric("LowerIsBetter", "-0.0734")), nil),
+		trendDiv("improving", "▲", "-7.34%"))
+
+	// The same number without the declaration is a regression — the pair below is
+	// what proves the slot is READ rather than decoded and ignored.
+	mustContain(t, RenderHTML(mustDecode(t, metric("", "-0.0734")), nil),
+		trendDiv("regressing", "▼", "-7.34%"))
+
+	// Rising, both ways round.
+	mustContain(t, RenderHTML(mustDecode(t, metric("", "0.0734")), nil),
+		trendDiv("improving", "▲", "7.34%"))
+	mustContain(t, RenderHTML(mustDecode(t, metric("LowerIsBetter", "0.0734")), nil),
+		trendDiv("regressing", "▼", "7.34%"))
+
+	// Zero is neither, under either declaration (clause 2: a zero trend).
+	for _, polarity := range []string{"", "LowerIsBetter"} {
+		mustContain(t, RenderHTML(mustDecode(t, metric(polarity, "0")), nil),
+			trendDiv("unchanged", "→", "0.00%"))
+	}
+
+	// Clause 3 — the numeric text, ITS SIGN INCLUDED, is unchanged by polarity.
+	// The cheap trick this rules out is an emitter flipping the sign so up is
+	// always good, which would be a false statement about the world.
+	inverted := RenderHTML(mustDecode(t, metric("LowerIsBetter", "-0.0734")), nil)
+	if strings.Contains(inverted, ">7.34%<") || !strings.Contains(inverted, "-7.34%") {
+		t.Errorf("polarity changed the number's sign — it may change how a number READS, never what it SAYS:\n%s", inverted)
+	}
+
+	// And nothing writes back to `tone`: the tile stays Warning while the trend
+	// reads improving. A single tone slot could never have said both, which is
+	// the pair the fixture exists to pin.
+	if !strings.Contains(inverted, `class="fuaran-metric fuaran-metric-warning"`) {
+		t.Errorf("the tile's tone must be untouched by trend sentiment:\n%s", inverted)
 	}
 }

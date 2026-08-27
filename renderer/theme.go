@@ -144,3 +144,43 @@ func nodeClassName(node wire.Node) string {
 	style, _ := node.Extras["style"].(wire.Obj)
 	return kindClass(node.Kind) + " " + styleClass(style)
 }
+
+// trendSentiment computes a Metric trend's SENTIMENT class fragment and its
+// non-colour glyph, per WIRE_FORMAT.md §3.6.1: `sentiment = sign(trend) ×
+// polarity`, where HigherIsBetter is +1 and LowerIsBetter is −1.
+//
+// Two things this deliberately does NOT do, both of which a host reaches for and
+// both of which the normative text refuses. It never negates the number: a
+// −7.34% trend prints −7.34% under either declaration, because polarity changes
+// how the number READS and never what it SAYS. And it never touches `tone` —
+// tone colours the TILE and says how the reading STANDS, this says which way the
+// quantity MOVED, and a renderer that inferred "improving ⇒ Success" would
+// re-create in the render the exact conflation the wire slot exists to remove.
+//
+// The glyphs are U+25B2 BLACK UP-POINTING TRIANGLE, U+25BC BLACK DOWN-POINTING
+// TRIANGLE and U+2192 RIGHTWARDS ARROW — named here so a mojibake in this file is
+// a diff a reviewer can catch rather than a rendered byte nobody pinned. Colour
+// alone fails WCAG 1.4.1, so the glyph is the sentiment's non-colour channel and
+// carries the `aria-label`; it tracks the SENTIMENT rather than the number's
+// direction, so under an inverted polarity the triangle deliberately disagrees
+// with the sign — and that disagreement is the visible evidence the declaration
+// was honoured.
+//
+// `polarity` is the decoded slot's bare-enum string, or "" for the omitted slot —
+// which IS `HigherIsBetter` per clause 4, not a third state. The decoder has
+// already refused everything outside the closed set, so the only two strings that
+// can reach here are the two cases.
+func trendSentiment(polarity string, trend float64) (sentiment, glyph string) {
+	direction := 1.0
+	if polarity == "LowerIsBetter" {
+		direction = -1.0
+	}
+	switch product := trend * direction; {
+	case product > 0:
+		return "improving", "▲"
+	case product < 0:
+		return "regressing", "▼"
+	default:
+		return "unchanged", "→"
+	}
+}

@@ -697,11 +697,41 @@ func (r *renderer) metric(node wire.Node, fields map[string]wire.Value) string {
 	// scalar path, formatted through `trendFormat`, and empty rather than
 	// em-dashed when unresolved — the reference host's shape.
 	if trendBinding, ok := fields["trend"]; ok {
-		trendText := ""
-		if trend := resolveScalarNumber(trendBinding, r.sources); trend != nil {
-			trendText = formatNumber(fields["trendFormat"], trend)
+		// Phase 867 — the trend carries a SENTIMENT, not an unconditional class.
+		// Before this, `.fuaran-metric-trend` carried exactly one class and the
+		// reference stylesheet painted it success-green in both directions, so a
+		// falling error rate read green (accidentally right) and falling revenue
+		// read green (confidently wrong) — on every host, this one included.
+		//
+		// It resolves SERVER-SIDE, which is this host's standing posture rather
+		// than a choice made here: static emission is complete (Phase 651), so a
+		// resolved trend's sentiment is settled in the emitted bytes and a no-JS
+		// surface reads correctly before any hydration. An UNRESOLVED trend keeps
+		// the bare div byte-for-byte — there is no sentiment to state about a
+		// number the host does not have, and emitting "unchanged" would assert
+		// one.
+		trend := resolveScalarNumber(trendBinding, r.sources)
+		num, numeric := numericValue(trend)
+		switch {
+		case trend != nil && numeric:
+			sentiment, glyph := trendSentiment(strValue(fields["trendPolarity"]), num)
+			glyphSpan := textElement("span", []attr{
+				{"class", "fuaran-metric-trend-glyph"},
+				{"role", "img"},
+				{"aria-label", sentiment},
+			}, glyph)
+			parts.WriteString(element("div",
+				[]attr{{"class", "fuaran-metric-trend fuaran-metric-trend-" + sentiment}},
+				glyphSpan+escapeText(formatNumber(fields["trendFormat"], trend))))
+		default:
+			// Unresolved, or resolved to something with no sign to reason about.
+			// The second case keeps this host's established behaviour rather than
+			// acquiring 867's markup: `formatNumber` falls back to the display
+			// string, and a sentiment class over a value that is not a number
+			// would be a judgement nothing licenses.
+			parts.WriteString(textElement("div", []attr{{"class", "fuaran-metric-trend"}},
+				formatNumber(fields["trendFormat"], trend)))
 		}
-		parts.WriteString(textElement("div", []attr{{"class", "fuaran-metric-trend"}}, trendText))
 	}
 	if subtext, ok := fields["subtext"]; ok {
 		parts.WriteString(textElement("div", []attr{{"class", "fuaran-metric-subtext"}}, r.text(subtext)))
