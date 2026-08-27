@@ -22,6 +22,7 @@
 package renderer
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 
@@ -240,7 +241,8 @@ func a11yName(value wire.Value, sources BindingSources) (string, bool) {
 // native semantics of its own (an interactive role, or a graphic), so role /
 // aria-* on an ancestor <div> is announced against the wrong node; and the
 // element IS the node, with nothing else in the body competing for the
-// accessible name. Link (<a>), Button (<button>) and Image (<img>) satisfy all
+// accessible name. Link (<a>), Button (<button>), Image (<img>) and Media
+// (<video> / <audio> — a transport a user focuses and operates) satisfy all
 // three. The form-field kinds deliberately do not: a Select's control sits
 // inside a <label> that already names it.
 //
@@ -250,7 +252,7 @@ func a11yName(value wire.Value, sources BindingSources) (string, bool) {
 // own body.
 func forwardsToSemanticElement(node wire.Node) bool {
 	switch node.Kind.Tag {
-	case "Link", "Button", "Image":
+	case "Link", "Button", "Image", "Media":
 		return true
 	}
 	return false
@@ -333,6 +335,8 @@ func (r *renderer) renderKind(node wire.Node, semanticAttrs []attr) string {
 		return r.link(fields, semanticAttrs)
 	case "Image":
 		return r.image(fields, semanticAttrs)
+	case "Media":
+		return r.media(fields, semanticAttrs)
 	case "List":
 		return r.list(fields)
 	case "Toast":
@@ -935,11 +939,224 @@ func (r *renderer) image(fields map[string]wire.Value, semanticAttrs []attr) str
 	// exfiltrates on sight. Only the origin allowlist closes it, which is why
 	// the ambient default denies rather than waiting to be asked.
 	safeSrc, egressPairs := r.egress.SanitizeURLForEgress(EgressMedia, src)
+	// Phase 1077 — the presentation tokens map to CLASSES and nothing else: no
+	// value from the tree ever reaches a style attribute. `Natural` emits no
+	// class on either axis, so a pre-phase tree's class attribute is
+	// byte-identical to what it was.
+	cls += imageFitClass(fields["fit"]) + imageAspectClass(fields["aspectRatio"])
 	// The a11y projection lands on the <img> itself.
-	attrs := append([]attr{
-		{"class", cls}, {"src", safeSrc}, {"alt", r.text(fields["alt"])},
-	}, semanticAttrs...)
-	return voidElement("img", append(attrs, egressAttrPairs(egressPairs)...))
+	attrs := []attr{{"class", cls}, {"src", safeSrc}, {"alt", r.text(fields["alt"])}}
+	attrs = append(attrs, r.imageSrcSetAttrs(fields["srcSet"])...)
+	// Phase 1077 — `Eager` emits no attribute at all (the browser's own
+	// default stays in place); only `Lazy` is a positive declaration. A host
+	// MUST NOT infer laziness from position, viewport, or anything else the
+	// tree does not say.
+	if v, ok := fields["loading"].(wire.Str); ok && v == "Lazy" {
+		attrs = append(attrs, attr{"loading", "lazy"})
+	}
+	attrs = append(attrs, semanticAttrs...)
+	img := voidElement("img", append(attrs, egressAttrPairs(egressPairs)...))
+
+	// Phase 1079 — the expansion affordance. THE BASELINE IS A REAL LINK, not
+	// a marked-up control waiting for script: a reader with no JavaScript — a
+	// crawler, a text browser, a locked-down client, a hydration that has not
+	// finished — clicks the thumbnail and gets the full-size asset in the
+	// browser's own viewer. The `data-fuaran-expandable` marker is VALUELESS
+	// (the slot is a bool whose `false` is the attribute's absence) and marks a
+	// WORKING link; the overlay a client tier may add is a refinement of it,
+	// never the mechanism. Nothing crosses the dispatch gate — no Action, no
+	// handler, no onClick reaches the emitted markup.
+	//
+	// A REFUSED `src` EMITS NO ANCHOR. The <img>'s src must exist, so it
+	// collapses to the refusal URL; an anchor has no such obligation, and a
+	// link to the refusal URL is exactly the dead affordance this shape exists
+	// to avoid. The image still renders, carrying its refusal marker, and the
+	// reader is simply not offered an expansion that could not work.
+	if e, ok := fields["expandable"].(wire.Bool); ok && bool(e) && safeSrc != "" && len(egressPairs) == 0 {
+		img = element("a", []attr{
+			{"class", "fuaran-image-expand"}, {"href", safeSrc}, {"data-fuaran-expandable", ""},
+		}, img)
+	}
+
+	// Phase 1078 — the caption. Absent returns the emission UNTOUCHED: there
+	// is no wrapper to be byte-identical to, because there is no wrapper. The
+	// claim a host must honour is the BINDING — the caption is presented as
+	// the image's caption, so assistive technology announces the two together
+	// rather than reading the text as the next paragraph.
+	//
+	// Phase 1079 — the nesting is <figure> wraps <a> wraps <img>: the caption
+	// sits OUTSIDE the link target. A <figcaption> inside the anchor would make
+	// prose a reader selects and quotes into a second click surface, and would
+	// put interactive content inside the element whose job is to LABEL the
+	// image.
+	caption, hasCaption := fields["caption"]
+	if !hasCaption {
+		return img
+	}
+	return element("figure", []attr{{"class", "fuaran-image-figure"}},
+		img+textElement("figcaption", []attr{{"class", "fuaran-image-figure-caption"}}, r.text(caption)))
+}
+
+func imageFitClass(v wire.Value) string {
+	switch s, _ := v.(wire.Str); s {
+	case "Cover":
+		return " fuaran-image-fit-cover"
+	case "Contain":
+		return " fuaran-image-fit-contain"
+	}
+	return ""
+}
+
+func imageAspectClass(v wire.Value) string {
+	switch s, _ := v.(wire.Str); s {
+	case "Square":
+		return " fuaran-image-aspect-square"
+	case "FourThree":
+		return " fuaran-image-aspect-four-three"
+	case "ThreeTwo":
+		return " fuaran-image-aspect-three-two"
+	case "SixteenNine":
+		return " fuaran-image-aspect-sixteen-nine"
+	}
+	return ""
+}
+
+// imageSrcSetAttrs — Phase 1080's candidate list. Three properties, each
+// load-bearing:
+//
+// SANITISED PER ENTRY. Every candidate's src goes through the SAME Media-class
+// egress seam the primary src does. A srcset entry is a URL the browser
+// fetches with no user act — exactly what the floor exists for — so routing
+// only the primary through it would make this slot a documented way around the
+// one rule this node has.
+//
+// A FAILING ENTRY IS DROPPED, not neutered. The primary src collapses to the
+// refusal URL because an <img> must have one; a candidate has no such
+// obligation, and offering the browser a rendition guaranteed to fail is worse
+// than offering it one fewer. The primary src remains the fallback the whole
+// mechanism rests on. The refusal is read from the seam's own marker list, not
+// by comparing against whatever URL it substitutes.
+//
+// ASCENDING BY WIDTH, sorted HERE. The wire preserves authored array order, so
+// canonical output is the RENDERER's obligation, not the codec's. The sort is
+// stable, so two entries declaring the same width keep their authored order
+// rather than swapping on a re-render.
+func (r *renderer) imageSrcSetAttrs(v wire.Value) []attr {
+	raw, ok := v.(wire.Arr)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	entries := append(wire.Arr(nil), raw...)
+	sort.SliceStable(entries, func(i, j int) bool {
+		return srcSetWidth(entries[i]) < srcSetWidth(entries[j])
+	})
+	candidates := make([]string, 0, len(entries))
+	for _, e := range entries {
+		obj, ok := e.(wire.Obj)
+		if !ok {
+			continue
+		}
+		url := ""
+		if s, ok := resolveBinding(obj.Fields["src"], r.sources).(wire.Str); ok {
+			url = string(s)
+		}
+		safe, refusal := r.egress.SanitizeURLForEgress(EgressMedia, url)
+		if safe == "" || len(refusal) > 0 {
+			continue
+		}
+		candidates = append(candidates, safe+" "+strconv.FormatInt(srcSetWidth(e), 10)+"w")
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	// `sizes` is BOUNDED, and 100vw is the only value the tree can justify:
+	// nothing in the document says how wide this element will be laid out, and
+	// the language has no media-query slot for an author to say so.
+	return []attr{{"srcset", strings.Join(candidates, ", ")}, {"sizes", "100vw"}}
+}
+
+func srcSetWidth(v wire.Value) int64 {
+	obj, ok := v.(wire.Obj)
+	if !ok {
+		return 0
+	}
+	if n, ok := obj.Fields["width"].(wire.Int); ok {
+		return int64(n)
+	}
+	return 0
+}
+
+// media — Phase 1076's playback surface. Deterministic, script-free markup: a
+// real <video> / <audio> a browser plays with no runtime, exactly as Image
+// emits a real <img>. Four things here are CONTRACT rather than choice, and
+// each is stated normatively in the wire spec because a host that got any of
+// them wrong would still round-trip the bytes perfectly:
+//
+//   - `aria-label` ALWAYS. The label is mandatory on the wire and there is no
+//     decorative case, so unlike Image's `alt` there is no branch — a media
+//     element is a TRANSPORT, and a <video> with no accessible name is
+//     announced as "video" and nothing more.
+//   - `autoplay` NEVER WITHOUT `muted`. The pairing is not a default a caller
+//     overrides; it is what the declaration MEANS, which is why the wire
+//     carries no separate muted slot to get out of step with it. Every
+//     mainstream browser blocks unmuted autoplay, so emitting it alone would
+//     produce a player that silently never starts — the declaration would mean
+//     nothing and the failure would be invisible. The converse holds too: no
+//     muted attribute where autoplay is absent.
+//   - NO AUTOPLAY PATHWAY ON AUDIO, at all. Not "off by default" — the Audio
+//     case carries no slot to read, so this arm has nothing to branch on and
+//     cannot acquire one by a later edit here.
+//   - BOTH URLS THROUGH THE EGRESS FLOOR. src and poster are each fetched by
+//     the browser with no user act. They differ in what a REFUSAL means: an
+//     element must have a source, so src collapses to the refusal URL and
+//     carries the marker, while a poster simply LEAVES — a <video> with no
+//     poster shows its first frame, which is a working rendering, whereas a
+//     poster at the refusal URL is a broken image painted over the player.
+func (r *renderer) media(fields map[string]wire.Value, semanticAttrs []attr) string {
+	src := ""
+	if s, ok := resolveBinding(fields["src"], r.sources).(wire.Str); ok {
+		src = string(s)
+	}
+	safeSrc, egressPairs := r.egress.SanitizeURLForEgress(EgressMedia, src)
+
+	kind, _ := fields["kind"].(wire.Obj)
+	tag, variantClass := "audio", "fuaran-media-audio"
+	if kind.Tag != "Audio" {
+		tag, variantClass = "video", "fuaran-media-video"
+	}
+
+	attrs := []attr{
+		{"class", "fuaran-media " + variantClass},
+		{"src", safeSrc},
+		{"aria-label", r.text(fields["label"])},
+	}
+	// `controls` is omitted at TRUE on the wire, so its ABSENCE is the
+	// affirmative: a media element without a transport cannot be paused,
+	// seeked or muted by a keyboard user at all.
+	if c, ok := fields["controls"].(wire.Bool); !ok || bool(c) {
+		attrs = append(attrs, attr{"controls", ""})
+	}
+	if l, ok := fields["loop"].(wire.Bool); ok && bool(l) {
+		attrs = append(attrs, attr{"loop", ""})
+	}
+	if tag == "video" {
+		if poster, ok := kind.Fields["poster"]; ok {
+			url := ""
+			if s, ok := resolveBinding(poster, r.sources).(wire.Str); ok {
+				url = string(s)
+			}
+			safe, refusal := r.egress.SanitizeURLForEgress(EgressMedia, url)
+			if safe != "" && len(refusal) == 0 {
+				attrs = append(attrs, attr{"poster", safe})
+			}
+		}
+		// The pairing, on the tier where it governs playback.
+		if a, ok := kind.Fields["autoplay"].(wire.Bool); ok && bool(a) {
+			attrs = append(attrs, attr{"autoplay", ""}, attr{"muted", ""})
+		}
+	}
+	attrs = append(attrs, semanticAttrs...)
+	return element(tag, append(attrs, egressAttrPairs(egressPairs)...), "")
 }
 
 func (r *renderer) list(fields map[string]wire.Value) string {

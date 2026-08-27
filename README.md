@@ -156,7 +156,7 @@ in the document rather than only in the logs. The marker value carries the class
 and the host (or the scheme, or `local`) and **never the path or the query** —
 the query string of a refused exfiltration attempt is the payload itself.
 
-Four things about this host's adoption are declared rather than incidental:
+Five things about this host's adoption are declared rather than incidental:
 
 - **No route class.** `EgressRoute` exists in the policy vocabulary, but this
   host is headless and static: it has no navigation runtime, emits no
@@ -171,8 +171,19 @@ Four things about this host's adoption are declared rather than incidental:
 - **A `download` link is still a hyperlink.** `EgressHyperlink` is the class
   even when `download` is set. The class names the **sink the browser reaches**,
   and flipping one boolean on a tree must not change which rule applies.
+- **A refused URL is COLLAPSED at some call sites and DROPPED at others**, and
+  which is which follows from whether the element can do without it. `Link`
+  href, `Image` src and `Media` src collapse to the refusal URL and carry the
+  marker — an `<img>` or a `<video>` must have a source. An `Image` `srcSet`
+  candidate, a `Media` `poster` and an `Image` `expandable` anchor are dropped
+  outright: a candidate has no such obligation and offering a rendition
+  guaranteed to fail is worse than offering one fewer, a `<video>` with no
+  poster shows its first frame while a poster at the refusal URL is a broken
+  image over the player, and a link to the refusal URL is a dead affordance
+  rather than an expansion. The image or player still renders, carrying its own
+  refusal marker where the primary source was the one refused.
 - **The two seams spell an UNSAFE url differently, on purpose.** At a node call
-  site (`Link` href, `Image` src) a URL the *scheme floor* refuses renders the
+  site (`Link` href, `Image` src, `Media` src) a URL the *scheme floor* refuses renders the
   inert refusal URL plus an `unsafe-url` marker; inside a **markdown body** it
   keeps the bare `about:blank` it has always emitted. The markdown bytes are
   pinned by a cross-host corpus, and re-spelling them inside a change about

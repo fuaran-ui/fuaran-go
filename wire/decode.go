@@ -398,18 +398,33 @@ func fromJSONStrict(w *walkState, raw any, path string) Value {
 // ── Bare-string enum vocabularies (WIRE_FORMAT.md §3.5) ─────────────────────
 
 var (
-	toneCases              = newCaseSet("Default", "Subdued", "Brand", "Success", "Warning", "Critical", "Info")
-	weightCases            = newCaseSet("Compact", "Standard", "Spacious")
-	emphasisCases          = newCaseSet("Quiet", "Normal", "Loud")
-	orientationCases       = newCaseSet("Vertical", "Horizontal")
-	badgeVariantCases      = newCaseSet("Neutral", "Brand", "Success", "Warning", "Critical", "Info")
-	buttonVariantCases     = newCaseSet("Primary", "Secondary", "Tertiary", "Destructive")
-	headingVariantCases    = newCaseSet("Standard", "Eyebrow", "Caption", "Lead")
-	dateVariantCases       = newCaseSet("Date", "Time", "DateTime")
-	styleRoleCases         = newCaseSet("None", "Eyebrow", "Data", "Lede", "Caption")
-	fontVoiceCases         = newCaseSet("Default", "Display", "Structural")
-	liveRegionCases        = newCaseSet("polite", "assertive", "off")
-	imageVariantCases      = newCaseSet("Default", "Avatar", "Rounded")
+	toneCases           = newCaseSet("Default", "Subdued", "Brand", "Success", "Warning", "Critical", "Info")
+	weightCases         = newCaseSet("Compact", "Standard", "Spacious")
+	emphasisCases       = newCaseSet("Quiet", "Normal", "Loud")
+	orientationCases    = newCaseSet("Vertical", "Horizontal")
+	badgeVariantCases   = newCaseSet("Neutral", "Brand", "Success", "Warning", "Critical", "Info")
+	buttonVariantCases  = newCaseSet("Primary", "Secondary", "Tertiary", "Destructive")
+	headingVariantCases = newCaseSet("Standard", "Eyebrow", "Caption", "Lead")
+	dateVariantCases    = newCaseSet("Date", "Time", "DateTime")
+	styleRoleCases      = newCaseSet("None", "Eyebrow", "Data", "Lede", "Caption")
+	fontVoiceCases      = newCaseSet("Default", "Display", "Structural")
+	liveRegionCases     = newCaseSet("polite", "assertive", "off")
+	imageVariantCases   = newCaseSet("Default", "Avatar", "Rounded")
+	// Phase 1077 — §3.6.2. Three closed TOKEN vocabularies, never CSS values:
+	// `aspectRatio` names one of four ratios and can never carry "16 / 9",
+	// "16:9" or 1.7778, which is the free-form escape the tokens exist to
+	// close. Each is omitted-when-default on BOTH boundaries, so a pre-phase
+	// document decodes to today's behaviour and re-encodes to the bytes it
+	// already had.
+	imageFitCases     = newCaseSet("Natural", "Cover", "Contain")
+	imageAspectCases  = newCaseSet("Natural", "Square", "FourThree", "ThreeTwo", "SixteenNine")
+	imageLoadingCases = newCaseSet("Eager", "Lazy")
+	// Phase 1076 — §3.6.6. ONE kind, two variants: everything a video surface
+	// and an audio surface share is stated once on the record, and only the
+	// slots that genuinely differ live in the variant. Discriminated by
+	// `$type`, so an unknown case reports at `$.kind.kind.$type` — the
+	// Binding / TextSource position, not the bare-enum one (§6).
+	mediaKindCases         = newCaseSet("Video", "Audio")
 	linkProtectionCases    = newCaseSet("email") // Phase 812 — anti-scraper render strategy
 	scrollOrientationCases = newCaseSet("Vertical", "Horizontal", "Both")
 	mathDisplayCases       = newCaseSet("Inline", "Block")
@@ -496,7 +511,7 @@ var knownKinds = newCaseSet(
 	"Box", "SplitPanel", "Tabs", "Stepper", "SummaryList", "Disclosure", "Modal", "ScrollArea",
 	// Display
 	"Heading", "Markdown", "Metric", "Fact", "Badge", "Sparkline", "Callout", "Progress", "Skeleton",
-	"Icon", "LabelValueRow", "Link", "Image", "List", "Toast", "CodeBlock", "Math", "Drawing",
+	"Icon", "LabelValueRow", "Link", "Image", "Media", "List", "Toast", "CodeBlock", "Math", "Drawing",
 	// Input
 	"Form", "Button", "FileUpload", "Select", "Filters",
 	// Visualisation
@@ -2376,6 +2391,84 @@ func isNoneCellFormat(v Value) bool { return isTagOnly(v, "None") }
 // Phase 867 — §3.6.1 clause 4: an absent `trendPolarity` IS `HigherIsBetter`.
 func isHigherIsBetter(v Value) bool { return isStr(v, "HigherIsBetter") }
 
+// Phase 1077 — §3.6.2. `Natural` is the identity on BOTH the fit and the
+// aspect axis, so one predicate serves both slots.
+func isNaturalImageToken(v Value) bool { return isStr(v, "Natural") }
+
+// Phase 1077 — `Eager` is the identity, and it is not the "unoptimised" value:
+// deferring an above-the-fold image delays the largest contentful paint rather
+// than helping it, and only the author knows where the image sits, so the
+// format declines to guess and `Eager` emits no attribute at all.
+func isEagerLoading(v Value) bool { return isStr(v, "Eager") }
+
+// Phase 1080 — §3.6.4. The srcSet identity is the EMPTY LIST rather than a
+// token: absence and `[]` denote the same document.
+func isEmptyArr(v Value) bool {
+	a, ok := v.(Arr)
+	return ok && len(a) == 0
+}
+
+// decodeSrcSet — §3.6.4's candidate list. `null` never reaches here as an
+// empty list: `expectArray` refuses it with WRONG_TYPE at `$.kind.srcSet`,
+// which is the whole of the missing-list-field decode class on this slot.
+//
+// The ARRAY ORDER is the author's and is preserved verbatim. Canonicalisation
+// sorts object KEYS (§2) and never array elements, so a codec that sorted here
+// would emit bytes differing from what it decoded for every document whose
+// author did not happen to write the entries ascending. Presentation order is
+// the RENDERER's obligation (ascending by width), which is why the two rules
+// are not in tension.
+func decodeSrcSet(w *walkState, raw any, path string) Value {
+	arr := expectArray(raw, path)
+	out := make(Arr, len(arr))
+	for i, item := range arr {
+		p := path + "[" + strconv.Itoa(i) + "]"
+		s := newSpec(w, expectObject(item, p), p)
+		s.req("src", decodeBindingString)
+		s.req("width", decodePositiveInt)
+		out[i] = s.buildStrict("")
+	}
+	return out
+}
+
+// decodePositiveInt — the `w` descriptor floor, a DECODE rule rather than a
+// validator one. Zero is refused as firmly as a negative on purpose: a `0w`
+// candidate is not a small image, it is one a client can never select, so
+// admitting it would let the wire state a rendition no host can render.
+func decodePositiveInt(w *walkState, raw any, path string) Value {
+	n := expectInt(raw, path)
+	if n <= 0 {
+		fail(CodeWrongType, path, "expected a positive integer at "+path)
+	}
+	return Int(n)
+}
+
+// decodeMediaKind — §3.6.6's `$type`-discriminated variant, nested at
+// `kind.kind`. Closed at Video | Audio, so admitting a third surface later is
+// an ADDITION rather than a re-meaning of shipped bytes.
+//
+// `Audio` has NO autoplay pathway — in the type, on the wire, or in the
+// emission. That is stronger than a default of `false`: a slot that defaults
+// to off is one a document can switch on, and there is no document this format
+// wants to be able to state in which a page begins making sound unbidden. The
+// arm below therefore reads NOTHING for Audio, and `buildStrict` drops a
+// stray `autoplay` key rather than carrying it — the value has nowhere to
+// land, which is exactly what the spec says happens to it.
+func decodeMediaKind(w *walkState, raw any, path string) Value {
+	obj := expectObject(raw, path)
+	tag := dispatch(obj, path, mediaKindCases, CodeUnknownDUCase)
+	s := newSpec(w, obj, path)
+	if tag == "Video" {
+		// `autoplay` is a DECLARATION whose RENDERING is constrained (never
+		// without `muted`) — the wire carries no separate muted slot to fall
+		// out of step with it. Omitted at false; refused rather than coerced
+		// when stringified.
+		s.optDrop("autoplay", decodeBool, isFalseValue)
+		s.opt("poster", decodeBindingString)
+	}
+	return s.buildStrict(tag)
+}
+
 // kindBuilders holds the typed per-kind decoders. Kinds absent here (and from
 // the dedicated Box / legacy handlers) decode structurally.
 //
@@ -2400,21 +2493,27 @@ var requiredKindFields = map[string][]string{
 	"Map":           {"centreLatitude", "centreLongitude", "source", "zoom"},
 	"Link":          {"download", "href", "label"},
 	"Image":         {"alt", "src", "variant"},
-	"List":          {"items", "ordered"},
-	"Toast":         {"message", "open"},
-	"CodeBlock":     {"code", "copyable", "highlightLines", "language", "lineNumbers"},
-	"Math":          {"display", "source"},
-	"Drawing":       {"shapes", "style", "viewBox"},
-	"Select":        {"label", "source", "value"},
-	"Modal":         {"children", "dismissable", "open"},
-	"ScrollArea":    {"children", "orientation"},
-	"Button":        {"label", "onClick", "variant"},
-	"Form":          {"fields", "onSubmit", "submitLabel"},
-	"Filters":       {"items"},
-	"FileUpload":    {"accept", "label", "multiple"},
-	"DataGrid":      {"columns", "source"},
-	"Chart":         {"kind", "source", "xField", "yFields"},
-	"Custom":        {"moduleId", "componentId"},
+	// Phase 1076 — `label` is REQUIRED, and it is the one place the media
+	// contract differs from Image's: an image can honestly be decorative and
+	// say so with an empty `alt`, but a media element is a TRANSPORT and is
+	// never decorative. There is no value to default to that would not be a
+	// fabricated name for someone else's recording.
+	"Media":      {"kind", "label", "src"},
+	"List":       {"items", "ordered"},
+	"Toast":      {"message", "open"},
+	"CodeBlock":  {"code", "copyable", "highlightLines", "language", "lineNumbers"},
+	"Math":       {"display", "source"},
+	"Drawing":    {"shapes", "style", "viewBox"},
+	"Select":     {"label", "source", "value"},
+	"Modal":      {"children", "dismissable", "open"},
+	"ScrollArea": {"children", "orientation"},
+	"Button":     {"label", "onClick", "variant"},
+	"Form":       {"fields", "onSubmit", "submitLabel"},
+	"Filters":    {"items"},
+	"FileUpload": {"accept", "label", "multiple"},
+	"DataGrid":   {"columns", "source"},
+	"Chart":      {"kind", "source", "xField", "yFields"},
+	"Custom":     {"moduleId", "componentId"},
 	// Switch's selector is one-of stateKey / on (Phase 768) — the validator's
 	// checkSwitch enforces the pair, so neither appears in the required set.
 	"Switch": {"cases", "default"},
@@ -2573,12 +2672,57 @@ func init() {
 			s.opt("target", decodeString)
 			return s.build("Link")
 		},
+		// Phases 1077 / 1078 / 1079 / 1080 — §3.6.2–§3.6.5. Five optional
+		// slots beside `variant`, and they do NOT all take the same posture:
+		//
+		//   * fit / aspectRatio / loading are identity-default TOKENS, dropped
+		//     at their default on the decode boundary so an explicit `Natural`
+		//     / `Eager` canonicalises to the omitted form (§3.6's table).
+		//   * caption is CONTENT, not a presentation token — there is no
+		//     default caption the way there is a default fit — so it takes the
+		//     ordinary optional-field posture (rule 4). It is a full
+		//     `TextSource`, NOT a string: narrowing the slot costs nothing
+		//     until somebody needs a locale, which is why the enveloped
+		//     `{"$type":"Literal"}` form has its own lenient fixture here.
+		//   * srcSet IS an omit-at-default field whose identity is the EMPTY
+		//     LIST rather than a token. Absent and `[]` denote the same
+		//     document; a present `null` is refused, because absence already
+		//     has a spelling and a second one would let two conformant hosts
+		//     emit different canonical bytes for one document.
+		//   * expandable is a plain bool omitted at `false`, refused rather
+		//     than coerced when stringified — a truthiness rule would have to
+		//     rule on `"false"` and `""` too, and two hosts ruling differently
+		//     would disagree about whether the document declares an affordance
+		//     at all.
 		"Image": func(w *walkState, obj map[string]any, path string) Obj {
 			s := newSpec(w, obj, path)
 			s.req("alt", decodeTextSource)
+			s.optDrop("aspectRatio", enumDecoder(imageAspectCases, "aspectRatio", noAliases), isNaturalImageToken)
+			s.opt("caption", decodeTextSource)
+			s.optDrop("expandable", decodeBool, isFalseValue)
+			s.optDrop("fit", enumDecoder(imageFitCases, "fit", noAliases), isNaturalImageToken)
+			s.optDrop("loading", enumDecoder(imageLoadingCases, "loading", noAliases), isEagerLoading)
 			s.req("src", decodeBindingString)
+			s.optDrop("srcSet", decodeSrcSet, isEmptyArr)
 			s.req("variant", enumDecoder(imageVariantCases, "variant", noAliases))
 			return s.build("Image")
+		},
+		// Phase 1076 — §3.6.6. The shared record carries the source, the
+		// mandatory accessible name, and the two shared declarations;
+		// `controls` is omitted at TRUE (the second such slot in the
+		// vocabulary after `Toast.dismissable`, and the polarity is
+		// deliberate — a media element without a transport cannot be paused,
+		// seeked or muted by a keyboard user at all, so the accessible setting
+		// is what a document gets for free and taking it away is the deviation
+		// that costs a key). `loop` takes the ordinary polarity.
+		"Media": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
+			s.optDrop("controls", decodeBool, isTrueValue)
+			s.req("kind", decodeMediaKind)
+			s.req("label", decodeTextSource)
+			s.optDrop("loop", decodeBool, isFalseValue)
+			s.req("src", decodeBindingString)
+			return s.build("Media")
 		},
 		"List": func(w *walkState, obj map[string]any, path string) Obj {
 			s := newSpec(w, obj, path)

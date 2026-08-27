@@ -33,6 +33,7 @@ var kindClassMap = map[string]string{
 	"LabelValueRow": "fuaran-kind-label-value-row",
 	"Link":          "fuaran-kind-link",
 	"Image":         "fuaran-kind-image",
+	"Media":         "fuaran-kind-media",
 	"List":          "fuaran-kind-list",
 	"Toast":         "fuaran-kind-toast",
 	"CodeBlock":     "fuaran-kind-code-block",

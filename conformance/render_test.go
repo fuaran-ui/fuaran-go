@@ -210,6 +210,15 @@ func TestAmbientEgressAtTheNodeCallSites(t *testing.T) {
 			`{"id":"i","kind":{"$type":"Image","alt":"chart","src":{"$type":"Static","value":"` + exfil + `"},"variant":"Default"}}`,
 			`data-fuaran-egress-refused="media:collector.example"`,
 		},
+		// Phase 1076 — a Media `src` is the same class and the same COLLAPSE:
+		// the element must have a source. Its poster and an Image's srcSet
+		// candidates take the same class but are DROPPED rather than
+		// collapsed, so they are pinned separately in the renderer package.
+		{
+			"media",
+			`{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Report","src":{"$type":"Static","value":"` + exfil + `"}}}`,
+			`data-fuaran-egress-refused="media:collector.example"`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
