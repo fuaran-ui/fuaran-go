@@ -2109,8 +2109,11 @@ var formFieldNearMisses = [][2]string{
 func decodeFormField(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	// The near-miss check runs BEFORE the rule decode, so a field carrying both
-	// `validation` and a well-formed `rule` still names the ignored key.
-	checkNearMisses(obj, path, formFieldNearMisses)
+	// `validation` and a well-formed `rule` still names the ignored key. Named
+	// as the FORM vocabulary (Phase 959): this host reported it against the
+	// grid's until the check gained a vocabulary parameter, which sent the
+	// author to the wrong document — the four other hosts always named it.
+	checkNearMissesIn(obj, path, formFieldNearMisses, "form", formFieldNearMissConsequence)
 	s := newSpec(w, obj, path)
 	// Field alias: name — the HTML-forms prior for the field's identity. The
 	// id decodes first so the auto-bind context can use it.
@@ -2293,10 +2296,19 @@ func decodeCellKindErased(w *walkState, raw any, path string) Value {
 // narrowing is an ENUMERATED set with an unambiguous canonical form each; rule 2
 // holds for everything else.
 func nearMiss(path, found, canonical string) {
+	nearMissIn(path, found, canonical, "grid", "")
+}
+
+// nearMissIn — the near-miss refusal with the vocabulary NAMED, and an optional
+// trailing clause naming what the silence costs in that vocabulary. The message
+// is didactic, and one that names the wrong vocabulary sends the author to the
+// wrong document — which is why the four other hosts parameterise it and this
+// one now does too.
+func nearMissIn(path, found, canonical, vocabulary, consequence string) {
 	failExpecting(
 		CodeWrongType,
 		path+"."+found,
-		"'"+found+"' is not part of the grid vocabulary — it would be ignored, not honoured",
+		"'"+found+"' is not part of the "+vocabulary+" vocabulary — it would be ignored, not honoured"+consequence,
 		canonical,
 	)
 }
@@ -2304,12 +2316,58 @@ func nearMiss(path, found, canonical string) {
 // checkNearMisses walks the candidate table in declaration order, so which
 // defect surfaces first is deterministic across hosts.
 func checkNearMisses(obj map[string]any, path string, candidates [][2]string) {
+	checkNearMissesIn(obj, path, candidates, "grid", "")
+}
+
+func checkNearMissesIn(obj map[string]any, path string, candidates [][2]string, vocabulary, consequence string) {
 	for _, c := range candidates {
 		if _, ok := obj[c[0]]; ok {
-			nearMiss(path, c[0], c[1])
+			nearMissIn(path, c[0], c[1], vocabulary, consequence)
 		}
 	}
 }
+
+// a11yNearMisses — the `Accessibility` trait's near-miss set (Phase 959, the
+// Phase 863 discipline applied to the §3.1 trait).
+//
+// Rule 2's tolerance of unknown keys is right for a slot a future profile may
+// add and wrong for a near miss of one that exists. That silence is sharper here
+// than anywhere else in the vocabulary, for a reason peculiar to this trait: it
+// has NO VISIBLE OUTPUT. A mislabelled column is on screen; an ignored
+// `ariaLabel` looks identical to an honoured one from every side, so the refusal
+// is the only feedback that can ever arrive.
+//
+// Refused rather than aliased. `ariaLabel` IS an unambiguous synonym, so
+// admission turns on §16's other half — a shorthand earns its place by being a
+// genuine assist to the emitting model, and a six-character key rename is not
+// one. `live` settles it: the HTML idiom it comes from also spells a BOOLEAN, so
+// an alias would bind a possibly-boolean prior onto a closed token set.
+//
+// `live` and `ariaLabel` are named by MEASURED evidence (6 and 1 emissions
+// against `liveRegion`'s 12 and `label`'s 44, across 12,722 language-tier
+// emissions); the rest of their families ride in with them.
+var a11yNearMisses = [][2]string{
+	{"aria-label", "label — the accessible name, a Binding<string> (a bare string is the §3.6 shorthand)"},
+	{"ariaLabel", "label — the accessible name, a Binding<string> (a bare string is the §3.6 shorthand)"},
+	{"aria-labelledby", "labelledBy — the id of a sibling node whose text carries the name"},
+	{"ariaLabelledBy", "labelledBy — the id of a sibling node whose text carries the name"},
+	{"labelledby", "labelledBy — the slot name is camelCase on the wire, not the ARIA attribute spelling"},
+	{"aria-describedby", "describedBy — the id of a sibling node whose text carries the description"},
+	{"ariaDescribedBy", "describedBy — the id of a sibling node whose text carries the description"},
+	{"describedby", "describedBy — the slot name is camelCase on the wire, not the ARIA attribute spelling"},
+	{"aria-role", "role — the ARIA role NAME as a bare string"},
+	{"ariaRole", "role — the ARIA role NAME as a bare string"},
+	{"aria-live", `liveRegion — the closed token set "polite" / "assertive" / "off"`},
+	{"ariaLive", `liveRegion — the closed token set "polite" / "assertive" / "off"`},
+	{"live", `liveRegion — the closed token set "polite" / "assertive" / "off"`},
+	{"liveregion", `liveRegion — the closed token set "polite" / "assertive" / "off"`},
+	{"aria-hidden", "hidden — a Binding<bool> (a bare bool is the §3.6 shorthand)"},
+	{"ariaHidden", "hidden — a Binding<bool> (a bare bool is the §3.6 shorthand)"},
+}
+
+const a11yNearMissConsequence = ", and the intent would reach assistive technology as nothing at all"
+
+const formFieldNearMissConsequence = ", and the field would accept anything"
 
 // columnNearMisses — named by the census row itself. Deliberately NOT aliased to
 // `editable: false`: an inverting alias that guesses wrong makes a read-only
@@ -3114,6 +3172,11 @@ func decodeStyle(w *walkState, raw any, path string) Obj {
 // `role` is open to any role NAME but not to any VALUE.
 func decodeAccessibility(w *walkState, raw any, path string) Obj {
 	obj := expectObject(raw, path)
+	// Phase 959 — the near-miss check runs BEFORE the slot reads, matching the
+	// `FormField` ordering, so a trait carrying both `ariaLabel` and a
+	// well-formed `label` still names the ignored key rather than decoding half
+	// the author's intent in silence.
+	checkNearMissesIn(obj, path, a11yNearMisses, "accessibility", a11yNearMissConsequence)
 	fields := make(map[string]Value)
 	if raw, ok := obj["label"]; ok {
 		fields["label"] = decodeBindingString(w, raw, path+".label")
