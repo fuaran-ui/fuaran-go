@@ -123,7 +123,15 @@ func RenderWithIslandsAndEgress(
 ) (string, error) {
 	fragments := make(map[string]wire.Node)
 	collectFragments(node, fragments)
-	r := &renderer{sources: sources, fragments: fragments, islands: islands, egress: policy}
+	// WIRE_FORMAT.md §24.4 — the same seeding pass the static surface runs. The
+	// two surfaces must not differ, or one document would render two values
+	// depending only on whether a region was marked an island. See seeds.go.
+	r := &renderer{
+		sources:   WithStateSeeds(node, sources),
+		fragments: fragments,
+		islands:   islands,
+		egress:    policy,
+	}
 	staticHTML := r.renderNode(node)
 
 	var scripts strings.Builder

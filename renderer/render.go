@@ -1644,6 +1644,10 @@ func RenderHTML(node wire.Node, sources BindingSources) string {
 func RenderHTMLWithEgress(node wire.Node, sources BindingSources, policy EgressPolicy) string {
 	fragments := make(map[string]wire.Node)
 	collectFragments(node, fragments)
-	r := &renderer{sources: sources, fragments: fragments, egress: policy}
+	// WIRE_FORMAT.md §24.4 — the whole tree's `Binding.State` declarations seed
+	// their slots BEFORE any binding resolves, so a reader that carries no data
+	// of its own reads what a sibling declared. Laid UNDER the caller's own
+	// sources: a seed is never an override. See seeds.go.
+	r := &renderer{sources: WithStateSeeds(node, sources), fragments: fragments, egress: policy}
 	return r.renderNode(node)
 }

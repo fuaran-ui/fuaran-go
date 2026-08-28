@@ -971,18 +971,51 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		switch {
 		case liveTag != "":
 			b := decodeBinding(w, srcRawOrig, path+".source")
-			_, hasCarried := srcRawOrig.(map[string]any)["defaultValue"]
+			carried, hasCarried := srcRawOrig.(map[string]any)["defaultValue"]
+			emptyCarried := false
+			if rows, ok := carried.([]any); ok && len(rows) == 0 {
+				emptyCarried = true
+			}
 			if liveTag == "State" {
-				if hasCarried {
+				switch {
+				case emptyCarried:
+					// WIRE_FORMAT.md §16 / §24.4 — an EMPTY carried array is the
+					// EMPTY TABLE, not a malformed source. An initially-empty
+					// live collection ("count the requests in an empty log") is a
+					// complete intent with zero rows and no columns to infer, and
+					// under §24.4 it is also how a reader spells "I read this key
+					// and carry no data of my own" while a SIBLING reader's
+					// declaration seeds the slot.
+					//
+					// Sending it through the columnar codec instead ACCUSES it: a
+					// bare `[]` has no first row to take a key set from, so
+					// `normaliseTransformSource` passes the array through
+					// untouched and `decodeFrameSource` reports
+					// `WRONG_TYPE … expected object` against a document the
+					// reference hosts decode. That refusal is what kept
+					// `nodes/shared-source-seeded-pair` red on this host.
+					//
+					// The preserved binding stays the stored source, exactly as
+					// the carried-data arm below; only the snapshot VALIDATION is
+					// skipped, because an empty array has nothing to validate.
+					source = b
+				case hasCarried:
 					// Validate the carried data as the initial snapshot
 					// (didactics byte-identical to the 815 snapshot decode);
 					// the preserved binding stays the stored source.
 					srcRaw := normaliseTransformSource(srcRawOrig)
 					atComputePath(path+".source", func() Value { return decodeFrameSource(srcRaw) })
 					source = b
-				} else {
+				default:
 					// No carried data — surface the columnar codec's own
 					// missing-field didactic (byte-identical to pre-818).
+					//
+					// NOTE: §16 has since ACCEPTED the bare
+					// `{"$type":"State","key":k}` wrapper as a live source over
+					// the empty snapshot. That widening is a separate, sequenced
+					// act across every host (nothing in the corpus spells it yet,
+					// deliberately), so this host still refuses it and the refusal
+					// is a recorded gap rather than an oversight.
 					srcRaw := normaliseTransformSource(srcRawOrig)
 					source = atComputePath(path+".source", func() Value { return decodeFrameSource(srcRaw) })
 				}
