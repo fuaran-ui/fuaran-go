@@ -956,9 +956,9 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		// in the `source` slot verbatim (canonical re-encode is byte-for-byte
 		// — one wire dialect) and the renderer derives the initial snapshot
 		// from its carried default data at evaluation time. A State wrapper
-		// carrying NO data still errors didactically through the columnar
-		// codec (the 815 posture — it names the missing canonical field), and
-		// a State wrapper's carried data is snapshot-VALIDATED at decode so
+		// carrying NO data — the bare `{"$type":"State","key":k}` — is a live
+		// source over the EMPTY initial snapshot (§16), and a State wrapper's
+		// carried data is snapshot-VALIDATED at decode so
 		// the ragged-rows didactic stays byte-identical to the snapshot era.
 		srcRawOrig := require(obj, "source", path)
 		liveTag := ""
@@ -1007,17 +1007,23 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 					atComputePath(path+".source", func() Value { return decodeFrameSource(srcRaw) })
 					source = b
 				default:
-					// No carried data — surface the columnar codec's own
-					// missing-field didactic (byte-identical to pre-818).
+					// WIRE_FORMAT.md §16 — a State wrapper carrying NO payload
+					// member is a LIVE source over the EMPTY initial snapshot,
+					// exactly as the empty-array spelling above and as a
+					// Selection / Query source already were. It used to surface
+					// the columnar codec's missing-field didactic, which was
+					// correct while nothing else could fill the slot; under §24.4
+					// a SIBLING reader's declaration fills it, so the refusal was
+					// rejecting the most direct spelling of "I read this key and
+					// carry no data of my own" — the one FUARAN106's remedy text
+					// tells an author to write.
 					//
-					// NOTE: §16 has since ACCEPTED the bare
-					// `{"$type":"State","key":k}` wrapper as a live source over
-					// the empty snapshot. That widening is a separate, sequenced
-					// act across every host (nothing in the corpus spells it yet,
-					// deliberately), so this host still refuses it and the refusal
-					// is a recorded gap rather than an oversight.
-					srcRaw := normaliseTransformSource(srcRawOrig)
-					source = atComputePath(path+".source", func() Value { return decodeFrameSource(srcRaw) })
+					// The two spellings are ONE dialect and decode to the same
+					// live source; neither is normalised into the other, so each
+					// re-encodes to its own bytes — the decoded binding keeps its
+					// `defaultValue` ABSENT, which is what makes the bare form
+					// round-trip verbatim.
+					source = b
 				}
 			} else {
 				// Selection / Query — the initial snapshot derives from the
