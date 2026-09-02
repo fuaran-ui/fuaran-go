@@ -338,7 +338,11 @@ func updateBox(field string, value wire.Value, kind wire.Obj) fieldOutcome {
 			return fieldOutcome{tag: outcomeTypeMismatch, detail: result.detail}
 		}
 		return withLayoutField("wrap", result.value)
-	case field == "Cols" && mode == "Grid":
+	// Phase 1082 — Masonry carries the same column count under the same field
+	// name. Without the second mode here the introspection surface would
+	// advertise `Cols` on a masonry box and the apply engine would answer
+	// unknownField.
+	case field == "Cols" && (mode == "Grid" || mode == "Masonry"):
 		result := coerceInt(value)
 		if !result.ok {
 			return fieldOutcome{tag: outcomeTypeMismatch, detail: result.detail}

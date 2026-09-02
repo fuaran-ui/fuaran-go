@@ -430,7 +430,7 @@ var (
 	mathDisplayCases       = newCaseSet("Inline", "Block")
 	chartKindCases         = newCaseSet("Line", "Bar", "Area", "Pie", "Scatter", "Heatmap")
 	boxRoleCases           = newCaseSet("Group", "Card", "Dashboard", "Separator")
-	boxLayoutCases         = newCaseSet("Flex", "Grid", "Auto")
+	boxLayoutCases         = newCaseSet("Flex", "Grid", "Masonry", "Auto")
 	channelDirectionCases  = newCaseSet("OutOnly", "TwoWay")
 	textAnchorCases        = newCaseSet("Start", "Middle", "End")
 	// Phase 801 — the closed two-value sort direction on staticRows.defaultSort.
@@ -3090,6 +3090,27 @@ func decodeBoxLayout(raw any, path string) Obj {
 			fields["templateColumns"] = Str(expectString(raw, path+".templateColumns"))
 		}
 		return Obj{Tag: "Grid", Fields: fields}
+	case "Masonry":
+		// WIRE_FORMAT §3.6.7 — column-fill. `cols` is REQUIRED and POSITIVE, on
+		// the §3.6.4 srcSet width-floor pattern: `column-count: 0` is invalid
+		// CSS, so a container declaring it would fall back to whatever the host
+		// stylesheet last said and the wire would be carrying a host-defined
+		// layout.
+		//
+		// No auto-column leniency here, unlike Grid above, and the asymmetry is
+		// deliberate rather than an omission: Grid canonicalises a column-less
+		// spec to Auto because the language already owns that concept, whereas
+		// Auto is a ROW-fill mode — rewriting a masonry into it would discard
+		// the author's intent rather than recover it.
+		cols := expectInt(requireAliased(obj, "cols", path, "columns"), path+".cols")
+		if cols <= 0 {
+			fail(CodeWrongType, path+".cols", "expected a positive integer column count at "+path+".cols")
+		}
+		fields := map[string]Value{"cols": Int(cols)}
+		if raw, ok := obj["gap"]; ok {
+			fields["gap"] = Int(expectInt(raw, path+".gap"))
+		}
+		return Obj{Tag: "Masonry", Fields: fields}
 	default: // Auto
 		return Obj{Tag: "Auto", Fields: map[string]Value{}}
 	}

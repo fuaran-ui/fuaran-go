@@ -426,6 +426,21 @@ func (r *renderer) box(_ wire.Node, fields map[string]wire.Value) string {
 			style += ";gap:" + strconv.FormatInt(int64(gap), 10) + "px"
 		}
 		return element("div", []attr{{"class", "fuaran-layout-grid"}, {"style", style}}, r.childrenHTML(fields))
+	case role == "Group" && layout.Tag == "Masonry":
+		// WIRE_FORMAT §3.6.7 — column-fill, realised with the CSS multi-column
+		// family. `grid-template-rows: masonry` is NOT the mechanism and must
+		// not be substituted: it is not deterministically supported across
+		// engines, so a document rendered through it would lay out as a masonry
+		// on some readers' browsers and as an ordinary grid on others'.
+		cols := int64(1)
+		if c, ok := layout.Fields["cols"].(wire.Int); ok {
+			cols = int64(c)
+		}
+		style := "column-count:" + strconv.FormatInt(cols, 10)
+		if gap, ok := layout.Fields["gap"].(wire.Int); ok {
+			style += ";gap:" + strconv.FormatInt(int64(gap), 10) + "px"
+		}
+		return element("div", []attr{{"class", "fuaran-layout-masonry"}, {"style", style}}, r.childrenHTML(fields))
 	default:
 		// Group + Flex (the default / fallthrough).
 		dirClass := "fuaran-stack-vertical"

@@ -86,6 +86,10 @@ func boxKindClass(kind wire.Obj) string {
 		return "fuaran-kind-divider"
 	case role == "Group" && layout.Tag == "Grid":
 		return "fuaran-kind-grid-layout"
+	// §3.6.7 — the two modes fill differently, so a host styling "the grid
+	// container" must not catch both.
+	case role == "Group" && layout.Tag == "Masonry":
+		return "fuaran-kind-masonry"
 	default:
 		return "fuaran-kind-stack"
 	}
