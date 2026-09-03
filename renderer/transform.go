@@ -187,11 +187,18 @@ func evalTransformFrame(t wire.Obj, sources BindingSources) (dataframe.Table, er
 		pipeline = decoded
 	}
 
-	env, unbound, perr := resolveTransformParams(t.Fields["params"], sources)
+	env, listEnv, unbound, perr := resolveTransformParams(t.Fields["params"], sources)
 	if perr != nil {
 		return dataframe.Table{}, perr
 	}
-	bound := dataframe.BindParams(pipeline, env, unbound)
+	// A bound LIST param resolves by SUBSTITUTION, and it happens BEFORE the
+	// prune: a substituted `in`/`param` has become an `in`/`items` and so names
+	// no param at all, while an unbound one survives to be caught by the prune
+	// under its own name. That ordering is why one prune covers both param kinds.
+	bound := dataframe.BindParams(
+		dataframe.SubstituteListParams(pipeline, listEnv),
+		env, unbound,
+	)
 
 	result, evErr := dataframe.EvalPipeline(bound, input)
 	if evErr != nil {
@@ -201,15 +208,35 @@ func evalTransformFrame(t wire.Obj, sources BindingSources) (dataframe.Table, er
 }
 
 // resolveTransformParams resolves each Transform param's `from` binding to a
-// scalar cell (the env fed to substitution) or marks it unbound (no host value,
-// no default → its filter step is pruned). A param resolving to a non-scalar
-// value is an error (the whole transform renders absence).
-func resolveTransformParams(paramsVal wire.Value, sources BindingSources) (map[string]dataframe.Cell, map[string]bool, error) {
+// scalar cell (the env fed to scalar substitution), to a LIST of cells (the
+// separate env fed to list substitution), or marks it unbound (no host value, no
+// default → its filter step is pruned). A param resolving to neither a scalar
+// nor a list of scalars is an error (the whole transform renders absence).
+//
+// A param's source resolving to an ARRAY is a LIST param (the multi-select chip's
+// selection). Two rules govern it, and both are the wire format's rather than
+// this host's:
+//
+//   - It never enters the SCALAR env. It resolves by substitution through
+//     [dataframe.SubstituteListParams], the two envs staying disjoint so a kind
+//     mismatch in either direction substitutes nothing and reaches the strict
+//     unbound-param refusal instead of a silently wrong scoping.
+//   - An EMPTY selection is UNBOUND, never a list of no items. Nothing selected
+//     is the absence of a constraint, not a constraint no row satisfies, so it
+//     takes the same lenient prune an unset scalar chip already gets and the
+//     static render shows the UNFILTERED table. The distinction is visible in the
+//     output — an empty membership set would render zero rows — which is why it
+//     is decided here rather than left to the substitution.
+func resolveTransformParams(
+	paramsVal wire.Value,
+	sources BindingSources,
+) (map[string]dataframe.Cell, map[string][]dataframe.Cell, map[string]bool, error) {
 	env := map[string]dataframe.Cell{}
+	listEnv := map[string][]dataframe.Cell{}
 	unbound := map[string]bool{}
 	arr, ok := paramsVal.(wire.Arr)
 	if !ok {
-		return env, unbound, nil
+		return env, listEnv, unbound, nil
 	}
 	for _, item := range arr {
 		p, ok := item.(wire.Obj)
@@ -225,13 +252,41 @@ func resolveTransformParams(paramsVal wire.Value, sources BindingSources) (map[s
 			unbound[string(name)] = true
 			continue
 		}
-		cell, ok := valueToCell(resolved)
-		if !ok {
-			return nil, nil, fmt.Errorf("transform param %q resolved to a non-scalar value", string(name))
+		if cell, ok := valueToCell(resolved); ok {
+			env[string(name)] = cell
+			continue
 		}
-		env[string(name)] = cell
+		cells, ok := valueToCells(resolved)
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("transform param %q resolved to a non-scalar value", string(name))
+		}
+		if len(cells) == 0 {
+			unbound[string(name)] = true // deselected to empty ⇒ no constraint
+			continue
+		}
+		listEnv[string(name)] = cells
 	}
-	return env, unbound, nil
+	return env, listEnv, unbound, nil
+}
+
+// valueToCells coerces a resolved ARRAY of scalars to evaluator cells, preserving
+// order. A non-array, or an array holding a structured item, has no membership
+// reading (ok=false ⇒ a param error), so a half-readable selection is refused
+// rather than silently truncated to the items that happened to coerce.
+func valueToCells(v wire.Value) ([]dataframe.Cell, bool) {
+	arr, ok := v.(wire.Arr)
+	if !ok {
+		return nil, false
+	}
+	cells := make([]dataframe.Cell, len(arr))
+	for i, item := range arr {
+		cell, ok := valueToCell(item)
+		if !ok {
+			return nil, false
+		}
+		cells[i] = cell
+	}
+	return cells, true
 }
 
 // valueToCell coerces a resolved scalar wire value to an evaluator Cell; a

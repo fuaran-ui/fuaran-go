@@ -247,6 +247,38 @@ node, not a special case for grids. The line stays where Phase 651 drew it:
 markup, and sorting / paging / editing remain the client's. Pinned by the
 bound-grid tests in `renderer/transform_test.go`.
 
+### List-valued Transform params — what a static render shows with nothing selected
+
+A `Transform` param whose source resolves to an **array** is a LIST param — the
+multi-select chip's selection, read by the pipeline through the membership test's
+`param` form (`{"$type":"in","expr":…,"param":"<name>"}`). This host resolves it
+at render time, on the same completeness posture as every other bound slot, and
+three rules govern it. All three are the wire format's; none is a Go choice.
+
+- **Resolution is by SUBSTITUTION, never through the evaluation env.** Each bound
+  occurrence is rewritten to the literal `in`/`items` form *before* the pipeline
+  is evaluated. The evaluator itself resolves no param at all: one that reaches
+  it still naming a param is a strict `UNBOUND_PARAM`, so a selection either
+  scopes the rows correctly or refuses — there is no path to a silent pass.
+- **An empty selection is UNBOUND, not an empty membership set.** Deselecting
+  everything shows the **unfiltered** table, not an empty one: nothing selected
+  is the absence of a constraint, not a constraint no row satisfies. It takes the
+  same lenient prune an unset scalar chip already gets, so one rule covers both
+  param kinds. A selection that *is* set and matches no row still renders empty —
+  that is a real constraint, and the two cases are deliberately distinguished.
+- **A kind mismatch reaches the strict refusal.** The scalar env never binds a
+  list param and the list env never binds a scalar one, so a scalar bound to a
+  name read as `in`/`param` — or a list bound to one read as a scalar `param` —
+  substitutes nothing and refuses, rather than being coerced into a plausible
+  and wrong scoping.
+
+Reactivity is not part of this host's share of the rule, and the omission is the
+library-not-a-runtime line rather than a gap: the chip-to-grid edge is derived
+from the pipeline's params and lives wherever the selection is *held*, which is
+never here. Pinned by `dataframe/listparams_test.go` (the mechanism) and
+`conformance/listparam_test.go` (the emitted rows, over the shared corpus
+fixture).
+
 ## Server-driven hand-off — what the driver hands a client, and what it never holds
 
 The bound-grid section above ends on "sorting / paging / editing remain the
