@@ -91,10 +91,18 @@ const (
 // decoder self-recursive on its own axis, and the syntactic bound only LOOKS
 // like adequate cover for it. On the reference host, 2.6 KB of nested Batches
 // killed the process with every node-side guard already in place.
+// The TREE-ITEM axis is the THIRD such axis, added by Phase 1120 for the same
+// reason the op axis exists. A whole `Tree` hierarchy lives inside ONE node, so
+// the node axis cannot see it at all — `enterNode` is never reached for a
+// `TreeItem`, which is a record and not a `Node`. And at roughly two JSON levels
+// per row the syntactic bound (256) is nowhere near reached by a hierarchy the
+// node bound would already have refused. Counted separately, held to the same
+// MaxNodeDepth ceiling, on the `TreeOp.Batch` precedent.
 type walkState struct {
 	nodeDepth int
 	nodes     int
 	opDepth   int
+	itemDepth int
 }
 
 func newWalkState() *walkState { return &walkState{} }
@@ -139,6 +147,23 @@ func (w *walkState) enterOp(path string) {
 }
 
 func (w *walkState) exitOp() { w.opDepth-- }
+
+// enterItem bounds `TreeItem` nesting (§21.5), on the way DOWN like every other
+// axis. The path passed is the OFFENDING item's own path, so a document names
+// the row at fault rather than the tree that holds it.
+func (w *walkState) enterItem(path string) {
+	if w.itemDepth >= MaxNodeDepth {
+		failExpecting(
+			CodeLimitExceeded,
+			path,
+			"tree-item nesting deeper than the wire limit MaxNodeDepth = "+itoa(MaxNodeDepth),
+			"a tree nesting items no more than "+itoa(MaxNodeDepth)+" levels deep",
+		)
+	}
+	w.itemDepth++
+}
+
+func (w *walkState) exitItem() { w.itemDepth-- }
 
 // checkShape bounds syntactic depth, string length and array/object width over
 // the already-parsed document.

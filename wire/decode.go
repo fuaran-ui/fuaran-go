@@ -419,6 +419,20 @@ var (
 	imageFitCases     = newCaseSet("Natural", "Cover", "Contain")
 	imageAspectCases  = newCaseSet("Natural", "Square", "FourThree", "ThreeTwo", "SixteenNine")
 	imageLoadingCases = newCaseSet("Eager", "Lazy")
+	// Phase 1110 — §3.6.6's `TrackKind`, a BARE enum (§3.5), so an unrecognised
+	// token reports at the array element's own path with no `.$type` suffix.
+	// Closed at four: `metadata` is deliberately NOT admitted, because its cues
+	// are rendered by no user agent and read only by script, so a declarative
+	// document naming it would state an intent no conformant host could honour.
+	trackKindCases = newCaseSet("Subtitles", "Captions", "Descriptions", "Chapters")
+	// Phase 1111 — §3.6.8's `EmbedPermission`, likewise a BARE enum. Closed at
+	// four, and the two omissions are DESIGN rather than reservation: a
+	// top-level-navigation relaxation is the drive-by redirect, and a downloads
+	// relaxation puts a file-save prompt in a third party's hands. A decoder
+	// MUST NOT silently drop an unrecognised token — that would turn a document
+	// asking for something this vocabulary cannot name into one asking for
+	// LESS, which reads as success.
+	embedPermissionCases = newCaseSet("AllowScripts", "AllowSameOrigin", "AllowForms", "AllowFullscreen")
 	// Phase 1076 — §3.6.6. ONE kind, two variants: everything a video surface
 	// and an audio surface share is stated once on the record, and only the
 	// slots that genuinely differ live in the variant. Discriminated by
@@ -464,10 +478,14 @@ var (
 	durationStyleCases    = newCaseSet("Compact", "Clock", "Long")
 	relativeTimeUnitCases = newCaseSet("Second", "Minute", "Hour", "Day", "Week", "Month", "Year")
 	// Phase 821 — the standalone Icon display kind's size enum.
-	iconSizeCases     = newCaseSet("Small", "Medium", "Large")
-	columnWidthCases  = newCaseSet("Auto", "Fixed", "Flex")
-	cellKindCases     = newCaseSet("Text", "Numeric", "Date", "Editable", "Checkbox", "Button", "ButtonGroup", "Link", "Pill", "TonedPill", "Progress", "Custom")
-	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Toggle", "Choice", "SegmentedChoice", "TextArea", "Range", "Date", "DateRange")
+	iconSizeCases    = newCaseSet("Small", "Medium", "Large")
+	columnWidthCases = newCaseSet("Auto", "Fixed", "Flex")
+	cellKindCases    = newCaseSet("Text", "Numeric", "Date", "Editable", "Checkbox", "Button", "ButtonGroup", "Link", "Pill", "TonedPill", "Progress", "Custom")
+	// Phase 1113 — `Combobox` is the searchable form of `Choice`: a LARGE,
+	// searchable or asynchronous option set, or one that admits a value not on
+	// the list. Its `value` / `onChange` contract IS Choice's, deliberately, so
+	// a document migrating between the two changes its `$type` and nothing else.
+	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Toggle", "Choice", "SegmentedChoice", "Combobox", "TextArea", "Range", "Date", "DateRange")
 	flushTriggerCases = newCaseSet("OnBlur", "OnSubmit", "OnDebounce", "OnCommitAction")
 	actionCases       = newCaseSet(
 		"Chain", "Dispatch", "Navigate", "SetState", "Notify", "WriteToClipboard",
@@ -512,6 +530,12 @@ var knownKinds = newCaseSet(
 	// Display
 	"Heading", "Markdown", "Metric", "Fact", "Badge", "Sparkline", "Callout", "Progress", "Skeleton",
 	"Icon", "LabelValueRow", "Link", "Image", "Media", "List", "Toast", "CodeBlock", "Math", "Drawing",
+	// Phase 1111 / 1120 — the sandboxed third-party embed, and recursive
+	// disclosure with tree semantics. Both are Display kinds; `Tree` is the
+	// format's first self-referential shape (its rows are `TreeItem` records,
+	// not `Node`s, so the hierarchy costs no node depth and is bounded on its
+	// own axis — §21.5).
+	"Embed", "Tree",
 	// Input
 	"Form", "Button", "FileUpload", "Select", "Filters",
 	// Visualisation
@@ -1874,7 +1898,12 @@ func placeholderMatches(kindTag string, v Value) bool {
 		return isNumericZero(v)
 	case "Checkbox", "Toggle":
 		return isBool(v, false)
-	case "Choice", "SegmentedChoice":
+	// `Combobox` shares `Choice`'s placeholder because §3.6.9 makes the value
+	// contract Choice's normatively — a document migrating between the two
+	// changes its `$type` and nothing else, which a divergent placeholder here
+	// would break. With free text admitted an empty entry is genuinely NO value,
+	// so it is null rather than "": one fact, one spelling.
+	case "Choice", "SegmentedChoice", "Combobox":
 		_, ok := v.(Null)
 		return ok
 	case "Range":
@@ -1952,6 +1981,23 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 		handler("onChange")
 		s.req("options", decodeBindingSelectOptions)
 		valueSlot(decodeBindingStringOpt)
+	// Phase 1113 — the searchable form of `Choice`. `options` is the case's ONLY
+	// required member (a combobox with no option source is not a control), and
+	// `value` / `onChange` are Choice's, normatively: a document migrating
+	// between the two changes its `$type` and nothing else, so the auto-bind and
+	// the omitted-value contract are shared rather than re-stated.
+	//
+	// `allowFreeText` omits at `false` and the polarity is load-bearing: the
+	// SHORTEST combobox document is the CONSTRAINED one, so an emitter that says
+	// nothing gets the shape a `Select` would have had. A present member of any
+	// type other than boolean is `WRONG_TYPE` and is NOT coerced — the slot
+	// decides whether off-list values are admitted, and a lenient truthiness
+	// read would widen the field on `"no"` and `"false"` alike.
+	case "Combobox":
+		handler("onChange")
+		s.req("options", decodeBindingSelectOptions)
+		valueSlot(decodeBindingStringOpt)
+		s.optDrop("allowFreeText", decodeBool, isFalseValue)
 	case "SegmentedChoice":
 		handler("onChange")
 		s.req("options", decodeBindingSelectOptions)
@@ -2528,6 +2574,90 @@ func decodeSrcSet(w *walkState, raw any, path string) Value {
 	return out
 }
 
+// decodeTracks — §3.6.6's timed-text tracks (Phase 1110).
+//
+// The STRICTEST record on the wire: four of a `TrackEntry`'s five members are
+// required. `srcLang` is required on EVERY kind, where HTML makes `srclang`
+// mandatory only on subtitles — the extra strictness costs an author one value
+// and buys a menu a user agent can order and a reader can tell apart, and there
+// is no value to default to that would not be an invented claim about someone
+// else's recording. `default` is the one omitted-at-`false` slot.
+//
+// The path carries the ARRAY INDEX (`$.kind.tracks[0].srcLang`), so a document
+// with four tracks names the one at fault — the `srcSet` convention, and the
+// position at which a host decoding array elements with a looser walker than its
+// records gets it wrong.
+func decodeTracks(w *walkState, raw any, path string) Value {
+	arr := expectArray(raw, path)
+	out := make(Arr, len(arr))
+	for i, item := range arr {
+		p := path + "[" + strconv.Itoa(i) + "]"
+		s := newSpec(w, expectObject(item, p), p)
+		s.req("kind", enumDecoder(trackKindCases, "kind", noAliases))
+		s.req("label", decodeTextSource)
+		s.req("src", decodeBindingString)
+		s.req("srcLang", decodeString)
+		// Refused rather than coerced: two hosts ruling differently on
+		// truthiness would disagree about which caption track opens, which is a
+		// difference the reader meets on the first frame.
+		s.optDrop("default", decodeBool, isFalseValue)
+		out[i] = s.buildStrict("")
+	}
+	return out
+}
+
+// decodeEmbedPermissions — §3.6.8's sandbox relaxations (Phase 1111).
+//
+// Two refusals at the same path and they are different codes, deliberately: a
+// non-string element is `WRONG_TYPE` (a host that read a bare `true` as a
+// granted permission would have to invent WHICH one it names), and a recognised
+// SHAPE carrying an unrecognised token is `UNKNOWN_DU_CASE`. Both report at the
+// element's own path with no `.$type` suffix, because the slot holds bare enum
+// strings.
+func decodeEmbedPermissions(w *walkState, raw any, path string) Value {
+	arr := expectArray(raw, path)
+	out := make(Arr, len(arr))
+	for i, item := range arr {
+		p := path + "[" + strconv.Itoa(i) + "]"
+		out[i] = Str(enumStr(item, p, embedPermissionCases, "permissions", noAliases))
+	}
+	return out
+}
+
+// decodeTreeItems — §3.6.12's self-referential rows (Phase 1120).
+//
+// `children` holds the SAME record, which makes this the format's first
+// recursive shape, and the recursion is bounded on its own §21.5 axis rather
+// than on the node axis, which structurally cannot see it.
+//
+// `children` omits at the EMPTY LIST and `icon` when absent, so a leaf carries
+// exactly two keys — which is most of a real hierarchy, and a host emitting
+// `"children":[]` on a leaf produces different bytes for most of a file listing.
+//
+// Duplicate row ids are NOT refused here. That is §8.1's position for `NodeId`
+// and it transfers for §8.1's own reason: duplicate detection is a whole-tree
+// property, a decoder streaming a document is not required to carry the id set,
+// and there is no error code for it. The obligation sits with the emitter.
+func decodeTreeItems(w *walkState, raw any, path string) Value {
+	arr := expectArray(raw, path)
+	out := make(Arr, len(arr))
+	for i, item := range arr {
+		p := path + "[" + strconv.Itoa(i) + "]"
+		w.enterItem(p)
+		s := newSpec(w, expectObject(item, p), p)
+		s.req("id", decodeString)
+		s.req("label", decodeTextSource)
+		// Recursion. The child walker is the SAME walker as the root one — a
+		// host whose child walk is looser than its root walk passes every
+		// top-level reject vector and fails `reject-tree-nested-item-missing-id`.
+		s.optDrop("children", decodeTreeItems, isEmptyArr)
+		s.opt("icon", decodeString)
+		out[i] = s.buildStrict("")
+		w.exitItem()
+	}
+	return out
+}
+
 // decodePositiveInt — the `w` descriptor floor, a DECODE rule rather than a
 // validator one. Zero is refused as firmly as a negative on purpose: a `0w`
 // candidate is not a small image, it is one a client can never select, so
@@ -2595,7 +2725,14 @@ var requiredKindFields = map[string][]string{
 	// say so with an empty `alt`, but a media element is a TRANSPORT and is
 	// never decorative. There is no value to default to that would not be a
 	// fabricated name for someone else's recording.
-	"Media":      {"kind", "label", "src"},
+	"Media": {"kind", "label", "src"},
+	// Phase 1111 — the accessible name is mandatory because a browsing context
+	// has no decorative case, and there is no value to default to that would not
+	// be a fabricated description of someone else's page.
+	"Embed": {"src", "title"},
+	// Phase 1120 — the rows. Both State keys are optional (a tree naming no
+	// `expandedStateKey` renders fully expanded and does not toggle).
+	"Tree":       {"items"},
 	"List":       {"items", "ordered"},
 	"Toast":      {"message", "open"},
 	"CodeBlock":  {"code", "copyable", "highlightLines", "language", "lineNumbers"},
@@ -2819,7 +2956,51 @@ func init() {
 			s.req("label", decodeTextSource)
 			s.optDrop("loop", decodeBool, isFalseValue)
 			s.req("src", decodeBindingString)
+			// Phase 1110 — both live on the SPEC rather than on
+			// `MediaKind.Video`, and the second placement is the one worth
+			// explaining: a transcript is the affordance an AUDIO surface needs
+			// most, because a recording with no visual channel has nowhere else
+			// to put its words.
+			//
+			// `tracks` is omitted when EMPTY — an absent list and an empty one
+			// denote the same document — so it drops rather than encoding `[]`.
+			// `transcript` is an ORDINARY optional: absent means the document
+			// offers no transcript, which is a different statement from
+			// offering an empty one, so it does not drop at "".
+			s.optDrop("tracks", decodeTracks, isEmptyArr)
+			s.opt("transcript", decodeTextSource)
 			return s.build("Media")
+		},
+		// Phase 1111 — §3.6.8. `title` is REQUIRED on `MediaSpec.label`'s
+		// argument one kind over: a frame is a focus container a reader tabs
+		// INTO, so there is no decorative embed, and a frame with no accessible
+		// name is announced as "frame" and nothing else.
+		//
+		// `permissions` omits at the EMPTY list and empty means TOTAL DENIAL —
+		// that polarity is the design rather than a consequence of the omit
+		// rule, so the wire-cheapest document is also the most locked-down one.
+		// `aspectRatio` REUSES `ImageAspect` (the cases are pure layout ratios
+		// with nothing image-specific in them) and omits at `Natural`.
+		"Embed": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
+			s.optDrop("aspectRatio", enumDecoder(imageAspectCases, "aspectRatio", noAliases), isNaturalImageToken)
+			s.optDrop("permissions", decodeEmbedPermissions, isEmptyArr)
+			s.req("src", decodeBindingString)
+			s.req("title", decodeTextSource)
+			return s.build("Embed")
+		},
+		// Phase 1120 — §3.6.12. Expansion and selection are named State keys and
+		// there is no `expandable` / `selectable` boolean: a behaviour the
+		// reader drives is declared as a key the host both writes and reads, and
+		// a flag with no key behind it is a decorative control writing state
+		// nothing reads.
+		"Tree": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
+			s.opt("expandedStateKey", decodeString)
+			s.req("items", decodeTreeItems)
+			s.sentinel("onSelect")
+			s.opt("selectionStateKey", decodeString)
+			return s.build("Tree")
 		},
 		"List": func(w *walkState, obj map[string]any, path string) Obj {
 			s := newSpec(w, obj, path)
@@ -3283,6 +3464,23 @@ func decodeNodeValue(w *walkState, raw any, path string) Node {
 	}
 	if raw, ok := obj["accessibility"]; ok {
 		extras["accessibility"] = decodeAccessibility(w, raw, path+".accessibility")
+	}
+	// Phase 1112 — the node-level tooltip TRAIT. It sits on the envelope beside
+	// `accessibility`, not inside any kind: a hint is uniform across kinds, so
+	// there is nothing about "a short supplementary description of this thing"
+	// that varies with whether the thing is a button or a metric.
+	//
+	// It is an ordinary `TextSource` slot, which is what refuses `42` at
+	// `$.tooltip` with WRONG_TYPE: the bare STRING is the canonical encoding of
+	// a literal hint (Literal is TextSource's transparent case), so a number is
+	// one lenient `toString` away from minting hint text out of a JSON type —
+	// which no downstream check could ever catch.
+	//
+	// A `tooltip` inside a `kind` object is NOT this trait: `ButtonSpec` carries
+	// a legacy host-only slot of that name (§10.1) which is never emitted and
+	// never decoded, and it stays an unknown key tolerated under rule 2.
+	if raw, ok := obj["tooltip"]; ok {
+		extras["tooltip"] = decodeTextSource(w, raw, path+".tooltip")
 	}
 	return Node{ID: id, Kind: kind, Extras: extras}
 }
