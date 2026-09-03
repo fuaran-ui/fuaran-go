@@ -80,7 +80,9 @@ Shipped:
 - **`ops`** — the tree-op apply engine: `Apply(op, tree)` over the full 11-op
   algebra with typed, recoverable `ApplyError`s (never a panic), the §3.4
   nested `UpdateProp` path surface, and the `CanApply` dry-run
-  (canApply ≡ apply success by construction).
+  (canApply ≡ apply success by construction). It also ships the **placement algebra**
+  (`PlaceOp` / `MoveOp` / `NudgeOp` / `ReorderOp` / `CanPlace`) and the **clone
+  verbs** (`DuplicateOp` / `PasteOp`) — see below.
 - **`validator`** — the pre-emit, default-deny-by-shape structural validator:
   empty/duplicate ids, unrecognised kinds, missing wire-required slots, and
   the bounded-primitive advisory, with structured findings at `$`-rooted paths.
@@ -340,6 +342,64 @@ pinned by `wire/retired_position_test.go`.
 
 This host declares no stability policy yet (pre-1.0), so the change is
 recorded here rather than in a `STABILITY.md` it does not have.
+
+## Placement algebra and clone verbs — helpers, not wire
+
+The consequence of the section above is that a caller who wants a node anywhere but
+last has to derive the whole sibling permutation itself. A Go service composing
+server-driven updates is exactly that caller, so `ops` ships the derivation once:
+
+```go
+target := ops.Target{ParentID: "sidebar", Placement: ops.Before("filters")}
+
+op, err := ops.MoveOp(tree, "legend", target)   // re-parent or re-place
+op, err = ops.PlaceOp(tree, node, target)       // placed insert
+op, err = ops.NudgeOp(tree, "legend", -1)       // keyboard move-up / move-down
+op, err = ops.DuplicateOp(tree, "card", target) // subtree clone, ids remapped
+op, err = ops.PasteOp(tree, lifted, target)     // a subtree lifted from another tree
+err = ops.CanPlace(tree, "legend", target)      // the pre-check, no dry-run apply
+```
+
+**These are helpers over the EXISTING op vocabulary — no wire change, no new
+`TreeOp` case, and no new conformance-fixture family.** Every helper emits an
+ordinary `InsertChild` / `MoveNode` / `ReorderChildren`, or a `Batch` of two of
+them, and the emitted op passes the host's standard apply gate unchanged. The
+reorder leg is **dropped** whenever appending already yields the wanted order, so
+the common case stays one bare op rather than a Batch restating an order the tree
+is already in.
+
+Three things are worth knowing before calling them:
+
+- **Refusals are typed and mirror the apply engine 1:1.** A `*PlaceError` carries
+  a code that pre-states the apply-time refusal the emitted op would have met
+  (`ParentNotFound`, `ChildlessKind`, `NodeNotFound`, `DuplicateNodeId`,
+  `MoveIntoSelf`, `MoveIntoDescendant`). That correspondence is established by
+  exhaustion rather than asserted: `ops/placement_test.go` sweeps every
+  (node, destination) pair over a fixture tree and fails if the helper and the
+  apply engine ever disagree about whether the move is legal. Nothing here panics.
+- **An unknown anchor is REFUSED, not silently appended** — the one deliberate
+  tightening. The only op that could honour an anchor which is not a post-op
+  sibling is a `ReorderChildren` naming it, and the apply engine refuses that as
+  `OrderingMismatch`; saying so before emission is friendlier than a rejection
+  after it. Three refusals claim no apply-side counterpart and have none:
+  `CannotNudgeRoot` and `NudgeOutOfRange` describe a nudge that yields no op at
+  all, and `UnknownPlacement` is a Go-only shape defect — the zero `Placement` is
+  reachable here where the reference host's closed union makes it unrepresentable,
+  so it is refused rather than read as a synonym for `Last`.
+- **The clone verbs take an injectable id strategy.** `DerivedIDs` (the default)
+  mints `"<id>-copy"`, probing `-copy-2`, `-copy-3` past anything taken;
+  `SequentialIDs(prefix)` is the deterministic-replay option, its sequence
+  depending only on the prefix and the order of requests. Both are handed a
+  predicate covering the target tree, the incoming subtree and ids minted earlier
+  in the same remap, so a clone can never re-introduce the duplicate the remap
+  exists to remove. The remap walks the **whole** traversal surface, not just
+  layout children — a clone that kept an old id inside a `Switch` case would
+  smuggle a duplicate past the tree-wide id contract.
+
+Ids are rewritten; references to ids are not. A cloned subtree that names another
+node by id (a teleport target, a fragment reference) keeps pointing where it
+pointed, which is the reference host's behaviour and is the caller's to fix up
+where it is not what was wanted.
 
 ## Typed actor on the DAG record — a re-addressing change
 
