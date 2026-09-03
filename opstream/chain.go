@@ -46,9 +46,14 @@ func sha256Hex(payload string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// encodeActor is the canonical JSON of the typed actor — folded into the record
-// hash. Field order is pinned (kind first, then case fields).
-func encodeActor(actor Actor) string {
+// EncodeActor is the canonical JSON of the typed actor — folded into the record
+// hash. Field order is PINNED (kind first, then the case fields), NOT
+// Ordinal-sorted; that pinning is the contract. The same bytes are folded into
+// the linear chain's pre-image here and nested verbatim into the DAG record's
+// wire form (package dag) since Phase 1144, so this host carries ONE canonical
+// actor encoding rather than two that can drift. Exported for that second
+// consumer.
+func EncodeActor(actor Actor) string {
 	switch t := actor.(type) {
 	case HumanActor:
 		return `{"kind":"human","id":` + canonical.EscapeString(t.ID) + "}"
@@ -129,7 +134,7 @@ func ComputeHash(previousHash string, op wire.Obj, sequence int, timestampUnixSe
 		return "", err
 	}
 	payload := `{"seq":` + strconv.Itoa(sequence-1) +
-		`,"actor":` + encodeActor(actor) +
+		`,"actor":` + EncodeActor(actor) +
 		`,"op":` + entry + "}"
 	return sha256Hex(previousHash + "|" + payload), nil
 }

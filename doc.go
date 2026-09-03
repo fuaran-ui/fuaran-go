@@ -20,4 +20,9 @@
 package fuarango
 
 // Version is the pre-release version of the fuaran-go host.
-const Version = "0.0.1-alpha"
+//
+// 0.0.2-alpha carries the Phase 1168 BREAKING change to the DAG record surface:
+// dag.Record's bare UserID becomes the typed Actor, and pre-1144 DAG content
+// addresses do not carry forward. Recorded in README.md — this host declares no
+// STABILITY.md.
+const Version = "0.0.2-alpha"
