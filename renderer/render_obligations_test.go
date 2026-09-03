@@ -307,6 +307,191 @@ func checkMediaRefusedSourceDropped(t *testing.T) {
 	mustEmit(t, allowed, `poster="/walkthrough-poster.jpg"`, "a local poster still renders")
 }
 
+// Media/authored-child-order (§3.6.6). The tracks are emitted in the order the
+// array carries them, never re-sorted — the OPPOSITE of §3.6.4's srcSet rule,
+// because a reader picks a track from a menu the user agent builds in DOCUMENT
+// order, so ordering it would be rewriting someone else's menu.
+//
+// The fixture is authored in an order NO sort produces (gd, then two en), which
+// is what makes this separately testable from the srcSet rule: a renderer that
+// sorted by srclang, by label, or by kind would fail here and pass every other
+// media assertion.
+func checkMediaAuthoredChildOrder(t *testing.T) {
+	html := renderJSON(t, `{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Harbour restoration","src":{"$type":"Static","value":"/restoration-2.mp4"},"tracks":[{"kind":"Subtitles","label":"Gàidhlig","src":{"$type":"Static","value":"/restoration-2.gd.vtt"},"srcLang":"gd"},{"default":true,"kind":"Captions","label":"English captions","src":{"$type":"Static","value":"/restoration-2.en.vtt"},"srcLang":"en"}]}}`)
+
+	// Asserted as ONE contiguous string, not as two independent Contains: two
+	// membership checks pass under either ordering, which is precisely the
+	// defect this obligation is about.
+	mustEmit(t, html,
+		`<track kind="subtitles" src="/restoration-2.gd.vtt" srclang="gd" label="Gàidhlig" /><track kind="captions" src="/restoration-2.en.vtt" srclang="en" label="English captions" default="" />`,
+		"the tracks were not emitted in AUTHORED order")
+}
+
+// Media/single-default-per-kind (§3.6.6). Two default captions tracks are legal
+// BYTES — the decoder does not refuse them — so the host resolves the election,
+// and every host resolves it the same way: FIRST election of a kind wins.
+//
+// Three legs, and the second and third are what make it an obligation rather
+// than a spelling. The later track is still EMITTED (only its claim on the menu
+// is dropped), and the election is PER KIND, so a subtitles default coexists
+// with a captions one — a renderer that kept a single global "seen a default"
+// flag passes the first leg and fails the third.
+func checkMediaSingleDefaultPerKind(t *testing.T) {
+	html := renderJSON(t, `{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Harbour restoration","src":{"$type":"Static","value":"/r.mp4"},"tracks":[{"default":true,"kind":"Captions","label":"English captions","src":{"$type":"Static","value":"/r.en.vtt"},"srcLang":"en"},{"default":true,"kind":"Captions","label":"English captions (verbose)","src":{"$type":"Static","value":"/r.en-verbose.vtt"},"srcLang":"en"},{"default":true,"kind":"Subtitles","label":"Gàidhlig","src":{"$type":"Static","value":"/r.gd.vtt"},"srcLang":"gd"}]}}`)
+
+	mustEmit(t, html,
+		`<track kind="captions" src="/r.en.vtt" srclang="en" label="English captions" default="" />`,
+		"the FIRST election of a kind is honoured")
+	// Still emitted, without the attribute — the track keeps its place in the
+	// menu and loses only its claim on it.
+	mustEmit(t, html,
+		`<track kind="captions" src="/r.en-verbose.vtt" srclang="en" label="English captions (verbose)" />`,
+		"the second election of the SAME kind is emitted WITHOUT default, not dropped")
+	mustEmit(t, html,
+		`<track kind="subtitles" src="/r.gd.vtt" srclang="gd" label="Gàidhlig" default="" />`,
+		"the election is PER KIND — a subtitles default coexists with a captions one")
+
+	// A refused track is DROPPED (obligation 4), and dropping it must not spend
+	// the kind's election: without this leg a renderer that claimed the slot
+	// before checking egress would leave the surviving track undefaulted.
+	refused := renderJSON(t, `{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Harbour","src":{"$type":"Static","value":"/r.mp4"},"tracks":[{"default":true,"kind":"Captions","label":"Remote","src":{"$type":"Static","value":"`+refusedURL+`"},"srcLang":"en"},{"default":true,"kind":"Captions","label":"Local","src":{"$type":"Static","value":"/r.en.vtt"},"srcLang":"en"}]}}`)
+	mustNotEmit(t, refused, "collector.example", "a refused track's destination is never emitted")
+	mustNotEmit(t, refused, EgressRefusalURL, "a refused track is DROPPED, never emitted in neutered form")
+	mustEmit(t, refused,
+		`<track kind="captions" src="/r.en.vtt" srclang="en" label="Local" default="" />`,
+		"a dropped track forfeits its election — the surviving track takes it")
+}
+
+// Media/transcript-disclosure-named (§3.6.6). The transcript renders as a
+// disclosure BESIDE the transport, never inside it: <video> and <audio> admit
+// only source-ish children, so a transcript placed there would be fallback
+// content a browser never shows.
+//
+// The disclosure carries the MEDIA's resolved label as its own accessible name,
+// so a reader meeting it out of context is told which recording it transcribes.
+func checkMediaTranscriptDisclosureNamed(t *testing.T) {
+	html := renderJSON(t, `{"id":"m","kind":{"$type":"Media","kind":{"$type":"Audio"},"label":"Curator's commentary","src":{"$type":"Static","value":"/commentary.mp3"},"transcript":"The harbour was rebuilt twice."}}`)
+
+	// The element ORDER is pinned, not merely both elements' presence: a
+	// transcript emitted as a CHILD of the <audio> would satisfy two Contains
+	// checks and be invisible in every browser.
+	mustEmit(t, html, `</audio><details class="fuaran-media-transcript"`,
+		"the disclosure is a SIBLING of the transport, after it — never a child")
+	mustEmit(t, html, `<details class="fuaran-media-transcript" aria-label="Curator&#x27;s commentary">`,
+		"the disclosure carries the MEDIA's resolved label as its accessible name")
+	mustEmit(t, html, `<summary class="fuaran-media-transcript-summary">Transcript</summary>`,
+		"the summary is renderer chrome")
+	mustEmit(t, html, `<div class="fuaran-media-transcript-body">The harbour was rebuilt twice.</div>`,
+		"the transcript body is the document's own text")
+	mustEmit(t, html, `<div class="fuaran-media-group">`,
+		"a present transcript is the one case the emission gains a wrapper")
+
+	// The absent twin. Without it a renderer that wrapped EVERY media element
+	// would pass every assertion above and this obligation would guard nothing.
+	bare := renderJSON(t, `{"id":"m","kind":{"$type":"Media","kind":{"$type":"Audio"},"label":"Curator's commentary","src":{"$type":"Static","value":"/commentary.mp3"}}}`)
+	mustNotEmit(t, bare, "fuaran-media-group", "absent, the emission is the bare element it would otherwise be")
+	mustNotEmit(t, bare, "fuaran-media-transcript", "…and no disclosure at all")
+}
+
+// Embed/accessible-name-always (§3.6.8). The title is mandatory on the wire and
+// a browsing context has no decorative case, so the attribute is emitted always
+// rather than where an author supplied one.
+func checkEmbedAccessibleNameAlways(t *testing.T) {
+	html := renderJSON(t, `{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"https://player.example/embed/harbour"},"title":"Harbour restoration, part two"}}`)
+	mustEmit(t, html, `title="Harbour restoration, part two"`, "the resolved title is emitted as the frame's title")
+
+	// The name survives the case where the SOURCE was refused: a frame with no
+	// src is still a frame a reader tabs into, and it is worse, not better, to
+	// leave it unnamed.
+	refused := renderJSON(t, `{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"http://player.example/embed/harbour"},"title":"Harbour restoration, part two"}}`)
+	mustEmit(t, refused, `title="Harbour restoration, part two"`, "a refused source does not cost the frame its name")
+}
+
+// Embed/sandbox-always-exactly-declared (§3.6.8).
+//
+// Four legs. The EMPTY case is the one the obligation exists for — omitting the
+// attribute on a permissionless embed produces the same markup as an unsandboxed
+// frame — and the fullscreen case is the one the corpus fixture was chosen to
+// catch: a host that mapped the whole enum onto sandbox tokens passes every
+// other fixture and fails here.
+func checkEmbedSandboxAlwaysExactlyDeclared(t *testing.T) {
+	empty := renderJSON(t, `{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"https://player.example/e"},"title":"T"}}`)
+	mustEmit(t, empty, ` sandbox=""`, "sandbox is emitted on EVERY embed, and EMPTY is the maximally-restrictive value")
+	mustNotEmit(t, empty, ` allow=`, "an empty `allow` is not the same statement as an absent one")
+
+	// Authored in REVERSE vocabulary order, so the assertion pins the render's
+	// own ordering rather than the document's: a host echoing authored order
+	// emits the same three tokens and fails here.
+	ordered := renderJSON(t, `{"id":"e","kind":{"$type":"Embed","permissions":["AllowForms","AllowSameOrigin","AllowScripts","AllowForms"],"src":{"$type":"Static","value":"https://player.example/e"},"title":"T"}}`)
+	mustEmit(t, ordered, ` sandbox="allow-scripts allow-same-origin allow-forms"`,
+		"the tokens are emitted in VOCABULARY DECLARATION order, de-duplicated")
+
+	// AllowFullscreen is NOT a sandbox token — it rides `allow`.
+	fullscreen := renderJSON(t, `{"id":"e","kind":{"$type":"Embed","permissions":["AllowFullscreen"],"src":{"$type":"Static","value":"https://player.example/e"},"title":"T"}}`)
+	mustEmit(t, fullscreen, ` sandbox=""`, "fullscreen grants NO sandbox relaxation, so the attribute stays empty")
+	mustEmit(t, fullscreen, ` allow="fullscreen"`, "…it is a permissions-policy directive riding `allow`")
+	mustNotEmit(t, fullscreen, "allow-fullscreen", "and never a sandbox token of that name")
+
+	// The unconditional pair, stated here because there is deliberately no slot
+	// for either and nothing else would notice their loss.
+	mustEmit(t, empty, ` loading="lazy"`, "loading=lazy is unconditional")
+	mustEmit(t, empty, ` referrerpolicy="strict-origin-when-cross-origin"`,
+		"the referrer policy is conservative and deliberately not no-referrer")
+}
+
+// Embed/refused-embed-source-omitted (§19.1). The ONE place a refusal does not
+// take §19 rule 6's substitute route: an <iframe> pointed at a refusal URL
+// RENDERS that page, where one with no src is a well-defined empty browsing
+// context that fetches nothing.
+//
+// Three refusal classes, because §19.1's floor is narrower than §19's in two
+// ways a media-shaped check would miss — `http` and, more sharply, a SCHEMELESS
+// reference, which names a same-origin document and is exactly the shape where a
+// frame granted both AllowSameOrigin and AllowScripts can reach its own frame
+// ELEMENT and remove the sandbox attribute from it.
+func checkEmbedRefusedSourceOmitted(t *testing.T) {
+	for _, tc := range []struct{ name, src string }{
+		{"http", "http://player.example/embed/harbour"},
+		{"schemeless", "/local/embed.html"},
+		{"undeclared https origin", refusedURL},
+	} {
+		html := renderJSON(t, `{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"`+tc.src+`"},"title":"T"}}`)
+		mustNotEmit(t, html, ` src=`, tc.name+": a refused source OMITS the attribute entirely")
+		mustNotEmit(t, html, EgressRefusalURL, tc.name+": …and never substitutes the refusal URL")
+		mustNotEmit(t, html, tc.src, tc.name+": …and never emits the original value")
+		mustEmit(t, html, EgressRefusalAttribute, tc.name+": the refusal is still RECORDED as a data attribute")
+	}
+
+	// The allow twin — without it a renderer that omitted EVERY src would pass
+	// every assertion above and this obligation would guard a worse bug than the
+	// one it exists for. "Nothing was declared" and "this was refused" must also
+	// stay different facts, so an ALLOWED source carries no refusal marker.
+	allowed := RenderHTMLWithEgress(
+		mustDecode(t, `{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"https://player.example/embed/harbour"},"title":"T"}}`),
+		nil, PermissiveEgress())
+	mustEmit(t, allowed, ` src="https://player.example/embed/harbour"`, "an allowed https source still renders")
+	mustNotEmit(t, allowed, EgressRefusalAttribute, "…and carries no refusal marker")
+}
+
+// Tree/accessible-name-always (§3.6.12 obligation 5). A treeitem OWNS its child
+// group, so a name COMPUTED from contents reads the whole branch out as the
+// row's own name. The name is therefore STATED, and it is the row's own visible
+// label.
+//
+// Asserted on a PARENT and on a NESTED row, and the parent's own group is
+// asserted to exist: a renderer that named only leaves — or that emitted no
+// role="group" at all, so no row ever owned a subtree — would pass a
+// leaf-only check while leaving exactly the rows the obligation is about unnamed.
+func checkTreeAccessibleNameAlways(t *testing.T) {
+	html := renderJSON(t, `{"id":"t","kind":{"$type":"Tree","items":[{"children":[{"id":"cocoa","label":"Cocoa"}],"id":"goods","label":"Goods"}]}}`)
+
+	mustEmit(t, html, `aria-label="Goods"`, "a PARENT row states its own visible label as its accessible name")
+	mustEmit(t, html, `aria-label="Cocoa"`, "…and so does a NESTED row")
+	mustEmit(t, html, `role="group"`, "the parent genuinely owns a child group — the twin without which naming only leaves would pass")
+	mustEmit(t, html, `<span class="fuaran-tree-label">Goods</span>`,
+		"the stated name is byte-identical to the visible label, so `label in name` holds")
+}
+
 // Image/alt-always-emitted (§3.6.2). The decorative case is the one that
 // matters: an omitted `alt` and an empty one are different claims to assistive
 // technology — omitted means "nobody said", empty means "this is decorative,
@@ -424,6 +609,13 @@ var checkers = []obligationChecker{
 	{"Media/autoplay-muted-pairing", checkMediaAutoplayMutedPairing},
 	{"Media/no-autoplay-pathway", checkMediaNoAutoplayPathway},
 	{"Media/refused-source-dropped", checkMediaRefusedSourceDropped},
+	{"Media/authored-child-order", checkMediaAuthoredChildOrder},
+	{"Media/single-default-per-kind", checkMediaSingleDefaultPerKind},
+	{"Media/transcript-disclosure-named", checkMediaTranscriptDisclosureNamed},
+	{"Embed/accessible-name-always", checkEmbedAccessibleNameAlways},
+	{"Embed/sandbox-always-exactly-declared", checkEmbedSandboxAlwaysExactlyDeclared},
+	{"Embed/refused-embed-source-omitted", checkEmbedRefusedSourceOmitted},
+	{"Tree/accessible-name-always", checkTreeAccessibleNameAlways},
 	{"Image/alt-always-emitted", checkImageAltAlwaysEmitted},
 	{"Image/anchor-affordance-on-expandable", checkImageAnchorAffordanceOnExpandable},
 	{"Image/refused-src-no-affordance", checkImageRefusedSrcNoAffordance},

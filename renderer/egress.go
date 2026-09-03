@@ -52,6 +52,15 @@ const (
 	// own, but is scoped here so a policy can speak about it in the same
 	// vocabulary.
 	EgressFileRead EgressClass = "fileRead"
+	// EgressEmbed is a third-party DOCUMENT the browser fetches and EXECUTES
+	// (§19.1). Scoped separately from EgressMedia, and the separation is the
+	// point: media is fetch-and-display, decoded by the user agent's own codec
+	// into no scripting context, where an embed fetches a document and lets it
+	// run. A composition that declared an origin for image egress has said
+	// nothing about which DOCUMENTS it is willing to execute, and a class that
+	// conflated the two would let the first declaration answer the second
+	// question.
+	EgressEmbed EgressClass = "embed"
 )
 
 // egressClassesAll is every class, in wire order. Used by AllowOrigin when a
@@ -62,6 +71,7 @@ var egressClassesAll = []EgressClass{
 	EgressRoute,
 	EgressDownload,
 	EgressFileRead,
+	EgressEmbed,
 }
 
 // OriginMatch selects how an EgressOrigin's host is compared.
@@ -445,6 +455,38 @@ func (p EgressPolicy) SanitizeURLForEgress(cls EgressClass, url string) (string,
 		return EgressRefusalURL, nil
 	}
 	return EgressRefusalURL, [][2]string{{name, value}}
+}
+
+// SanitizeEmbedSrcForEgress is the ONE-CALL EMBED render seam (§19.1, Phase
+// 1111): the `src` to emit, or ok=false to OMIT the attribute entirely, plus the
+// attribute pairs that record a refusal in the document.
+//
+// It is a separate seam rather than a class argument to SanitizeURLForEgress
+// because the two differ in BOTH gates. The scheme floor is narrower — `https`
+// and nothing else, so `http` and, more sharply, a SCHEMELESS reference are both
+// refused: a relative reference names a same-origin document, and a same-origin
+// frame is exactly the shape where a document granted both AllowSameOrigin and
+// AllowScripts can reach its own frame ELEMENT and remove the sandbox attribute
+// from it. And the refusal DISPOSITION is different: this is the one place a
+// refusal does not take the substitute-URL route, because an `<iframe>` pointed
+// at the refusal URL RENDERS that page, where one with no `src` is a
+// well-defined empty browsing context that fetches nothing. The refusal is still
+// recorded as the marker attribute, so "nothing was declared" and "this was
+// refused" stay different facts.
+func (p EgressPolicy) SanitizeEmbedSrcForEgress(url string) (string, bool, [][2]string) {
+	normalized := normalizeURLForFloor(url)
+	if scheme, ok := extractScheme(normalized); normalized == "" || !ok || scheme != "https" {
+		return "", false, [][2]string{{EgressRefusalAttribute, string(EgressEmbed) + ":unsafe-url"}}
+	}
+	verdict := p.CheckDestination(EgressEmbed, normalized)
+	if verdict.Kind == EgressAllowed {
+		return verdict.URL, true, nil
+	}
+	name, value, ok := verdict.RefusalMarker()
+	if !ok {
+		return "", false, nil
+	}
+	return "", false, [][2]string{{name, value}}
 }
 
 // RefusalMarker returns the attribute name and value recording this verdict,

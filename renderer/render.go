@@ -252,20 +252,97 @@ func a11yName(value wire.Value, sources BindingSources) (string, bool) {
 // own body.
 func forwardsToSemanticElement(node wire.Node) bool {
 	switch node.Kind.Tag {
-	case "Link", "Button", "Image", "Media":
+	// Phase 1111 — `Embed` satisfies the same three tests `Media` does: the
+	// `<iframe>` IS the body root, a frame carries native interactive semantics
+	// (it is a focus container a reader tabs into), and nothing else in the body
+	// competes for the name. A node-level `accessibility.label` therefore
+	// overrides the spec's own `title`, which is what a node-level slot is for.
+	case "Link", "Button", "Image", "Media", "Embed":
 		return true
 	}
 	return false
+}
+
+// tooltipRidesSemanticElement — does a node-level tooltip's `aria-describedby`
+// ride the kind's own semantic element rather than the wrapper? True exactly
+// when the projection forwards AND the forwarded-to element is a NATIVE FOCUS
+// STOP, because the description and the focus stop are ONE decision:
+//
+//   - A description on an element the keyboard never reaches is announced on no
+//     interaction at all; a description on a control while a different element
+//     is the focus stop is the same failure with the parts swapped.
+//   - A node whose body is not a focus stop therefore needs one —
+//     `tabindex="0"` on the wrapper — or the hint is pointer-only (WCAG 2.1.1).
+//
+// `Image` is the case that shows why this is not simply forwardsToSemanticElement:
+// it forwards, and `<img>` takes no focus, so an image with a hint needs the
+// wrapper stop AND the wrapper description — the pair, or neither.
+//
+// A narrow allow-list rather than an exhaustive switch, deliberately: the
+// DEFAULT answer (describe the wrapper, give the wrapper a focus stop) is always
+// reachable and correct, at worst one redundant tab stop. The opposite default
+// silently loses the keyboard route, which nothing downstream would report.
+func tooltipRidesSemanticElement(node wire.Node) bool {
+	if !forwardsToSemanticElement(node) {
+		return false
+	}
+	switch node.Kind.Tag {
+	// <button>, <a href>, <video controls> / <audio controls> and <iframe> are
+	// each a native focus stop.
+	case "Button", "Link", "Media", "Embed":
+		return true
+	}
+	return false
+}
+
+// tooltipHintID is the DOM id of the hint element a node's tooltip renders as.
+// Derived from the node id so every renderer, and any host reading the emitted
+// markup, computes the same string without carrying a second identifier on the
+// wire.
+func tooltipHintID(nodeID string) string { return nodeID + "-tooltip" }
+
+// withTooltipDescribedBy merges a hint id into an attribute list's
+// `aria-describedby`.
+//
+// APPENDED, never substituted: `aria-describedby` is an ID LIST, and a node that
+// declares `accessibility.describedBy` AND carries a hint has said two different
+// things a reader is owed both of. Overwriting would silently drop whichever the
+// renderer happened to apply second.
+func withTooltipDescribedBy(hintID string, attrs []attr) []attr {
+	for i, a := range attrs {
+		if a.name == "aria-describedby" {
+			out := append([]attr(nil), attrs...)
+			out[i].value = a.value + " " + hintID
+			return out
+		}
+	}
+	return append(append([]attr(nil), attrs...), attr{"aria-describedby", hintID})
 }
 
 // renderNode emits the node wrapper <div> plus the kind body — and, when the
 // node is marked as an island, the boundary wrapper around it (whose children
 // are exactly this node's static HTML, so client hydration is mismatch-free).
 func (r *renderer) renderNode(node wire.Node) string {
+	// Phase 1112 — the node-level tooltip trait. An EMPTY resolved hint emits
+	// NOTHING at all: no hint element, no aria-describedby, no focus stop. A
+	// declared hint that says nothing is markup that reveals an empty box on
+	// hover, and advertising a description that is not there is worse than
+	// silence (§3.6's obligation 5).
+	tooltipText := ""
+	if raw, ok := node.Extras["tooltip"]; ok {
+		if t := strings.TrimSpace(r.text(raw)); t != "" {
+			tooltipText = t
+		}
+	}
+
+	className := nodeClassName(node)
+	if tooltipText != "" {
+		className += " fuaran-has-tooltip"
+	}
 	attrs := []attr{
 		{"id", node.ID},
 		{"data-fuaran-node-id", node.ID},
-		{"class", nodeClassName(node)},
+		{"class", className},
 	}
 	// Route the projection: a kind whose body IS the node's semantic element
 	// takes the a11y attributes onto that element; every other kind carries
@@ -277,7 +354,31 @@ func (r *renderer) renderNode(node wire.Node) string {
 	} else {
 		attrs = append(attrs, r.a11yAttrs(node)...)
 	}
-	rendered := element("div", attrs, r.renderKind(node, semanticAttrs))
+	// Route the hint's description and, where the wrapper is the described
+	// element, its focus stop. The two travel together by construction — see
+	// tooltipRidesSemanticElement.
+	if tooltipText != "" {
+		hintID := tooltipHintID(node.ID)
+		if tooltipRidesSemanticElement(node) {
+			semanticAttrs = withTooltipDescribedBy(hintID, semanticAttrs)
+		} else {
+			attrs = append(withTooltipDescribedBy(hintID, attrs), attr{"tabindex", "0"})
+		}
+	}
+	body := r.renderKind(node, semanticAttrs)
+	if tooltipText != "" {
+		// The hint is a SIBLING of the body inside the wrapper, which is what
+		// makes it HOVERABLE: the pointer moving from the node onto the hint
+		// never leaves the wrapper, so the `:hover` that revealed it still holds
+		// (WCAG 1.4.13). Placed AFTER the body so the reading order is
+		// thing-then-description. No script participates in any of this.
+		body += textElement("span", []attr{
+			{"id", tooltipHintID(node.ID)},
+			{"class", "fuaran-tooltip"},
+			{"role", "tooltip"},
+		}, tooltipText)
+	}
+	rendered := element("div", attrs, body)
 	if islandID, ok := r.islands[node.ID]; ok {
 		return element("div", []attr{
 			{"class", "fuaran-island"},
@@ -337,6 +438,10 @@ func (r *renderer) renderKind(node wire.Node, semanticAttrs []attr) string {
 		return r.image(fields, semanticAttrs)
 	case "Media":
 		return r.media(fields, semanticAttrs)
+	case "Embed":
+		return r.embed(fields, semanticAttrs)
+	case "Tree":
+		return r.tree(fields)
 	case "List":
 		return r.list(fields)
 	case "Toast":
@@ -1171,7 +1276,370 @@ func (r *renderer) media(fields map[string]wire.Value, semanticAttrs []attr) str
 		}
 	}
 	attrs = append(attrs, semanticAttrs...)
-	return element(tag, append(attrs, egressAttrPairs(egressPairs)...), "")
+	attrs = append(attrs, egressAttrPairs(egressPairs)...)
+	return r.withTranscript(fields, element(tag, attrs, r.trackChildren(fields)))
+}
+
+// trackKindToken maps a wire `TrackKind` case to the lower-case HTML token
+// (§3.6.6 render obligation 1). A closed mapping rather than a lower-casing of
+// whatever arrived: the decoder has already refused every token outside the set,
+// and spelling them here keeps the emission readable beside the obligation.
+func trackKindToken(v wire.Value) (string, bool) {
+	s, ok := v.(wire.Str)
+	if !ok {
+		return "", false
+	}
+	switch string(s) {
+	case "Subtitles":
+		return "subtitles", true
+	case "Captions":
+		return "captions", true
+	case "Descriptions":
+		return "descriptions", true
+	case "Chapters":
+		return "chapters", true
+	}
+	return "", false
+}
+
+// trackChildren emits the `<track>` children of a media element (Phase 1110).
+//
+// Three obligations meet here and each is a decision the bytes cannot carry:
+//
+//   - AUTHORED ORDER IS PRESERVED. This is the OPPOSITE of §3.6.4's `srcSet`
+//     rule and the difference is not an inconsistency: a browser picks ONE
+//     candidate from a srcset by an algorithm, so ordering it is
+//     canonicalisation, while a reader picks a track from a menu the user agent
+//     builds in DOCUMENT order, so ordering it would be rewriting someone
+//     else's menu.
+//
+//   - AT MOST ONE `default` PER KIND, FIRST ELECTION WINS. Two default captions
+//     tracks are legal bytes — the decoder does not refuse them, because a
+//     lenient host would render them anyway and HTML leaves the case undefined
+//     — so the host resolves it, and every host resolves it the same way. The
+//     later track is still EMITTED; only its claim on the menu is dropped. The
+//     election is per KIND, so a captions default and a subtitles default
+//     coexist.
+//
+//   - A REFUSED TRACK SOURCE DROPS THE TRACK. It takes the POSTER's disposition
+//     rather than the source's: an element must have a source, but it need not
+//     have this track, and a `<track>` pointing at the refusal URL is a menu
+//     entry that opens onto nothing. A dropped track also forfeits its
+//     election, so a refused default does not silently spend the kind's slot.
+func (r *renderer) trackChildren(fields map[string]wire.Value) string {
+	tracks, ok := fields["tracks"].(wire.Arr)
+	if !ok {
+		return ""
+	}
+	claimed := make(map[string]bool, len(tracks))
+	var sb strings.Builder
+	for _, t := range tracks {
+		entry, ok := t.(wire.Obj)
+		if !ok {
+			continue
+		}
+		token, ok := trackKindToken(entry.Fields["kind"])
+		if !ok {
+			continue
+		}
+		url := ""
+		if s, ok := resolveBinding(entry.Fields["src"], r.sources).(wire.Str); ok {
+			url = string(s)
+		}
+		safe, refusal := r.egress.SanitizeURLForEgress(EgressMedia, url)
+		if safe == "" || len(refusal) > 0 {
+			continue
+		}
+		attrs := []attr{
+			{"kind", token},
+			{"src", safe},
+			{"srclang", strValue(entry.Fields["srcLang"])},
+			{"label", r.text(entry.Fields["label"])},
+		}
+		if d, ok := entry.Fields["default"].(wire.Bool); ok && bool(d) && !claimed[token] {
+			claimed[token] = true
+			attrs = append(attrs, attr{"default", ""})
+		}
+		sb.WriteString(voidElement("track", attrs))
+	}
+	return sb.String()
+}
+
+// withTranscript wraps a media element when the spec carries a transcript
+// (Phase 1110).
+//
+// The disclosure sits BESIDE the transport, never inside it: `<video>` and
+// `<audio>` admit only source-ish children, so a transcript placed there would
+// be fallback content a browser never shows — which is why a present transcript
+// is the one case where the emission gains a wrapper. Absent, the emission is
+// the bare element it would otherwise be.
+//
+// The `<details>` carries the MEDIA's resolved label as its own accessible name,
+// so a reader meeting the disclosure out of context is told which recording it
+// transcribes. The summary text is renderer chrome (the `Toast` dismiss
+// precedent); the transcript itself is the document's.
+func (r *renderer) withTranscript(fields map[string]wire.Value, el string) string {
+	transcript, ok := fields["transcript"]
+	if !ok {
+		return el
+	}
+	summary := textElement("summary", []attr{{"class", "fuaran-media-transcript-summary"}}, "Transcript")
+	body := textElement("div", []attr{{"class", "fuaran-media-transcript-body"}}, r.text(transcript))
+	details := element("details", []attr{
+		{"class", "fuaran-media-transcript"},
+		{"aria-label", r.text(fields["label"])},
+	}, summary+body)
+	return element("div", []attr{{"class", "fuaran-media-group"}}, el+details)
+}
+
+// embedAspectClass maps a declared `ImageAspect` to the frame's CLASS. No value
+// from the tree ever reaches a style attribute — the `Image` presentation rule
+// (§3.6.2) applied unchanged.
+func embedAspectClass(v wire.Value) string {
+	s, ok := v.(wire.Str)
+	if !ok {
+		return ""
+	}
+	switch string(s) {
+	case "Square":
+		return " fuaran-embed-aspect-square"
+	case "FourThree":
+		return " fuaran-embed-aspect-four-three"
+	case "ThreeTwo":
+		return " fuaran-embed-aspect-three-two"
+	case "SixteenNine":
+		return " fuaran-embed-aspect-sixteen-nine"
+	}
+	return ""
+}
+
+// embed renders the sandboxed third-party embed (Phase 1111, §3.6.8). Four
+// obligations live here and every one is something the bytes cannot carry:
+//
+//   - SANDBOX BY DEFAULT. The attribute is emitted ALWAYS, and EMPTY when
+//     nothing is granted, which is the maximally-restrictive value. Omitting it
+//     on a permissionless embed produces the same markup as an unsandboxed
+//     frame, so the emission is unconditional rather than derived from the list
+//     being non-empty.
+//
+//   - DECLARATION ORDER, DE-DUPLICATED. The wire preserves whatever order the
+//     document authored (the `tracks` rule, not `srcSet`'s), so the DETERMINISM
+//     the markup needs is established at RENDER time instead: two documents
+//     naming the same set produce byte-identical markup.
+//
+//   - FULLSCREEN IS NOT A SANDBOX TOKEN. It is a permissions-policy directive
+//     riding `allow`, emitted only where declared — an empty `allow` is not the
+//     same statement as an absent one. `embed-permissions-1.json` names
+//     deliberately that permission, so a host that mapped the whole enum onto
+//     sandbox tokens passes every other fixture and fails here.
+//
+//   - A REFUSED SOURCE OMITS THE ATTRIBUTE ENTIRELY. See
+//     SanitizeEmbedSrcForEgress for why this one refusal does not substitute.
+func (r *renderer) embed(fields map[string]wire.Value, semanticAttrs []attr) string {
+	src := ""
+	if s, ok := resolveBinding(fields["src"], r.sources).(wire.Str); ok {
+		src = string(s)
+	}
+	safeSrc, srcOK, egressPairs := r.egress.SanitizeEmbedSrcForEgress(src)
+
+	granted := make(map[string]bool)
+	if perms, ok := fields["permissions"].(wire.Arr); ok {
+		for _, p := range perms {
+			if s, ok := p.(wire.Str); ok {
+				granted[string(s)] = true
+			}
+		}
+	}
+	// Declaration order, and each token at most once — the map above is what
+	// de-duplicates, this slice is what orders.
+	var sandbox []string
+	for _, pair := range [][2]string{
+		{"AllowScripts", "allow-scripts"},
+		{"AllowSameOrigin", "allow-same-origin"},
+		{"AllowForms", "allow-forms"},
+	} {
+		if granted[pair[0]] {
+			sandbox = append(sandbox, pair[1])
+		}
+	}
+
+	attrs := []attr{
+		{"class", "fuaran-embed" + embedAspectClass(fields["aspectRatio"])},
+		{"title", r.text(fields["title"])},
+		{"sandbox", strings.Join(sandbox, " ")},
+		// Always lazy, and there is deliberately no slot to say otherwise: a
+		// third-party document is the one subresource whose fetch is never
+		// worth doing before the reader has scrolled to it.
+		{"loading", "lazy"},
+		// Conservative, but NOT `no-referrer`: several ubiquitous embed
+		// providers restrict playback by referring domain, so stripping the
+		// header outright breaks a legitimate embed. Sending the origin and
+		// nothing else satisfies them while leaking no path and no query.
+		{"referrerpolicy", "strict-origin-when-cross-origin"},
+	}
+	if srcOK {
+		attrs = append(attrs, attr{"src", safeSrc})
+	}
+	if granted["AllowFullscreen"] {
+		attrs = append(attrs, attr{"allow", "fullscreen"})
+	}
+	attrs = append(attrs, semanticAttrs...)
+	return element("iframe", append(attrs, egressAttrPairs(egressPairs)...), "")
+}
+
+// treeState reads the two named State slots (§3.6.12).
+//
+// A value of any shape other than the declared one reads as EMPTY / NONE rather
+// than as an error: this is a host's own state slot, not a wire document, so
+// there is nothing here to refuse, and refusing would blank a tree over a value
+// the reader never authored.
+func (r *renderer) treeState(fields map[string]wire.Value) (expandedKeyNamed bool, expanded map[string]bool, selected string, selects bool) {
+	expanded = make(map[string]bool)
+	if key, ok := fields["expandedStateKey"].(wire.Str); ok {
+		expandedKeyNamed = true
+		// An array of ROW IDS — set membership, and a set has one spelling
+		// where a map of booleans has two for "closed".
+		if rows, ok := r.sources[string(key)].(wire.Arr); ok {
+			for _, row := range rows {
+				if id, ok := row.(wire.Str); ok {
+					expanded[string(id)] = true
+				}
+			}
+		}
+	}
+	if key, ok := fields["selectionStateKey"].(wire.Str); ok {
+		selects = true
+		if id, ok := r.sources[string(key)].(wire.Str); ok {
+			selected = string(id)
+		}
+	}
+	return
+}
+
+// treeItemOpen — a row is open when no expansion key is named (the tree renders
+// FULLY EXPANDED and does not toggle, which is the same reading that lets a grid
+// honour a declared initial order while offering no interactive sorting), or
+// when the named set holds its id.
+func treeItemOpen(expandedKeyNamed bool, expanded map[string]bool, id string) bool {
+	return !expandedKeyNamed || expanded[id]
+}
+
+// focusableTreeItem picks the widget's ONE tab stop: the selected row when it is
+// VISIBLE, else the first visible row. Computed over the same visibility the
+// emission uses, so a server rendering and a client's first frame agree.
+func focusableTreeItem(expandedKeyNamed bool, expanded map[string]bool, selected string, items wire.Arr) (string, bool) {
+	var first string
+	var haveFirst, haveSelected bool
+	var walk func(wire.Arr)
+	walk = func(rows wire.Arr) {
+		for _, raw := range rows {
+			row, ok := raw.(wire.Obj)
+			if !ok {
+				continue
+			}
+			id := strValue(row.Fields["id"])
+			if !haveFirst {
+				first, haveFirst = id, true
+			}
+			if selected != "" && id == selected {
+				haveSelected = true
+			}
+			if children, ok := row.Fields["children"].(wire.Arr); ok && treeItemOpen(expandedKeyNamed, expanded, id) {
+				walk(children)
+			}
+		}
+	}
+	walk(items)
+	if haveSelected {
+		return selected, true
+	}
+	return first, haveFirst
+}
+
+// tree renders the §3.6.12 SSR floor, and it is NORMATIVE: nested lists carrying
+// the full ARIA tree vocabulary, `aria-expanded` reflecting the
+// statically-resolvable expanded state, and exactly one row carrying
+// `tabindex="0"`. There is NO SCRIPT at any point, so this is what a reader with
+// JavaScript off — or a client that has not hydrated yet — actually gets: a
+// complete, navigable, correctly-announced hierarchy that simply does not toggle.
+func (r *renderer) tree(fields map[string]wire.Value) string {
+	items, _ := fields["items"].(wire.Arr)
+	expandedKeyNamed, expanded, selected, selects := r.treeState(fields)
+	focusable, haveFocusable := focusableTreeItem(expandedKeyNamed, expanded, selected, items)
+
+	var renderRows func(level int, rows wire.Arr) string
+	renderRows = func(level int, rows wire.Arr) string {
+		var sb strings.Builder
+		setSize := len(rows)
+		for i, raw := range rows {
+			row, ok := raw.(wire.Obj)
+			if !ok {
+				continue
+			}
+			id := strValue(row.Fields["id"])
+			label := r.text(row.Fields["label"])
+			children, hasChildren := row.Fields["children"].(wire.Arr)
+			hasChildren = hasChildren && len(children) > 0
+			isOpen := treeItemOpen(expandedKeyNamed, expanded, id)
+
+			attrs := []attr{
+				{"class", "fuaran-tree-item"},
+				{"role", "treeitem"},
+				// The accessible name is STATED rather than computed from
+				// contents: a treeitem OWNS its child group, so a name derived
+				// from its subtree would read the whole branch out as the row's
+				// own name. The string is byte-identical to the visible label,
+				// so "label in name" holds.
+				{"aria-label", label},
+				{"aria-level", strconv.Itoa(level)},
+				{"aria-setsize", strconv.Itoa(setSize)},
+				{"aria-posinset", strconv.Itoa(i + 1)},
+				{"data-fuaran-tree-item", id},
+			}
+			tabIndex := "-1"
+			if haveFocusable && id == focusable {
+				tabIndex = "0"
+			}
+			attrs = append(attrs, attr{"tabindex", tabIndex})
+			// `aria-expanded` on a row that HAS children and on no others: on a
+			// leaf the attribute asserts a collapsed subtree that does not
+			// exist, and assistive technology announces such a row as closed —
+			// a reader told there is more when there is not.
+			if hasChildren {
+				if isOpen {
+					attrs = append(attrs, attr{"aria-expanded", "true"})
+				} else {
+					attrs = append(attrs, attr{"aria-expanded", "false"})
+				}
+			}
+			// `aria-selected` only where a selection key is named. Emitting
+			// `false` on every row of a tree that has no selection at all would
+			// declare a selectable widget with nothing selected, rather than a
+			// tree that does not select.
+			if selects {
+				if id == selected && selected != "" {
+					attrs = append(attrs, attr{"aria-selected", "true"})
+				} else {
+					attrs = append(attrs, attr{"aria-selected", "false"})
+				}
+			}
+
+			inner := textElement("span", []attr{{"class", "fuaran-tree-label"}}, label)
+			if hasChildren && isOpen {
+				inner += element("ul", []attr{
+					{"class", "fuaran-tree-group"},
+					{"role", "group"},
+				}, renderRows(level+1, children))
+			}
+			sb.WriteString(element("li", attrs, inner))
+		}
+		return sb.String()
+	}
+
+	return element("ul", []attr{
+		{"class", "fuaran-tree"},
+		{"role", "tree"},
+	}, renderRows(1, items))
 }
 
 func (r *renderer) list(fields map[string]wire.Value) string {
@@ -1329,10 +1797,82 @@ func (r *renderer) form(fields map[string]wire.Value) string {
 func (r *renderer) formField(field wire.Obj) string {
 	fieldID := strValue(field.Fields["id"])
 	label := element("span", []attr{{"class", "fuaran-form-field-label"}}, escapeText(r.text(field.Fields["label"])))
-	control := voidElement("input", []attr{
-		{"class", "fuaran-form-field-control"}, {"data-fuaran-field", fieldID},
-	})
+	kind, _ := field.Fields["kind"].(wire.Obj)
+	var control string
+	if kind.Tag == "Combobox" {
+		control = r.combobox(field, fieldID, kind)
+	} else {
+		control = voidElement("input", []attr{
+			{"class", "fuaran-form-field-control"}, {"data-fuaran-field", fieldID},
+		})
+	}
 	return element("label", []attr{{"class", "fuaran-form-field"}}, label+control)
+}
+
+// combobox is THE SSR FLOOR for §3.6.9, and the whole point of it is that it is
+// not an approximation of a client's ARIA widget: a native `<input list>` bound
+// to a `<datalist>` IS a combobox to the user agent, which supplies the popup,
+// the filtering, the keyboard interaction and the accessibility semantics
+// itself, with no script.
+//
+// NO HAND-WRITTEN ARIA IS EMITTED HERE, deliberately (obligation 3). Adding
+// `role="combobox"` + `aria-expanded` to an `<input list>` would REPLACE the
+// user agent's own correct semantics with a static claim this inert markup can
+// never keep true — an `aria-expanded="false"` that never becomes `true` is
+// worse than the native role it overwrote. The client tier owns the full pattern
+// precisely because it owns the state that makes those attributes honest.
+//
+// RECORDED KNOWN LIMIT (obligation 4) — `allowFreeText = false` is NOT enforced
+// here and cannot be: a `<datalist>` is a suggestion list, not a constraint, and
+// HTML offers no native membership check for one. The declaration is emitted as
+// `data-fuaran-combobox-constrained` so a reader can see it was not silently
+// dropped, and it is NOT claimed as coverage — nothing in this host reads that
+// attribute. Enforcement is the server-side re-check §22 requires of any host
+// that accepts submissions, which is where a constraint a client can type past
+// belongs anyway.
+func (r *renderer) combobox(field wire.Obj, fieldID string, kind wire.Obj) string {
+	listID := fieldID + "-options"
+	constrained := "true"
+	if v, ok := kind.Fields["allowFreeText"].(wire.Bool); ok && bool(v) {
+		constrained = "false"
+	}
+	value := ""
+	if v, ok := resolveBinding(kind.Fields["value"], r.sources).(wire.Str); ok {
+		value = string(v)
+	}
+	inputAttrs := []attr{
+		{"class", "fuaran-form-field-control fuaran-combobox-input"},
+		{"data-fuaran-field", fieldID},
+		{"type", "text"},
+		{"list", listID},
+		// The browser's own history dropdown would compete with the datalist
+		// popup for the same gesture.
+		{"autocomplete", "off"},
+		{"data-fuaran-combobox-constrained", constrained},
+	}
+	if req, ok := field.Fields["required"].(wire.Bool); ok && bool(req) {
+		inputAttrs = append(inputAttrs, attr{"required", ""})
+	}
+	inputAttrs = append(inputAttrs, attr{"value", value})
+
+	var options strings.Builder
+	if resolved, ok := resolveBinding(kind.Fields["options"], r.sources).(wire.Arr); ok {
+		for _, opt := range resolved {
+			optObj, ok := opt.(wire.Obj)
+			if !ok {
+				continue
+			}
+			optValue := strValue(optObj.Fields["value"])
+			optLabel := optValue
+			if l, ok := optObj.Fields["label"]; ok {
+				optLabel = r.text(l)
+			}
+			options.WriteString(textElement("option", []attr{{"value", optValue}}, optLabel))
+		}
+	}
+	return element("span", []attr{{"class", "fuaran-combobox"}},
+		voidElement("input", inputAttrs)+
+			element("datalist", []attr{{"id", listID}}, options.String()))
 }
 
 func (r *renderer) fileUpload(fields map[string]wire.Value) string {
