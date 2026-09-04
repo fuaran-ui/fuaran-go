@@ -328,6 +328,17 @@ func (r *renderer) rootAriaLabel(fields map[string]wire.Value) string {
 // drawing renders a Drawing kind as inline SVG (role="img" + optional title/desc,
 // plus the Phase 921 aria-label that gets the description ANNOUNCED).
 func (r *renderer) drawing(fields map[string]wire.Value) string {
+	return element("div", nil, r.drawingSVG(fields))
+}
+
+// drawingSVG builds the `<svg class="fuaran-drawing">` string itself, without
+// the wrapper element. Split out at Phase 1099 so the `Sparkline` lowering can
+// reuse the ONE builder while supplying its own hook wrapper: the reference
+// stylesheet's `.fuaran-sparkline > .fuaran-drawing` rule is a DIRECT-child
+// selector, so a sparkline that went through `drawing` above would gain a second
+// div and lose its sizing. Same bytes, different container — which is the whole
+// point of lowering through a shared builder rather than beside one.
+func (r *renderer) drawingSVG(fields map[string]wire.Value) string {
 	vb, _ := fields["viewBox"].(wire.Obj)
 	viewBox := drawNum(vb.Fields["minX"]) + " " + drawNum(vb.Fields["minY"]) + " " +
 		drawNum(vb.Fields["width"]) + " " + drawNum(vb.Fields["height"])
@@ -348,7 +359,6 @@ func (r *renderer) drawing(fields map[string]wire.Value) string {
 	}
 	rootStyle := r.drawStyleAttrs(fields["style"], false)
 	aria := r.rootAriaLabel(fields)
-	svg := `<svg class="fuaran-drawing" role="img" viewBox="` + viewBox + `"` + aria + rootStyle + `>` +
+	return `<svg class="fuaran-drawing" role="img" viewBox="` + viewBox + `"` + aria + rootStyle + `>` +
 		title + desc + body.String() + `</svg>`
-	return element("div", nil, svg)
 }

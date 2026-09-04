@@ -282,9 +282,20 @@ Stated plainly, because each is a decision rather than an omission:
   posture: a `Chart` reaching the renderer emits a marked client-hydration
   placeholder, never a silent empty region. Pre-lower upstream, or let a
   conformant client paint it.
-- **A `Sparkline` renders as an empty placeholder** (`fuaran-sparkline-empty`).
-  The in-host lowering that would paint it has not landed here; the node round
-  trips through the codec correctly, it simply does not paint server-side yet.
+
+  **A `Sparkline` is the deliberate exception, and it does paint here.** The two
+  look alike and are not: a chart needs axes, ticks, a legend and scale
+  negotiation, and the shared `render-fidelity.json` gives it `"class":
+  "clientOnly"` — which is exactly what licenses a server placeholder. A
+  sparkline is a bounded arithmetic map from a resolved series onto a fixed
+  100 x 30 canvas, and its fidelity row reads `"class": "none"`: no client-only
+  tier exists, so the server render IS the whole render. This host therefore
+  lowers it through the same `Drawing` builder every other tier uses, and
+  certifies the result byte-for-byte against the shared
+  `wire-format-fixtures/sparkline-lowering/*` goldens. An unresolved or empty
+  series keeps the `fuaran-sparkline-empty` em-dash — a readable, deterministic
+  stand-in rather than a blank, and the one case the lowering deliberately
+  cannot express (the goldens spell it as the JSON literal `null`).
 - **It holds no UI session state on the static path.** Values are resolved at
   render time so a page is correct before any JS runs, but interactivity is a
   client's job — see [the server-driven page](SERVER-DRIVEN.md) for the two

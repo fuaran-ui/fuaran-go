@@ -429,7 +429,7 @@ func (r *renderer) renderKind(node wire.Node, semanticAttrs []attr) string {
 	case "Icon":
 		return renderIcon(fields)
 	case "Sparkline":
-		return textElement("div", []attr{{"class", "fuaran-sparkline fuaran-sparkline-empty"}}, emDash)
+		return r.sparkline(fields)
 	case "LabelValueRow":
 		return r.labelValueRow(fields)
 	case "Link":
