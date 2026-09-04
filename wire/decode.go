@@ -456,6 +456,28 @@ var (
 	// than an `inverted: bool` — admitting it later is then a bare-string
 	// addition here, not a type replacement across every host.
 	trendPolarityCases = newCaseSet("HigherIsBetter", "LowerIsBetter")
+	// Phase 1472 — §3.1's `TextDirection`, the ONE `SemanticStyle` member that
+	// is not presentational: it declares one value's own base direction, which
+	// the bidirectional algorithm otherwise infers from the value's first
+	// strong character and gets wrong for identifiers. Lower-case, spelled in
+	// the values the isolation is ultimately expressed in (the `liveRegion`
+	// posture). `"auto"` is the identity and omits at it, so a document that
+	// declares nothing is byte-identical to what it was before the member
+	// existed. An unrecognised token is REFUSED, never coerced to the default —
+	// a misspelled `"rtl"` would otherwise render as reordered digits with
+	// nothing said anywhere, which is the failure the member exists to prevent.
+	textDirectionCases = newCaseSet("auto", "ltr", "rtl")
+	// Phase 1119 — §3.6.11's `Modality`, a closed PAIR. A sheet, a drawer and a
+	// menu are all PRESENTATIONS of one of the two rather than a third, so the
+	// answer to an unknown token is to say which of the two was meant, not to
+	// widen the enum. `Modal` is the identity and omits at it.
+	modalityCases = newCaseSet("Modal", "Popover")
+	// Phase 1116 — §3.6.10's `CaptureSource`, a closed pair. `Screen` is
+	// deliberately absent: the HTML capture attribute cannot ask for a display
+	// at all, and a screen capture is a standing grant reaching every window the
+	// reader has open rather than a third device behind the same picker
+	// permission. A later admission would be an ADDITION, never a re-meaning.
+	captureSourceCases = newCaseSet("Camera", "Microphone")
 
 	// Drawing (Phase 524) — the closed Shape / CurveCommand DUs. An unrecognised
 	// discriminator is UNKNOWN_DU_CASE (the typed-surface default-deny).
@@ -485,11 +507,13 @@ var (
 	// searchable or asynchronous option set, or one that admits a value not on
 	// the list. Its `value` / `onChange` contract IS Choice's, deliberately, so
 	// a document migrating between the two changes its `$type` and nothing else.
-	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Toggle", "Choice", "SegmentedChoice", "Combobox", "TextArea", "Range", "Date", "DateRange")
+	//
+	// Phase 1121's `Tokens` and Phase 1130's `Rating` / `Color` join them.
+	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Toggle", "Choice", "SegmentedChoice", "Combobox", "TextArea", "Range", "Date", "DateRange", "Tokens", "Rating", "Color")
 	flushTriggerCases = newCaseSet("OnBlur", "OnSubmit", "OnDebounce", "OnCommitAction")
 	actionCases       = newCaseSet(
 		"Chain", "Dispatch", "Navigate", "SetState", "Notify", "WriteToClipboard",
-		"ReadFileBody", "Call", "AiTool", "CommitLocal", "Invoke",
+		"ReadFileBody", "Call", "AiTool", "CommitLocal", "Invoke", "Print",
 	)
 	callTargetCases = newCaseSet("State", "Query")
 )
@@ -1374,8 +1398,42 @@ func decodeAction(w *walkState, raw any, path string) Value {
 		nodeID := expectString(require(obj, "nodeId", path), path+".nodeId")
 		return Obj{Tag: tag, Fields: map[string]Value{"nodeId": Str(nodeID)}}
 	case "WriteToClipboard":
-		text := expectString(require(obj, "text", path), path+".text")
-		return Obj{Tag: tag, Fields: map[string]Value{"text": Str(text)}}
+		// Phase 1126 — the payload is a `TextSource`. The bare JSON string IS
+		// `Literal`'s canonical form, so every document written before the
+		// widening decodes exactly as it did, and the explicit `Literal`
+		// envelope normalises down to it here as at every other text slot
+		// (§16). A `text` that is neither a string nor a `$type`-tagged
+		// `TextSource` is WRONG_TYPE and is never coerced: a host that read the
+		// widening as "this member is now open" would put a JSON literal on the
+		// reader's clipboard, and a clipboard is a channel the reader later
+		// pastes somewhere with authority.
+		text := decodeTextSource(w, require(obj, "text", path), path+".text")
+		return Obj{Tag: tag, Fields: map[string]Value{"text": text}}
+	case "Print":
+		// Phase 1124 — the payload-free case. This is the ONE `Action` arm that
+		// is strict about unrecognised members, and the asymmetry is
+		// deliberate: everywhere else in this format an unknown member is one
+		// the reading host has not learned yet, and dropping it is the
+		// forward-compatible answer. Here there is nothing to learn — page
+		// range, size, margins and copies are the host's page setup and the
+		// reader's dialogue — so a host accepting
+		// `{"$type":"Print","pageRange":"1-3"}` would leave the emitter
+		// believing it had constrained a printing it had not, with no error
+		// anywhere saying otherwise. The refusal names the offending member's
+		// own path; the keys are sorted so WHICH member is named is
+		// deterministic rather than a function of Go's map iteration order.
+		extras := make([]string, 0, len(obj))
+		for key := range obj {
+			if key != "$type" {
+				extras = append(extras, key)
+			}
+		}
+		if len(extras) > 0 {
+			sort.Strings(extras)
+			fail(CodeWrongType, path+"."+extras[0],
+				"no member beside $type — Print takes no payload (WIRE_FORMAT.md §3.6.14)")
+		}
+		return Obj{Tag: tag, Fields: map[string]Value{}}
 	case "ReadFileBody":
 		fileRef := expectString(require(obj, "fileRef", path), path+".fileRef")
 		encoding := enumStr(require(obj, "encoding", path), path+".encoding",
@@ -1894,10 +1952,24 @@ func placeholderMatches(kindTag string, v Value) bool {
 	switch kindTag {
 	case "Text", "TextArea", "Date":
 		return isStr(v, "")
-	case "Number", "RangedNumber":
+	// `Rating` shares `Number`'s zero placeholder: an auto-bound rating starts
+	// unrated, and the commonest one a reader sees is an average arriving
+	// through a Query binding.
+	case "Number", "RangedNumber", "Rating":
 		return isNumericZero(v)
 	case "Checkbox", "Toggle":
 		return isBool(v, false)
+	// The EMPTY LIST (Phase 1121) — the list is ordered and the order is the
+	// reader's, so an auto-bound token field starts with no chips rather than
+	// with a placeholder one.
+	case "Tokens":
+		arr, ok := v.(Arr)
+		return ok && len(arr) == 0
+	// The unset swatch (Phase 1130). A native colour input substitutes its own
+	// default when handed nothing, and `#000000` is that default's wire
+	// spelling — the one `#rrggbb` form the control can hold.
+	case "Color":
+		return isStr(v, "#000000")
 	// `Combobox` shares `Choice`'s placeholder because §3.6.9 makes the value
 	// contract Choice's normatively — a document migrating between the two
 	// changes its `$type` and nothing else, which a divergent placeholder here
@@ -2010,6 +2082,72 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 			orientation = Str(enumStr(raw, path+".orientation", orientationCases, "orientation", orientationAliases))
 		}
 		s.set("orientation", orientation)
+	// Phase 1121 — the multi-token field. `allowFreeText` omits at TRUE, the
+	// OPPOSITE polarity to `Combobox`'s, and it is the one thing about this case
+	// a host is most likely to get wrong: the default follows the required-ness
+	// of the set, and where `Combobox.options` is required so "constrained" is
+	// its resting state, `suggestions` is optional so "open" is this one's.
+	case "Tokens":
+		handler("onChange")
+		allowFreeText := Value(Bool(true))
+		if raw, ok := s.take("allowFreeText"); ok {
+			allowFreeText = decodeBool(w, raw, path+".allowFreeText")
+		}
+		if !isBool(allowFreeText, true) {
+			s.set("allowFreeText", allowFreeText)
+		}
+		_, hasSuggestions := obj["suggestions"]
+		s.opt("suggestions", decodeBindingSelectOptions)
+		// THE ONE DECODE REFUSAL, and it is a cross-member one: a closed field
+		// with no suggestion source admits nothing typed and offers nothing to
+		// pick, so the document names a control that CANNOT EXIST rather than
+		// one with a bad value in it. Under the polarity above it is reachable
+		// only deliberately, which is what makes refusing it right rather than
+		// hostile. What is NOT refused: duplicate tokens and membership of a
+		// token in the suggestion set are properties of the VALUE, invisible to
+		// a decoder whenever the slot is bound.
+		if isBool(allowFreeText, false) && !hasSuggestions {
+			fail(CodeWrongType, path+".allowFreeText",
+				"a suggestion source alongside allowFreeText:false — a closed token field with nothing to pick from admits no token at all (WIRE_FORMAT.md §3.6.19)")
+		}
+		valueSlot(decodeBindingStringList)
+	// Phase 1130 — `max` is the case's only REQUIRED member: it is the scale,
+	// and a rating with no declared ceiling is not a scale. A `max` below 1 is
+	// REFUSED, not clamped — a scale with no positions has nothing to draw,
+	// nothing to announce and no keystroke that could change anything.
+	//
+	// The asymmetry is deliberate: the SCALE is refused and the VALUE is not,
+	// because a bound value is invisible to a decoder and a rule enforced only
+	// on literals would be two rules wearing one name. The value is a FLOAT even
+	// where nothing can type a fraction, because the commonest rating a reader
+	// sees is an AVERAGE arriving through a Query binding.
+	case "Rating":
+		handler("onChange")
+		s.req("max", decodeRatingMax)
+		// Omits at `false`, and the polarity is load-bearing: the SHORTEST
+		// rating document is the whole-star one. It governs ENTRY, never
+		// DISPLAY.
+		s.optDrop("allowHalf", decodeBool, isFalseValue)
+		valueSlot(decodeBindingFloat)
+	// Phase 1130 — `#rrggbb` and nothing else, because that is the one form a
+	// native colour input can hold or return. Only the `Static` case is judged
+	// here, and the split is recorded rather than hidden: a State / Query /
+	// Selection binding carries its text from outside the document, where a
+	// decoder cannot see it, and is re-checked by the pre-emit validator and the
+	// server-side submission floor. CASE IS PRESERVED, never normalised — a
+	// codec that lower-cased it would fail the round-trip this corpus pins.
+	case "Color":
+		handler("onChange")
+		if raw, ok := s.take("value"); ok {
+			v := decodeBindingString(w, raw, path+".value")
+			if o, isObj := v.(Obj); isObj && o.Tag == "Static" && !isHexColour(o.Fields["value"]) {
+				fail(CodeWrongType, path+".value",
+					"a #rrggbb colour literal — six hexadecimal digits after a #, the one form a native colour input can hold (WIRE_FORMAT.md §3.6.17)")
+			}
+			if !isAutoBoundValue(ab, tag, v) {
+				s.set("value", v)
+			}
+		}
 	case "TextArea":
 		handler("onChange")
 		s.req("rows", decodeInt)
@@ -2057,6 +2195,35 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 
 func expectNumberField(w *walkState, raw any, path string) Value {
 	return expectNumber(w, raw, path)
+}
+
+// decodeRatingMax — the scale floor (Phase 1130), a DECODE rule rather than a
+// validator one, on the same reasoning as `decodePositiveInt`'s `w` descriptor:
+// a `max` of zero is not a small scale, it is one no host can draw, announce or
+// change.
+func decodeRatingMax(w *walkState, raw any, path string) Value {
+	n := expectInt(raw, path)
+	if n < 1 {
+		fail(CodeWrongType, path, "expected an integer scale of 1 or more at "+path)
+	}
+	return Int(n)
+}
+
+// isHexColour reports whether a decoded Static value is a `#rrggbb` literal.
+// Case is significant to the ROUND TRIP and not to this check: both cases are
+// admitted here and neither is rewritten.
+func isHexColour(v Value) bool {
+	s, ok := v.(Str)
+	if !ok || len(s) != 7 || s[0] != '#' {
+		return false
+	}
+	for i := 1; i < 7; i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // `FormFieldKind` names the CONTROL; `FormField.rule` names the ACCEPTED SET.
@@ -2670,6 +2837,18 @@ func decodePositiveInt(w *walkState, raw any, path string) Value {
 	return Int(n)
 }
 
+// decodeUploadDestination — §3.6.10's streamed-upload destination (Phase 1117).
+// The empty string is REFUSED rather than admitted: an absent member already
+// means "the host's default", so an empty one names no destination at all and
+// would be a document asking for something with nothing said anywhere.
+func decodeUploadDestination(w *walkState, raw any, path string) Value {
+	s := expectString(raw, path)
+	if s == "" {
+		fail(CodeWrongType, path, "expected a non-empty destination name at "+path)
+	}
+	return Str(s)
+}
+
 // decodeMediaKind — §3.6.6's `$type`-discriminated variant, nested at
 // `kind.kind`. Closed at Video | Audio, so admitting a third surface later is
 // an ADDITION rather than a re-meaning of shipped bytes.
@@ -3062,6 +3241,12 @@ func init() {
 			s.opt("onDismiss", decodeAction)
 			s.req("open", decodeBindingBool)
 			s.opt("heading", decodeTextSource, "title")
+			// Phase 1119 — the closed `Modal | Popover` pair, omitted at
+			// `Modal`. A bare enum (§3.5), so an unrecognised token reports at
+			// the slot's own path with no `.$type` suffix — there is no
+			// discriminator on the wire to name.
+			s.optDrop("modality", enumDecoder(modalityCases, "modality", noAliases),
+				func(v Value) bool { return isStr(v, "Modal") })
 			return s.build("Modal")
 		},
 		"ScrollArea": func(w *walkState, obj map[string]any, path string) Obj {
@@ -3104,6 +3289,21 @@ func init() {
 			s.take("onSelect")
 			s.set("onSelect", Str(closureSentinel))
 			s.opt("disabled", decodeBindingBool)
+			// Phase 1115 — the two ADDITIONAL ingestion gestures, each omitted
+			// at `false`. Neither replaces the picker: the `<input type=file>`
+			// and its label are emitted whatever a document declares, which is
+			// what keeps the keyboard route intact and the no-script floor a
+			// working upload rather than an inert box.
+			s.optDrop("dropTarget", decodeBool, isFalseValue)
+			s.optDrop("acceptPaste", decodeBool, isFalseValue)
+			// Phase 1116 — the capture source, a closed `Camera | Microphone`
+			// pair (a bare enum, so the path carries no `.$type`).
+			s.opt("capture", enumDecoder(captureSourceCases, "capture", noAliases))
+			// Phase 1117 — the streamed upload's destination. A non-empty
+			// string: an empty one names no destination at all, so it is
+			// refused rather than read as "the default", which is what an
+			// absent member already means.
+			s.opt("destination", decodeUploadDestination)
 			return s.build("FileUpload")
 		},
 		// 0.2.0 — editable omitted-when-false; `data` / `rows` alias `source`.
@@ -3139,6 +3339,19 @@ func init() {
 			s.opt("editStateKey", decodeString)
 			s.opt("pageStateKey", decodeString)
 			s.opt("staticRows", decodeStaticRows)
+			// Phase 1125 — the CSV export affordance, omitted at `false`.
+			s.optDrop("exportable", decodeBool, isFalseValue)
+			// Phase 1473 — the grid's half of the print-break vocabulary. There
+			// is no `breakBefore` here (that is a wrapper's job); what survives
+			// on a grid is whether its rows may fragment and whether the header
+			// repeats on each page.
+			s.optDrop("keepRowsTogether", decodeBool, isFalseValue)
+			s.optDrop("repeatHeader", decodeBool, isFalseValue)
+			// Phase 1123 — cross-container drag. Two grids naming the same key
+			// exchange rows; a grid declaring only `transferInKey` receives
+			// without giving up its own.
+			s.opt("transferInKey", decodeString)
+			s.opt("transferOutKey", decodeString)
 			return s.build("DataGrid")
 		},
 		// `stacked` is carried on the wire; a legacy wire predating the field
@@ -3212,6 +3425,12 @@ func init() {
 			} else {
 				s.req("stateKey", decodeString)
 			}
+			// Phase 1122 — the timed advance, in whole milliseconds. Zero, a
+			// negative and a fraction are all REFUSED rather than clamped or
+			// rounded: none of them names an interval, and a carousel that
+			// advanced on a rounded guess would be a reading pace the document
+			// never asked for.
+			s.opt("autoAdvanceMs", decodePositiveInt)
 			return s.build("Switch")
 		},
 		// Isolation/embedding boundary (§4o). inputs passes through WITHOUT
@@ -3310,6 +3529,19 @@ func decodeBox(w *walkState, obj map[string]any, path string) Obj {
 	if raw, ok := optAliased(obj, "heading", "title"); ok {
 		fields["heading"] = decodeTextSource(w, raw, path+".heading")
 	}
+	// Phase 1473 — the two print-break booleans (§ "Print break control"), each
+	// omitted at `false` on BOTH boundaries: `keepTogether` says this container
+	// and its whole subtree stay on one page, `breakBefore` that it starts at
+	// the top of a fresh one. A non-boolean is WRONG_TYPE at the member's own
+	// path rather than coerced — these are page-layout instructions, and a
+	// truthiness read would honour `"no"`.
+	for _, name := range []string{"breakBefore", "keepTogether"} {
+		if raw, ok := obj[name]; ok {
+			if v := decodeBool(w, raw, path+"."+name); !isFalseValue(v) {
+				fields[name] = v
+			}
+		}
+	}
 	return Obj{Tag: "Box", Fields: fields}
 }
 
@@ -3365,6 +3597,15 @@ func decodeStyle(w *walkState, raw any, path string) Obj {
 	if raw, ok := obj["voice"]; ok {
 		if v := Str(enumStr(raw, path+".voice", fontVoiceCases, "voice", noAliases)); !isStr(v, "Default") {
 			fields["voice"] = v
+		}
+	}
+	// Phase 1472 — the declared direction, on exactly the same omit-at-identity
+	// terms as its neighbours (§3.1). It is not presentational: a host that
+	// drops it renders a document that says something else, so an unrecognised
+	// token is refused here rather than coerced to `"auto"`.
+	if raw, ok := obj["direction"]; ok {
+		if v := Str(enumStr(raw, path+".direction", textDirectionCases, "direction", noAliases)); !isStr(v, "auto") {
+			fields["direction"] = v
 		}
 	}
 	return Obj{Fields: fields}
