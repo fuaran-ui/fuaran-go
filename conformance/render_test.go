@@ -302,6 +302,13 @@ func referenceRendererFiles(t *testing.T, corpus string) []string {
 		// The canonical inline-SVG builder — the source of the fuaran-drawing*
 		// class vocabulary (both F# renderers call into it).
 		filepath.Join(root, "src", "Fuaran.UI.Renderer.Core", "DrawingSvg.fs"),
+		// The shared class-composition module: the reference host builds its
+		// tone/variant classes here (fuaran-metric- + tone, fuaran-badge- +
+		// tone, the layout and toast families), and BOTH renderers call into
+		// it rather than spelling those literals out. Omitting it makes the
+		// oracle report 31 correct classes as absent — the vocabulary is
+		// genuinely in the reference, just not in the two Render.fs files.
+		filepath.Join(root, "src", "Fuaran.UI.Renderer.Core", "Css.fs"),
 	}
 }
 
