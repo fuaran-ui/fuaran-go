@@ -45,9 +45,19 @@ const (
 	classConcurrentEdit      = "ConcurrentEdit"
 	classReorderVsStructural = "ReorderVsStructural"
 
+	// Every choice a refusal offers names a POPULATED slot of that refusal.
+	// choiceKeepPrimary / choiceKeepSecondary name the precedence view, which is
+	// populated exactly when PrimacyHeld is true; choiceKeepA / choiceKeepB name
+	// the sides view, populated on every two-sided refusal. An unpinned refusal
+	// offering KeepSecondary — which this host did until the reference tier fixed
+	// it — names a slot that is nil there, so a resolver applying it has nothing
+	// to keep or picks a side itself, which is the argument-order dependence the
+	// two-sided envelope removed arriving instead through the resolver.
 	choiceKeepPrimary   = "KeepPrimary"
 	choiceKeepSecondary = "KeepSecondary"
 	choiceKeepBase      = "KeepBase"
+	choiceKeepA         = "KeepA"
+	choiceKeepB         = "KeepB"
 )
 
 // Side is one SIDE of a two-sided refusal: the branch's value for the contended
@@ -151,8 +161,15 @@ func resolveAuthor(a, b Author) resolution {
 	case !a.Primary && b.Primary:
 		return resolution{false, true, []string{choiceKeepPrimary, choiceKeepSecondary, choiceKeepBase}, a.Tag, aTag, bTag}
 	case !a.Primary && !b.Primary:
-		return resolution{false, false, []string{choiceKeepBase, choiceKeepSecondary}, nil, aTag, bTag}
-	default: // two primaries — no precedence, host decides
+		// No pin, so Primary / Secondary are both nil and the two values live in
+		// A / B alone — the menu is side-addressed rather than precedence-named.
+		return resolution{false, false, []string{choiceKeepBase, choiceKeepA, choiceKeepB}, nil, aTag, bTag}
+	default:
+		// Two primaries — no precedence, host decides. Deliberately NOT widened
+		// to KeepA / KeepB even though both sides are populated here too: keeping
+		// one side discards the OTHER side's pin, a materially different act from
+		// keeping a side where no pin exists, and a menu listing it beside
+		// KeepBase would understate it. KeepBase discards both pins symmetrically.
 		return resolution{false, false, []string{choiceKeepBase}, nil, aTag, bTag}
 	}
 }
