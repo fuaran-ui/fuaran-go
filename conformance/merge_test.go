@@ -30,6 +30,35 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// mergeManifest models the two fixture families the corpus declares. The
+// refusal family lives under its OWN key rather than beside the auto-merge
+// triads in `fixtures`, because the leg below iterates every `fixtures` entry
+// and asserts the merge SUCCEEDS before it looks at `kind` — a refusal triad
+// added there would turn a conformant host red for modelling the corpus
+// correctly.
+type mergeManifest struct {
+	Fixtures []struct {
+		ID           string `json:"id"`
+		Kind         string `json:"kind"`
+		BaseFile     string `json:"baseFile"`
+		AFile        string `json:"aFile"`
+		BFile        string `json:"bFile"`
+		ExpectedFile string `json:"expectedFile"`
+		OutcomeHash  string `json:"outcomeHash"`
+		VerdictFile  string `json:"verdictFile"`
+		VerdictHash  string `json:"verdictHash"`
+	} `json:"fixtures"`
+	RefusalFixtures []struct {
+		ID           string `json:"id"`
+		Kind         string `json:"kind"`
+		BaseFile     string `json:"baseFile"`
+		AFile        string `json:"aFile"`
+		BFile        string `json:"bFile"`
+		EnvelopeFile string `json:"envelopeFile"`
+		EnvelopeHash string `json:"envelopeHash"`
+	} `json:"refusalFixtures"`
+}
+
 func TestMergeCorpus(t *testing.T) {
 	corpus := findCorpus()
 	if corpus == "" {
@@ -40,19 +69,7 @@ func TestMergeCorpus(t *testing.T) {
 	if err != nil {
 		t.Skipf("merge corpus not found: %v", err)
 	}
-	var m struct {
-		Fixtures []struct {
-			ID           string `json:"id"`
-			Kind         string `json:"kind"`
-			BaseFile     string `json:"baseFile"`
-			AFile        string `json:"aFile"`
-			BFile        string `json:"bFile"`
-			ExpectedFile string `json:"expectedFile"`
-			OutcomeHash  string `json:"outcomeHash"`
-			VerdictFile  string `json:"verdictFile"`
-			VerdictHash  string `json:"verdictHash"`
-		} `json:"fixtures"`
-	}
+	var m mergeManifest
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatalf("parsing merge manifest: %v", err)
 	}
@@ -102,6 +119,100 @@ func TestMergeCorpus(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMergeRefusalCorpus is the refusal leg: each triad REFUSES, and the
+// canonically-encoded two-sided envelope is byte-equal to the committed bytes
+// with sha256(envelope) == envelopeHash.
+//
+// The swap is asserted here rather than committed twice — two fixture files that
+// were transpositions of each other would pin the same fact in a form a host
+// could satisfy by emitting both from one side.
+func TestMergeRefusalCorpus(t *testing.T) {
+	corpus := findCorpus()
+	if corpus == "" {
+		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
+	}
+	root := filepath.Join(corpus, "merge-conformance")
+	raw, err := os.ReadFile(filepath.Join(root, "manifest.json"))
+	if err != nil {
+		t.Skipf("merge corpus not found: %v", err)
+	}
+	var m mergeManifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("parsing merge manifest: %v", err)
+	}
+	// NOT a skip: this host has adopted the family, so an empty list means the
+	// corpus moved out from under it, and "nothing to check" must never read as
+	// "everything checked".
+	if len(m.RefusalFixtures) == 0 {
+		t.Fatal("merge corpus declares no refusalFixtures — the family this leg certifies is gone")
+	}
+
+	decode := func(rel string) wire.Node {
+		node, err := wire.DecodeNode(readRel(t, root, rel))
+		if err != nil {
+			t.Fatalf("decode %s: %v", rel, err)
+		}
+		return node
+	}
+
+	for _, fx := range m.RefusalFixtures {
+		t.Run(fx.ID, func(t *testing.T) {
+			base, a, b := decode(fx.BaseFile), decode(fx.AFile), decode(fx.BFile)
+
+			forward := merge.Merge3Way(base, a, b)
+			if forward.OK {
+				t.Fatalf("refusal fixture auto-merged — the triad no longer refuses")
+			}
+			envelope := merge.EncodeEnvelope(forward.Conflicts)
+			if want := readRel(t, root, fx.EnvelopeFile); envelope != want {
+				t.Errorf("envelope not byte-identical: %s", firstDiff(envelope, want))
+			}
+			if got := sha256Hex(envelope); got != fx.EnvelopeHash {
+				t.Errorf("envelopeHash = %s, want %s", got, fx.EnvelopeHash)
+			}
+
+			// Swapping the caller's branches TRANSPOSES A and B and changes
+			// nothing else. Without this the sides could be populated from
+			// argument position and still match the committed bytes.
+			swapped := merge.Merge3Way(base, b, a)
+			if swapped.OK {
+				t.Fatalf("the swapped merge auto-merged — a refusal must not depend on branch order")
+			}
+			fwd, rev := merge.SortCanonical(forward.Conflicts), merge.SortCanonical(swapped.Conflicts)
+			if len(fwd) != len(rev) {
+				t.Fatalf("swapped refusal has %d cells, forward has %d", len(rev), len(fwd))
+			}
+			for i := range fwd {
+				f, r := fwd[i], rev[i]
+				if f.NodeID != r.NodeID || f.Facet != r.Facet || f.ConflictClass != r.ConflictClass {
+					t.Errorf("cell %d: forward %s/%s/%s != swapped %s/%s/%s",
+						i, f.NodeID, f.Facet, f.ConflictClass, r.NodeID, r.Facet, r.ConflictClass)
+					continue
+				}
+				if !sameSide(f.A, r.B) {
+					t.Errorf("%s/%s: forward A != swapped B", f.NodeID, f.Facet)
+				}
+				if !sameSide(f.B, r.A) {
+					t.Errorf("%s/%s: forward B != swapped A", f.NodeID, f.Facet)
+				}
+			}
+		})
+	}
+}
+
+func sameSide(x, y *merge.Side) bool {
+	if x == nil || y == nil {
+		return x == y
+	}
+	if x.Value != y.Value {
+		return false
+	}
+	if x.Tag == nil || y.Tag == nil {
+		return x.Tag == nil && y.Tag == nil
+	}
+	return *x.Tag == *y.Tag
 }
 
 // ── test-side sample validator + verdict codec (Phase-184 port) ─────────────

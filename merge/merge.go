@@ -6,11 +6,23 @@
 // node's own kind-fields, children neutralised), the SemanticStyle sub-fields
 // (tone/weight/emphasis/role/voice, merged INDEPENDENTLY so A's tone + B's voice
 // auto-blend), state, accessibility, and children (the ordered child-id list).
-// When a facet changed on at most one side, that side's value is taken; when
-// both changed it differently it is a conflict (returned, not silently picked).
-// The one structural case auto-merged across both sides is disjoint pure inserts
-// into the same parent, ordered by NodeId code-point (Ordinal) — the
-// deterministic, wall-clock-free tie-break. Facet equality is canonical-JSON
+// When a facet changed on at most one side, that side's value is taken; when both
+// changed it to the SAME value that shared value is taken (agreement, not
+// conflict); when both changed it differently it is a conflict (returned, not
+// silently picked).
+//
+// The refusal envelope is TWO-SIDED: A and B carry the first- and
+// second-argument branches' values on every refusal, so swapping the branches
+// transposes them and changes nothing else. Base / Primary / Secondary are the
+// precedence view on top — Primary and Secondary are populated exactly when a
+// primacy pin is held, because a value in either slot IS a precedence claim.
+//
+// The structural cases auto-merged across both sides are (a) disjoint pure
+// inserts into the same parent, ordered by NodeId code-point (Ordinal) — the
+// deterministic, wall-clock-free tie-break — and (b) two sides that reached the
+// SAME child-id list, whose shared new children must then also agree on content:
+// two branches inserting one id with different content is a refusal naming that
+// id, never an arrival-order-dependent pick. Facet equality is canonical-JSON
 // bytes, the same oracle the corpus commits to.
 package merge
 
@@ -18,6 +30,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/fuaran-ui/fuaran-go/canonical"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -37,14 +50,42 @@ const (
 	choiceKeepBase      = "KeepBase"
 )
 
+// Side is one SIDE of a two-sided refusal: the branch's value for the contended
+// cell, plus that branch's own opaque provenance tag.
+//
+// The tag is per-side because SecondaryTag cannot be: it names the tag of the
+// side that lost to a pin, so with no pin held there is no such side, and
+// populating it from the A-side branch would make the envelope depend on the
+// order the caller passed its branches.
+type Side struct {
+	Value string
+	Tag   *string
+}
+
 // Conflict is a conflicting (NodeID, Facet) cell. NodeID + Facet are the minimal
 // identity (the author-agnostic surface); the remaining fields carry the
 // DAG-layer resolution detail.
+//
+// Two views of the same refusal, answering different questions:
+//
+//   - A / B are the SIDES view: the first- and second-argument branches' values
+//     for the contended cell, populated on EVERY two-sided refusal whether or
+//     not a pin is held. This is what a host needs to show a human what each
+//     side wanted, and what a second replica merging the same pair in the
+//     opposite order must agree with — swapping the branches TRANSPOSES A and B
+//     and changes nothing else.
+//   - Base / Primary / Secondary are the PRECEDENCE view: the LCA value, the
+//     pinned winner, and the side that lost to it. Primary and Secondary are
+//     populated exactly when PrimacyHeld is true — a value in either slot IS a
+//     precedence claim, so with two Secondary sides (the Merge3Way shape) both
+//     are nil and the values live in A / B alone.
 type Conflict struct {
 	NodeID        string
 	Facet         string
 	ConflictClass string
 	Base          *string
+	A             *Side
+	B             *Side
 	Primary       *string
 	Secondary     *string
 	SecondaryTag  *string
@@ -82,18 +123,37 @@ type resolution struct {
 	pinHeld      bool
 	choices      []string
 	secondaryTag *string
+	aTag         *string
+	bTag         *string
 }
 
+// tagOf is the opaque provenance tag a side carries — a Primary side carries
+// none (the tag is the Secondary case's payload).
+func tagOf(a Author) *string {
+	if a.Primary {
+		return nil
+	}
+	return a.Tag
+}
+
+// resolveAuthor decides which side wins a conflicted facet under precedence.
+//
+// secondaryTag names the tag of the side that LOST TO A PIN, so it is nil
+// whenever no pin is held. It used to be the A-side branch's tag in the
+// two-secondary case, which made it a function of the order the caller passed
+// its branches rather than of the merge; each branch's own tag now rides in its
+// own side of the two-sided envelope.
 func resolveAuthor(a, b Author) resolution {
+	aTag, bTag := tagOf(a), tagOf(b)
 	switch {
 	case a.Primary && !b.Primary:
-		return resolution{true, true, []string{choiceKeepPrimary, choiceKeepSecondary, choiceKeepBase}, b.Tag}
+		return resolution{true, true, []string{choiceKeepPrimary, choiceKeepSecondary, choiceKeepBase}, b.Tag, aTag, bTag}
 	case !a.Primary && b.Primary:
-		return resolution{false, true, []string{choiceKeepPrimary, choiceKeepSecondary, choiceKeepBase}, a.Tag}
+		return resolution{false, true, []string{choiceKeepPrimary, choiceKeepSecondary, choiceKeepBase}, a.Tag, aTag, bTag}
 	case !a.Primary && !b.Primary:
-		return resolution{false, false, []string{choiceKeepBase, choiceKeepSecondary}, a.Tag}
+		return resolution{false, false, []string{choiceKeepBase, choiceKeepSecondary}, nil, aTag, bTag}
 	default: // two primaries — no precedence, host decides
-		return resolution{false, false, []string{choiceKeepBase}, nil}
+		return resolution{false, false, []string{choiceKeepBase}, nil, aTag, bTag}
 	}
 }
 
@@ -212,6 +272,10 @@ func strEq(a, b *string) bool {
 }
 
 func recordConflict(conflicts *[]Conflict, res resolution, nodeID, facet string, baseV, aV, bV *string) int {
+	// The PRECEDENCE view is populated exactly when a pin is held. Before the
+	// two-sided envelope, Secondary carried the A-side value in the no-pin case
+	// — a precedence claim no pin supported, and one that changed when the
+	// caller swapped its branches.
 	var primaryV, secondaryV *string
 	if res.pinHeld {
 		if res.aIsPrimary {
@@ -219,8 +283,6 @@ func recordConflict(conflicts *[]Conflict, res resolution, nodeID, facet string,
 		} else {
 			primaryV, secondaryV = bV, aV
 		}
-	} else {
-		secondaryV = aV
 	}
 	conflictClass := classConcurrentEdit
 	if facet == "children" {
@@ -228,7 +290,14 @@ func recordConflict(conflicts *[]Conflict, res resolution, nodeID, facet string,
 	}
 	*conflicts = append(*conflicts, Conflict{
 		NodeID: nodeID, Facet: facet, ConflictClass: conflictClass,
-		Base: baseV, Primary: primaryV, Secondary: secondaryV,
+		Base: baseV,
+		// The SIDES view, populated on every two-sided refusal. Each side
+		// carries its OWN branch's tag, so swapping the branches transposes
+		// the pair and rewrites nothing.
+		A:            &Side{Value: deref(aV), Tag: res.aTag},
+		B:            &Side{Value: deref(bV), Tag: res.bTag},
+		Primary:      primaryV,
+		Secondary:    secondaryV,
 		SecondaryTag: res.secondaryTag, PrimacyHeld: res.pinHeld, Choices: res.choices,
 	})
 	if res.pinHeld {
@@ -420,10 +489,43 @@ func merge3(conflicts *[]Conflict, res resolution, base wire.Node, aOpt, bOpt *w
 			}
 			return merge3(conflicts, res, bc, ac, bb)
 		}
-		if ac, ok := aM[cid]; ok {
+		ac, inA := aM[cid]
+		bc, inB := bM[cid]
+		if inA && inB {
+			// BOTH branches introduced this id. There is no base to merge
+			// against, so agreement is the only clean outcome: identical
+			// content is the shared value, and DIFFERENT content is a refusal
+			// naming the id.
+			//
+			// Taking the A side unconditionally is a silent,
+			// arrival-order-dependent pick, and it is the case the
+			// disjointness test below used to make unreachable. The
+			// shared-children guard reaches it, so the guard and this check
+			// land together or the merge trades a spurious refusal for a
+			// divergence.
+			acC, bcC := mustEncode(ac), mustEncode(bc)
+			if acC == bcC {
+				return ac
+			}
+			// The id exists on neither side of the LCA, so it has no base
+			// value — the empty string, not an encoding of a node that was
+			// never there.
+			empty := ""
+			recordConflict(conflicts, res, cid, "insert", &empty, &acC, &bcC)
+			// The merge has already refused, so this value reaches no caller of
+			// Merge3Way — but a lenient caller building a virtual ancestor from
+			// it must not get a tree that depends on which branch arrived
+			// first. Same doctrine as the insert tie-break: order by canonical
+			// bytes.
+			if acC <= bcC {
+				return ac
+			}
+			return bc
+		}
+		if inA {
 			return ac
 		}
-		return bM[cid]
+		return bc
 	}
 
 	var mergedChildren []wire.Node
@@ -438,6 +540,16 @@ func merge3(conflicts *[]Conflict, res resolution, base wire.Node, aOpt, bOpt *w
 		}
 	case !aStruct && bStruct:
 		for _, i := range bIDs {
+			mergedChildren = append(mergedChildren, recurseChild(i))
+		}
+	case sliceEq(aIDs, bIDs):
+		// Both sides changed the children to the SAME id list — agreement, not
+		// a conflict, and the guard every other facet already has (pickCanonical's
+		// aC != bC). Its absence here is what made a merge of a branch against
+		// itself refuse for any branch that touched children at all. The shared
+		// ids' CONTENTS are checked by recurseChild, which refuses a
+		// same-id-different-content insert rather than defaulting to a side.
+		for _, i := range aIDs {
 			mergedChildren = append(mergedChildren, recurseChild(i))
 		}
 	default:
@@ -509,6 +621,66 @@ func unionSorted(a, b []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ── the refusal envelope (the cross-host artefact of a REFUSED merge) ───────
+
+// SortCanonical orders a refusal set deterministically. (NodeID, Facet) is
+// unique within one merge — a facet of a node is merged once — so it totally
+// orders an envelope regardless of the fold's internal emission order.
+func SortCanonical(conflicts []Conflict) []Conflict {
+	out := make([]Conflict, len(conflicts))
+	copy(out, conflicts)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].NodeID != out[j].NodeID {
+			return out[i].NodeID < out[j].NodeID
+		}
+		return out[i].Facet < out[j].Facet
+	})
+	return out
+}
+
+func encodeSide(s *Side) string {
+	if s == nil {
+		return "null"
+	}
+	tag := "null"
+	if s.Tag != nil {
+		tag = canonical.EscapeString(*s.Tag)
+	}
+	return `{"tag":` + tag + `,"value":` + canonical.EscapeString(s.Value) + `}`
+}
+
+// EncodeEnvelope is the canonical JSON of a REFUSAL envelope: the conflict set
+// as a sorted array of {a,b,base,class,facet,nodeId,primacyHeld} objects (object
+// keys alphabetical, array entries in (NodeID, Facet) order). Byte-stable across
+// hosts, so sha256 over it is the cross-host refusal hash — the determinism
+// artefact for a REFUSED structural merge, the analogue of the outcome hash for
+// an auto-merge and of the verdict for a gated one.
+//
+// The precedence view is deliberately projected as primacyHeld alone rather than
+// as the Primary / Secondary strings: those are derivable from the sides plus
+// the pin, and a corpus that committed both would pin the same value twice and
+// go red on a host that agreed about the merge.
+func EncodeEnvelope(conflicts []Conflict) string {
+	out := "["
+	for i, c := range SortCanonical(conflicts) {
+		if i > 0 {
+			out += ","
+		}
+		primacy := "false"
+		if c.PrimacyHeld {
+			primacy = "true"
+		}
+		out += `{"a":` + encodeSide(c.A) +
+			`,"b":` + encodeSide(c.B) +
+			`,"base":` + canonical.EscapeString(deref(c.Base)) +
+			`,"class":` + canonical.EscapeString(c.ConflictClass) +
+			`,"facet":` + canonical.EscapeString(c.Facet) +
+			`,"nodeId":` + canonical.EscapeString(c.NodeID) +
+			`,"primacyHeld":` + primacy + "}"
+	}
+	return out + "]"
 }
 
 // Merge3Way is the author-agnostic facet 3-way merge of a and b over their
