@@ -720,19 +720,51 @@ func (r *renderer) modal(fields map[string]wire.Value) string {
 	if v, ok := resolveBinding(fields["open"], r.sources).(wire.Bool); ok {
 		isOpen = bool(v)
 	}
-	var parts strings.Builder
-	if heading, ok := fields["heading"]; ok {
-		parts.WriteString(textElement("h2", []attr{{"class", "fuaran-modal-heading"}}, r.text(heading)))
+	// Every emitted class name is a LITERAL at its call site, never composed
+	// from a family prefix — the class-vocabulary parity lock reads the
+	// reference source for those literals, and a composed name is invisible to
+	// it.
+	surface := func(headingClass, dismissClass, bodyClass string) string {
+		var parts strings.Builder
+		if heading, ok := fields["heading"]; ok {
+			parts.WriteString(textElement("h2", []attr{{"class", headingClass}}, r.text(heading)))
+		}
+		if d, ok := fields["dismissable"].(wire.Bool); ok && bool(d) {
+			parts.WriteString(textElement("button", []attr{
+				{"class", dismissClass}, {"type", "button"}, {"aria-label", "Close"},
+			}, "×"))
+		}
+		parts.WriteString(element("div", []attr{{"class", bodyClass}}, r.childrenHTML(fields)))
+		return parts.String()
 	}
-	if d, ok := fields["dismissable"].(wire.Bool); ok && bool(d) {
-		parts.WriteString(textElement("button", []attr{
-			{"class", "fuaran-modal-dismiss"}, {"type", "button"}, {"aria-label", "Close"},
-		}, "×"))
+
+	// Phase 1119 — the SSR floor for a `Popover`, and the honest one. A
+	// no-script host cannot measure an anchor, so it cannot place a surface
+	// against one: what it emits is the popover IN FLOW, at the position the
+	// node occupies in the document, with NO SCRIM and NO `aria-modal` — the
+	// page behind a popover is genuinely still there, and claiming otherwise
+	// would trap a screen-reader user in a surface nothing is blocking. An
+	// emitter that wants the static render to read correctly puts the popover
+	// node immediately after its anchor (§3.6.11).
+	if m, ok := fields["modality"].(wire.Str); ok && m == "Popover" {
+		attrs := []attr{{"class", "fuaran-popover"}}
+		if !isOpen {
+			attrs = append(attrs, attr{"hidden", ""})
+		}
+		// The anchor declaration RIDES the static render — it records that the
+		// id was read, and it is the hook a client control resolves on mount.
+		// Explicitly not coverage: nothing in a no-script host acts on it.
+		if a, ok := fields["anchor"].(wire.Str); ok {
+			attrs = append(attrs, attr{"data-fuaran-popover-anchor", string(a)})
+		}
+		return element("div", attrs, element("div", []attr{
+			{"class", "fuaran-popover-surface"}, {"role", "dialog"},
+		}, surface("fuaran-popover-heading", "fuaran-popover-dismiss", "fuaran-popover-body")))
 	}
-	parts.WriteString(element("div", []attr{{"class", "fuaran-modal-body"}}, r.childrenHTML(fields)))
+
 	dialog := element("div", []attr{
 		{"class", "fuaran-modal-dialog"}, {"role", "dialog"}, {"aria-modal", "true"},
-	}, parts.String())
+	}, surface("fuaran-modal-heading", "fuaran-modal-dismiss", "fuaran-modal-body"))
 	overlayAttrs := []attr{{"class", "fuaran-modal-overlay"}}
 	if !isOpen {
 		overlayAttrs = append(overlayAttrs, attr{"hidden", ""})

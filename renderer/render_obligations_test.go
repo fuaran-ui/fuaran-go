@@ -593,6 +593,51 @@ func checkCustomUnregisteredLabelled(t *testing.T) {
 	mustNotEmit(t, html, "trend line", "and it invents no description it does not have")
 }
 
+// FileUpload/picker-always-present (§3.6.10). The `<input type="file">` and its
+// label are emitted whatever gestures the document declares — a drop zone and a
+// paste target are ADDITIONAL routes, never replacements, which is what keeps
+// the keyboard-accessible route intact and the no-script floor a working upload
+// rather than an inert box.
+//
+// Both directions, and the second is the one an emission-only test misses: a
+// renderer that emitted the picker for the plain upload and swapped it for a
+// drop zone the moment `dropTarget` appeared would pass a plain-upload
+// assertion and fail every reader who cannot drag.
+func checkFileUploadPickerAlwaysPresent(t *testing.T) {
+	plain := renderJSON(t, `{"id":"up","kind":{"$type":"FileUpload","accept":[".csv"],"label":"Upload a spreadsheet","multiple":false,"onSelect":"<closure>"}}`)
+	mustEmit(t, plain, `type="file"`, "a plain upload emits the file picker")
+	mustEmit(t, plain, "Upload a spreadsheet", "…and its label")
+
+	for _, gesture := range []string{`"dropTarget":true`, `"acceptPaste":true`, `"capture":"Camera"`, `"destination":"session-recordings"`} {
+		html := renderJSON(t, `{"id":"up","kind":{"$type":"FileUpload","accept":[".csv"],`+gesture+`,"label":"Upload a spreadsheet","multiple":false,"onSelect":"<closure>"}}`)
+		mustEmit(t, html, `type="file"`, "the picker survives "+gesture+" — an additional route never replaces it")
+		mustEmit(t, html, "Upload a spreadsheet", "…and so does its label, with "+gesture)
+	}
+}
+
+// Modal/aria-modal-only-when-blocking (§3.6.11). `aria-modal="true"` is emitted
+// for `modality: Modal` and never for `modality: Popover`; BOTH carry
+// `role="dialog"`, and the popover carries no scrim element for the same reason
+// the attribute is withheld — the page behind it is genuinely still there.
+//
+// Three legs, and the third is what makes it an obligation rather than a
+// spelling: a renderer that emitted nothing at all for a popover would pass the
+// two negatives and render no dialogue.
+func checkModalAriaModalOnlyWhenBlocking(t *testing.T) {
+	const children = `"children":[{"id":"m1","kind":{"$type":"Markdown","text":"Updated hourly."}}],"dismissable":true`
+
+	blocking := renderJSON(t, `{"id":"m","kind":{"$type":"Modal",`+children+`,"heading":"Confirm","open":{"$type":"Static","value":true}}}`)
+	mustEmit(t, blocking, `aria-modal="true"`, "a blocking modal announces that the page behind it is inert")
+	mustEmit(t, blocking, `role="dialog"`, "…on a dialog")
+	mustEmit(t, blocking, `class="fuaran-modal-overlay"`, "…behind a scrim")
+
+	popover := renderJSON(t, `{"id":"m","kind":{"$type":"Modal","anchor":"help-trigger",`+children+`,"heading":"Help","modality":"Popover","open":{"$type":"Static","value":true}}}`)
+	mustNotEmit(t, popover, "aria-modal", "a popover blocks nothing, so it must never claim to")
+	mustNotEmit(t, popover, "fuaran-modal-overlay", "…and carries no scrim, for the same reason")
+	mustEmit(t, popover, `role="dialog"`, "but it IS a dialogue — both modalities carry the role")
+	mustEmit(t, popover, "Updated hourly.", "…and it renders its children, or the negatives above prove nothing")
+}
+
 // ─── The registry ────────────────────────────────────────────────────────────
 
 type obligationChecker struct {
@@ -622,6 +667,8 @@ var checkers = []obligationChecker{
 	{"Image/figure-caption-outside-link", checkImageFigureCaptionOutsideLink},
 	{"Image/srcset-ascending-by-width", checkImageSrcSetAscendingByWidth},
 	{"Custom/unregistered-custom-labelled", checkCustomUnregisteredLabelled},
+	{"FileUpload/picker-always-present", checkFileUploadPickerAlwaysPresent},
+	{"Modal/aria-modal-only-when-blocking", checkModalAriaModalOnlyWhenBlocking},
 }
 
 func hasChecker(key string) bool {
