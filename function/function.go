@@ -61,14 +61,19 @@ type Space struct {
 
 // SigEntry is one hole in a function signature — matched by absolute Addr
 // (hygiene). A value/repeat hole carries a Space; a slot hole carries a Slot
-// node-kind constraint ("" = unconstrained / not a slot). Twin of F# SigEntry.
+// node-kind constraint ("" = unconstrained / not a slot). An ACTION hole
+// carries neither: it declares only the effect CEILING of the handler a host
+// will later bind into it (the handler is a closure, lives host-side, and never
+// travels on the wire). Nil means the hole declares no ceiling, which is the
+// case for every non-action hole. Twin of the reference SigEntry.
 type SigEntry struct {
-	Addr     string `json:"addr"`
-	Name     string `json:"name"`
-	Kind     string `json:"kind"` // value | slot | repeat | action
-	Space    *Space `json:"space"`
-	Slot     string `json:"slot"`
-	Required bool   `json:"required"`
+	Addr         string       `json:"addr"`
+	Name         string       `json:"name"`
+	Kind         string       `json:"kind"` // value | slot | repeat | action
+	Space        *Space       `json:"space"`
+	Slot         string       `json:"slot"`
+	ActionEffect *EffectClass `json:"actionEffect"`
+	Required     bool         `json:"required"`
 }
 
 // FunctionEntry is a registered function: an id, the node-kind it produces
