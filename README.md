@@ -348,6 +348,31 @@ in-host so its browser renderer reaches chart parity. The posture is contract, n
 accident: it is pinned by `TestChartRequiresPreLoweredPosture` (`renderer/render_test.go`).
 Demand-gated — revisit only if a go SSR consumer needs in-host lowering.
 
+**Data-addressed annotations do not move it.** `ChartSpec.annotations` carries a
+closed union — a horizontal `ReferenceLine` at a value, a vertical `EventMarker`
+at an x address, and a shaded `RangeBand` over a pair on either axis — and it is
+the first chart vocabulary whose lowering is stated as a *draw order* (bands
+behind the grid, lines and markers in front of the series, labels last), so it
+reads more like an instruction to draw than anything before it. This host still
+does not: a raw `Chart` carrying annotations is the same typed passthrough, and a
+pre-lowered `Drawing` carrying the annotation marks renders as ordinary inline
+SVG. `TestChartAnnotationsDoNotMoveTheRequirePreLoweredPosture` pins both halves
+— the second is what makes the first mean something, since a host that simply
+*could not* draw annotations would pass the refusal on its own.
+
+**The CODEC leg is adopted, and that is a separate obligation.** The decoder
+carries the slot structurally — so a conformant document round-trips
+byte-for-byte — and refuses three things at the wire boundary: a non-finite
+reference-line value or value-band end, an unparseable event date, and an
+unordered value or date pair. Each is refused rather than normalised because an
+annotation's address participates in the domain it addresses: a non-finite one
+would take every gridline, tick and mark to NaN on whichever host *does* draw it,
+and a typo'd date would drag that axis back to the epoch. Two category keys order
+only through the rows, so that pair's order is the authoring path's question
+rather than the wire's. Refusing here is not in tension with painting nothing:
+this host is a codec host first, and what it hands a conformant client has to be
+a document that client can draw.
+
 ## Retired wire vocabulary — the positional slot on `InsertChild` / `MoveNode`
 
 `InsertChild` and `MoveNode` both **append**; `ReorderChildren` states order by naming

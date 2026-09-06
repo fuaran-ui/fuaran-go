@@ -21,8 +21,13 @@ package fuarango
 
 // Version is the pre-release version of the fuaran-go host.
 //
+// 0.0.3-alpha is ADDITIVE over 0.0.2-alpha: the ChartSpec.annotations slot and
+// its three wire refusals (a non-finite address, an unparseable event date, an
+// unordered pair). A pre-1490 document decodes and re-encodes byte-for-byte as
+// before, and the require-pre-lowered chart posture is unmoved.
+//
 // 0.0.2-alpha carries the Phase 1168 BREAKING change to the DAG record surface:
 // dag.Record's bare UserID becomes the typed Actor, and pre-1144 DAG content
 // addresses do not carry forward. Recorded in README.md — this host declares no
 // STABILITY.md.
-const Version = "0.0.2-alpha"
+const Version = "0.0.3-alpha"

@@ -1676,6 +1676,211 @@ func decodeSwitchCases(w *walkState, raw any, path string) Value {
 	return out
 }
 
+// ── Chart annotations (Phase 1490/1491/1492 — §4l) ──────────────────────────
+
+var (
+	chartAnnotationCases      = newCaseSet("ReferenceLine", "EventMarker", "RangeBand")
+	chartAnnotationXCases     = newCaseSet("Category", "Date")
+	chartAnnotationRangeCases = newCaseSet("ValueRange", "XRange")
+)
+
+// isCanonicalISODay reports whether text is a canonical ISO-8601 date the
+// temporal axis can place — YYYY-MM-DD, optionally followed by T… whose
+// time-of-day is discarded.
+//
+// STRICT by shape AND by calendar: four digits, two, two, both hyphens, a month
+// in 1–12 and a day the month actually has. A locale spelling (15/01/2026) and a
+// bare year are both refused — admitting either would be the string-sniffing the
+// temporal axis exists to avoid.
+func isCanonicalISODay(text string) bool {
+	if len(text) < 10 || text[4] != '-' || text[7] != '-' {
+		return false
+	}
+	if len(text) > 10 && text[10] != 'T' {
+		return false
+	}
+	digits := func(start, n int) (int, bool) {
+		acc := 0
+		for k := start; k < start+n; k++ {
+			c := text[k]
+			if c < '0' || c > '9' {
+				return 0, false
+			}
+			acc = acc*10 + int(c-'0')
+		}
+		return acc, true
+	}
+	y, okY := digits(0, 4)
+	m, okM := digits(5, 2)
+	d, okD := digits(8, 2)
+	if !okY || !okM || !okD || m < 1 || m > 12 {
+		return false
+	}
+	last := 31
+	switch m {
+	case 2:
+		if (y%4 == 0 && y%100 != 0) || y%400 == 0 {
+			last = 29
+		} else {
+			last = 28
+		}
+	case 4, 6, 9, 11:
+		last = 30
+	}
+	return d >= 1 && d <= last
+}
+
+// decodeChartAnnotationX — an annotation's X ADDRESS (Phase 1491, §4l "The three
+// addressing forms"). Returns the decoded value and, for a Date address, its ISO
+// string so the pair rule below can compare two of them.
+//
+// THE DATE MUST BE A DATE, and this refusal is the twin of ReferenceLine's
+// finite-value narrowing rather than a new posture. A chart's calendar is
+// deliberately TOTAL over CELLS — an unparseable x cell reads as 1970-01-01,
+// because a non-date COLUMN is loud upstream and refusing per-cell would be
+// worse. An annotation has no column to be loud about: the string is authored
+// directly, so nothing upstream can catch it. And because §4l rule 3 has a
+// temporal address enter the axis extent before the ticks are chosen, a typo does
+// not misplace one marker — it drags the domain back to the epoch and rescales
+// the whole picture.
+func decodeChartAnnotationX(w *walkState, raw any, path string) (Value, string) {
+	obj := expectObject(raw, path)
+	s := newSpec(w, obj, path)
+	switch dispatch(obj, path, chartAnnotationXCases, CodeUnknownDUCase) {
+	case "Category":
+		s.req("key", decodeString)
+		return s.buildStrict("Category"), ""
+	default:
+		iso := expectString(requireChartAnnotationField(obj, path, "iso"), path+".iso")
+		if !isCanonicalISODay(iso) {
+			failExpecting(CodeWrongType, path+".iso",
+				"expected a canonical ISO-8601 date (YYYY-MM-DD, optionally followed by a time) naming a real calendar day at "+path+".iso",
+				"a canonical ISO-8601 date — an event marker's date is the address it is drawn at, and an unreadable one would place the marker at 1970-01-01 and drag the axis back with it")
+		}
+		s.req("iso", decodeString)
+		return s.buildStrict("Date"), iso
+	}
+}
+
+func requireChartAnnotationField(obj map[string]any, path, key string) any {
+	raw, ok := obj[key]
+	if !ok {
+		fail(CodeMissingField, path+"."+key, "missing required field '"+key+"'")
+	}
+	return raw
+}
+
+// decodeChartAnnotationRange — a range band's PAIR (Phase 1492, §4l). The case
+// carries the AXIS as well as the pair, so a value axis addressed by category
+// keys is not a document this decoder has to refuse — it is one no encoder can
+// write.
+//
+// TWO REFUSALS, and they are the pair rules the WIRE can decide by itself. A
+// non-finite endpoint is ReferenceLine's narrowing at two slots instead of one,
+// for its reason exactly: §4l rule 3 has both ends enter the value domain, so a
+// NaN takes the nice-domain, every gridline and every mark with it. An UNORDERED
+// pair is refused at the pair's own slot — the defect is the pair's, not either
+// end's — rather than silently swapped.
+//
+// A CATEGORY pair's order is NOT decided here: the order of two band keys is the
+// ROWS' order, a cross-reference rather than a local property of the address.
+func decodeChartAnnotationRange(w *walkState, raw any, path string) Value {
+	obj := expectObject(raw, path)
+	s := newSpec(w, obj, path)
+	switch dispatch(obj, path, chartAnnotationRangeCases, CodeUnknownDUCase) {
+	case "ValueRange":
+		from := chartAnnotationFinite(w, requireChartAnnotationField(obj, path, "from"), path+".from")
+		to := chartAnnotationFinite(w, requireChartAnnotationField(obj, path, "to"), path+".to")
+		if from > to {
+			failExpecting(CodeWrongType, path,
+				"expected an ORDERED pair at "+path,
+				"a range band runs from its lower value to its upper one, and this pair runs backwards; swapping the ends silently would draw a band the author did not describe")
+		}
+		s.req("from", expectNumberField)
+		s.req("to", expectNumberField)
+		return s.buildStrict("ValueRange")
+	default:
+		fromV, fromISO := decodeChartAnnotationX(w, requireChartAnnotationField(obj, path, "from"), path+".from")
+		toV, toISO := decodeChartAnnotationX(w, requireChartAnnotationField(obj, path, "to"), path+".to")
+		// Both dates are already known canonical and calendar-valid (the address
+		// decoder refused anything else), and a canonical YYYY-MM-DD sorts
+		// lexicographically exactly as it sorts chronologically — so no calendar
+		// arithmetic is needed to decide the order at this boundary.
+		if fromISO != "" && toISO != "" && fromISO > toISO {
+			failExpecting(CodeWrongType, path,
+				"expected an ORDERED pair at "+path,
+				"a range band runs from its earlier date to its later one, and this pair runs backwards; swapping the ends silently would draw a band the author did not describe")
+		}
+		s.take("from")
+		s.take("to")
+		s.set("from", fromV)
+		s.set("to", toV)
+		return s.buildStrict("XRange")
+	}
+}
+
+// chartAnnotationFinite reads a float slot and NARROWS §7 at it. §7 admits the
+// quoted "NaN" / "Infinity" / "-Infinity" sentinels at every float slot and
+// expectNumber reads them — the widening is deliberate and stays. But an
+// annotation's value addresses a place on the VALUE AXIS, and a non-finite value
+// names no such place: it would enter the domain computation and put every
+// gridline, tick and mark at a NaN coordinate. The picture is not merely wrong at
+// the annotation, it is wrong everywhere, and nothing downstream can recover it.
+func chartAnnotationFinite(w *walkState, raw any, path string) float64 {
+	v := expectNumber(w, raw, path)
+	f, ok := chartAnnotationFloatOf(v)
+	if !ok || math.IsNaN(f) || math.IsInf(f, 0) {
+		failExpecting(CodeWrongType, path,
+			"expected a FINITE JSON number at "+path,
+			"an annotation's value names a place on the value axis, and NaN / Infinity names none; give the value in the axis's own units, or drop the annotation")
+	}
+	return f
+}
+
+func chartAnnotationFloatOf(v Value) (float64, bool) {
+	switch n := v.(type) {
+	case Float:
+		return float64(n), true
+	case Int:
+		return float64(n), true
+	default:
+		return 0, false
+	}
+}
+
+// decodeChartAnnotation — a chart's data-addressed annotation (Phase 1490, §4l).
+// One closed $type-discriminated union.
+func decodeChartAnnotation(w *walkState, raw any, path string) Value {
+	obj := expectObject(raw, path)
+	s := newSpec(w, obj, path)
+	tag := dispatch(obj, path, chartAnnotationCases, CodeUnknownDUCase)
+	// Every label rides the Phase 1143 text contract — carried, never resolved.
+	s.opt("label", decodeTextSource)
+	switch tag {
+	case "ReferenceLine":
+		chartAnnotationFinite(w, requireChartAnnotationField(obj, path, "value"), path+".value")
+		s.req("value", expectNumberField)
+		return s.buildStrict("ReferenceLine")
+	case "EventMarker":
+		at, _ := decodeChartAnnotationX(w, requireChartAnnotationField(obj, path, "at"), path+".at")
+		s.take("at")
+		s.set("at", at)
+		return s.buildStrict("EventMarker")
+	default:
+		s.req("range", decodeChartAnnotationRange)
+		return s.buildStrict("RangeBand")
+	}
+}
+
+func decodeChartAnnotationArray(w *walkState, raw any, path string) Value {
+	arr := expectArray(raw, path)
+	out := make(Arr, len(arr))
+	for i, item := range arr {
+		out[i] = decodeChartAnnotation(w, item, path+"["+strconv.Itoa(i)+"]")
+	}
+	return out
+}
+
 func decodeTextSourceArray(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
@@ -3368,6 +3573,12 @@ func init() {
 			s.req("xField", decodeString)
 			s.req("yFields", decodeStringArrayField)
 			s.opt("title", decodeTextSource)
+			// Phase 1490 — `annotations` (§4l): the data-addressed attachments —
+			// reference lines, event markers and range bands — as one closed
+			// union. Absent OMITS on the wire, so every pre-1490 document decodes
+			// and re-encodes byte-for-byte as it did. An EMPTY list is a different
+			// document from an absent field and is carried as such.
+			s.opt("annotations", decodeChartAnnotationArray)
 			s.sentinel("onPointClick")
 			return s.build("Chart")
 		},

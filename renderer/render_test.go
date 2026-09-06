@@ -1,6 +1,8 @@
 package renderer
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -193,6 +195,93 @@ func TestChartRequiresPreLoweredPosture(t *testing.T) {
 		if strings.Contains(html, forbidden) {
 			t.Errorf("require-pre-lowered posture violated — found %q:\n%s", forbidden, html)
 		}
+	}
+}
+
+// TestChartAnnotationsDoNotMoveTheRequirePreLoweredPosture is Phase 1493's leg of
+// the Phase 551 posture, against the vocabulary that most invites a host to break
+// it. §4l's annotations are the first chart members whose lowering is stated as a
+// DRAW ORDER — bands behind the grid, lines in front of the series, labels last —
+// so a host tempted to lower in-host has, for the first time, a spec paragraph
+// that reads like an instruction to draw. This test says the posture is unmoved:
+// a raw `Chart` carrying annotations is the same typed passthrough it always was.
+//
+// Two halves, and the second is what makes the first mean something. A raw Chart
+// must refuse (no inline `fuaran-drawing` SVG, no silent drop of the region), AND
+// a PRE-LOWERED `Drawing` carrying the annotation marks must render — otherwise a
+// host that simply could not draw annotations at all would pass the first half.
+func TestChartAnnotationsDoNotMoveTheRequirePreLoweredPosture(t *testing.T) {
+	// A raw Chart with all three annotation members at the SSR boundary.
+	raw := `{"id":"chart-annotated","kind":{"$type":"Chart",` +
+		`"annotations":[{"$type":"ReferenceLine","label":"Target","value":140},` +
+		`{"$type":"EventMarker","at":{"$type":"Category","key":"Q3"},"label":"Repricing"},` +
+		`{"$type":"RangeBand","label":"Freeze","range":{"$type":"XRange","from":{"$type":"Category","key":"Q2"},"to":{"$type":"Category","key":"Q3"}}}],` +
+		`"kind":"Bar","source":{"$type":"Static","value":"<opaque>"},"stacked":false,` +
+		`"title":{"$type":"Literal","text":"Revenue by quarter"},"xField":"quarter","yFields":["revenue"]}}`
+	node := mustDecode(t, raw)
+	html := RenderHTML(node, nil)
+
+	// The typed passthrough is unchanged — a marked, non-empty placeholder.
+	for _, want := range []string{
+		`data-fuaran-ssr-placeholder="Chart"`,
+		`class="fuaran-chart fuaran-chart-ssr-placeholder"`,
+		`hydrates client-side`,
+		`Revenue by quarter`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("annotated chart passthrough missing %q:\n%s", want, html)
+		}
+	}
+
+	// NOT lowered in-host, and specifically not for the annotation marks: no
+	// inline SVG, no Drawing class vocabulary, and no annotation mark identity.
+	// The mark ids are named explicitly because they are the one string that would
+	// appear if a future change lowered the annotations alone.
+	for _, forbidden := range []string{
+		`<svg`,
+		`fuaran-drawing`,
+		`annotation|reference|`,
+		`annotation|event|`,
+		`annotation|band|`,
+	} {
+		if strings.Contains(html, forbidden) {
+			t.Errorf("require-pre-lowered posture violated — found %q:\n%s", forbidden, html)
+		}
+	}
+
+	// The annotations must not leak into the placeholder as text either: a
+	// passthrough that printed the author's labels would be neither the chart nor
+	// an honest placeholder.
+	for _, leaked := range []string{"Target", "Repricing", "Freeze"} {
+		if strings.Contains(html, leaked) {
+			t.Errorf("annotation label leaked into the SSR placeholder: %q\n%s", leaked, html)
+		}
+	}
+
+	// The other half: a PRE-LOWERED Drawing from an annotation golden renders as
+	// real inline SVG on this host, annotation marks and all. Skipped on a
+	// standalone checkout, like every other corpus-reading leg here.
+	corpus := findFixtureCorpus()
+	if corpus == "" {
+		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping the pre-lowered half")
+	}
+	golden, err := os.ReadFile(filepath.Join(corpus, "chart-lowering", "bar-band-x-categories.expected.json"))
+	if err != nil {
+		t.Skipf("annotation golden not found: %v", err)
+	}
+	lowered := RenderHTML(mustDecode(t, strings.TrimSpace(string(golden))), nil)
+	for _, want := range []string{
+		`<svg`,
+		`fuaran-drawing`,
+		`annotation|band|0`,      // the range band, drawn behind everything
+		`annotation|reference|0`, // the reference line, drawn in front of the series
+	} {
+		if !strings.Contains(lowered, want) {
+			t.Errorf("pre-lowered annotation drawing missing %q:\n%s", want, lowered)
+		}
+	}
+	if strings.Contains(lowered, `data-fuaran-ssr-placeholder="Chart"`) {
+		t.Errorf("a pre-lowered Drawing must render, not fall back to the Chart placeholder:\n%s", lowered)
 	}
 }
 
