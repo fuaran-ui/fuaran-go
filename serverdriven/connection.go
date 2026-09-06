@@ -1,6 +1,10 @@
 package serverdriven
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/fuaran-ui/fuaran-go/wire"
+)
 
 // One live connection binds a Session to a Channel. On each inbound event it
 // steps the driver, advances the op sequence, and pushes a Frame when the step
@@ -34,14 +38,15 @@ const DefaultReplayBufferCapacity = 512
 // session's own "not safe for concurrent Step" contract is unchanged — this is
 // what makes it hold.
 type Connection struct {
-	connID    string
-	session   *Session
-	channel   Channel
-	mu        sync.Mutex
-	seq       int
-	buffer    []Frame
-	bufferCap int
-	onReject  func(Reject)
+	connID        string
+	session       *Session
+	channel       Channel
+	mu            sync.Mutex
+	seq           int
+	buffer        []Frame
+	bufferCap     int
+	onReject      func(Reject)
+	projectReject func(Reject) []wire.Obj
 }
 
 // ConnectionOption configures a Connection at construction.
@@ -56,10 +61,32 @@ func WithReplayBufferCapacity(capacity int) ConnectionOption {
 	}
 }
 
-// WithOnReject registers a sink for rejected steps (the always-on audit hook;
-// the structured error frame back to the client is a documented follow-on).
+// WithOnReject registers a sink for rejected steps — the always-on audit hook.
 func WithOnReject(sink func(Reject)) ConnectionOption {
 	return func(c *Connection) { c.onReject = sink }
+}
+
+// WithRejectProjection lets a refusal reach the CLIENT, as an ordinary frame of
+// TreeOps the host projects from the reject.
+//
+// Until now a rejected step pushed nothing at all, so from the browser a
+// refused click and a click that never arrived were the same event: nothing
+// happened. The audit hook told the operator; the person who clicked was told
+// nothing.
+//
+// It is a host-supplied PROJECTION rather than a reject envelope this package
+// invents, deliberately. Showing a refusal is a UI decision — a banner, a
+// toast, a disabled control, a field-level message — and a new client-facing
+// wire shape would have to be specified, versioned and adopted by every client
+// before it could carry any of them. Ops are the vocabulary both ends already
+// speak, so this needs no wire change and no client change.
+//
+// The projected ops are pushed as a normal sequenced frame, so they replay on
+// reconnect like any other. Returning nil pushes nothing — the right answer for
+// a reject the user should not see. The projection runs under the connection
+// lock: keep it pure.
+func WithRejectProjection(project func(Reject) []wire.Obj) ConnectionOption {
+	return func(c *Connection) { c.projectReject = project }
 }
 
 // NewConnection binds a session to a channel and wires the channel's inbound
@@ -106,11 +133,24 @@ func (c *Connection) Handle(ev Event) error {
 		if c.onReject != nil {
 			c.onReject(*reject)
 		}
-		return nil
+		if c.projectReject == nil {
+			return nil
+		}
+		rejectOps := c.projectReject(*reject)
+		if len(rejectOps) == 0 {
+			return nil
+		}
+		return c.pushOps(rejectOps)
 	}
 	if len(opsList) == 0 {
 		return nil // a legitimate no-op — no frame, no seq advance.
 	}
+	return c.pushOps(opsList)
+}
+
+// pushOps advances the sequence, buffers the frame for replay, and pushes it.
+// Callers hold the connection lock.
+func (c *Connection) pushOps(opsList []wire.Obj) error {
 	c.seq++
 	frame := Frame{Seq: c.seq, Ops: opsList}
 	c.bufferFrame(frame)

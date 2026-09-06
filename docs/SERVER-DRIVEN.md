@@ -187,6 +187,27 @@ Wire `serverdriven.WithOnReject(sink)` at construction to audit refusals — it 
 the always-on hook, and a refusal that nobody logs is a refusal nobody can
 diagnose.
 
+`WithRejectProjection(project)` is the other half: it lets a refusal reach the
+**client**, as an ordinary frame of `TreeOp`s you project from the reject. Until
+you wire it, a rejected step pushes nothing, so from the browser a refused click
+and a click that never arrived are the same event — the operator is told, the
+person who clicked is not.
+
+```go
+conn := serverdriven.NewConnection("c1", session, ch,
+	serverdriven.WithOnReject(func(r serverdriven.Reject) { log.Printf("%+v", r) }),
+	serverdriven.WithRejectProjection(func(r serverdriven.Reject) []wire.Obj {
+		return []wire.Obj{ /* set a banner's text, disable a control, ... */ }
+	}))
+```
+
+It is a projection you supply rather than a reject envelope this package
+invents, because showing a refusal is a UI decision — a banner, a toast, a
+field-level message — and a new client-facing wire shape would have to be
+specified, versioned and adopted by every client before it could carry any of
+them. Ops are the vocabulary both ends already speak. Return `nil` for a reject
+the user should not see; the frame is sequenced and replays like any other.
+
 ### What a frame is
 
 ```go

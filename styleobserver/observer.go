@@ -48,6 +48,11 @@ type InMemoryStyleObserver struct {
 	lastFlags   map[string][]StyleFlag
 	subscribers []subscription
 	nextSubID   int
+	// recovered counts subscriber panics this observer has swallowed, so a
+	// subscriber failing on every emission is distinguishable from one that is
+	// simply quiet.
+	recovered         int
+	onSubscriberPanic func(nodeID string, recovered any)
 }
 
 // NewInMemoryStyleObserver constructs an observer with the given options and an
@@ -68,11 +73,34 @@ func (o *InMemoryStyleObserver) toObs(nodeID string, inp StyleInput) StyleObserv
 func (o *InMemoryStyleObserver) emit(nodeID string, obs StyleObservation) {
 	for _, sub := range o.subscribers {
 		func(s Subscriber) {
-			// A throwing subscriber must not poison its siblings.
-			defer func() { _ = recover() }()
+			// A throwing subscriber must not poison its siblings — but it must
+			// not vanish either. `_ = recover()` discarded the panic entirely, so
+			// a subscriber that failed on EVERY emission looked exactly like a
+			// subscriber that was working: no error, no count, no signal at all.
+			// The recovery is still unconditional; what changed is that it leaves
+			// a trace.
+			defer func() {
+				if r := recover(); r != nil {
+					o.recovered++
+					if o.onSubscriberPanic != nil {
+						o.onSubscriberPanic(nodeID, r)
+					}
+				}
+			}()
 			s(nodeID, obs)
 		}(sub.fn)
 	}
+}
+
+// RecoveredPanics is the number of subscriber panics this observer has
+// swallowed. Zero is the only healthy value; a rising count means a subscriber
+// is failing on every emission and nobody would otherwise know.
+func (o *InMemoryStyleObserver) RecoveredPanics() int { return o.recovered }
+
+// OnSubscriberPanic registers a sink for each recovered subscriber panic. The
+// count says something is wrong; this says what.
+func (o *InMemoryStyleObserver) OnSubscriberPanic(sink func(nodeID string, recovered any)) {
+	o.onSubscriberPanic = sink
 }
 
 // RegisterFixture registers or replaces a fixture; fires an initial emission

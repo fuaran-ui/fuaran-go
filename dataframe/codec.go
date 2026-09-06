@@ -354,7 +354,16 @@ func decodeCellValue(col, ty string, v any) (Cell, *ColumnError) {
 	switch ty {
 	case TypeInt:
 		if n, ok := v.(json.Number); ok && isIntToken(n) {
-			i, _ := n.Int64()
+			// Int64 REFUSES rather than clamping. The error it returns is
+			// out-of-range for an integer literal wider than int64 — a real
+			// case, since the wire's integers are arbitrary-precision text and
+			// the discarded error left the cell holding a silently wrong
+			// number that then travelled as data.
+			i, convErr := n.Int64()
+			if convErr != nil {
+				return Cell{}, cerr(TypeMismatch,
+					col+": integer literal "+string(n)+" does not fit an int64 cell")
+			}
 			return CellInt(i), nil
 		}
 	case TypeFloat:
