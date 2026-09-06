@@ -25,8 +25,6 @@
 #
 # ── Root causes, so a line is never just a name ─────────────────────────────
 #
-# (a) `Now.grain` is not modelled by the decoder. The round-trip loses the
-#     member, and the invalid-grain document is accepted.
 # (b) Non-BMP (astral-plane) characters in a JSON object KEY do not survive the
 #     round trip — `𝄞` re-encodes as a replacement character.
 # (c) `encoding/json` is more permissive than the wire format requires: it
@@ -37,9 +35,10 @@
 #     int slot is refused where the corpus accepts it, and an integer beyond
 #     2^53 is not normalised to the boundary value.
 
-# (a) Now.grain
-TestRoundTrip/now-grain
-TestReject/reject-now-grain-invalid
+# (a) Now.grain — CLOSED 2026-09-06. The decoder adopted `grain` on main while
+#     this file was being written; the STALE half of this gate is what reported
+#     it, by name, on the very first merge after the gate landed. Two lines
+#     deleted rather than an eighth added.
 
 # (b) astral-plane object keys
 TestRoundTrip/custom-nonascii-keys
