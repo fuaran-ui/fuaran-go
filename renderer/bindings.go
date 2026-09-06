@@ -187,6 +187,20 @@ func formatNumber(format, value wire.Value) string {
 		return formatDuration(strValue(fmtObj.Fields["unit"]), strValue(fmtObj.Fields["style"]), num)
 	case "RelativeTime":
 		return formatRelativeEnglish(strValue(fmtObj.Fields["unit"]), num)
+	case "Since":
+		// Phase 1533 — `Format.Since` renders the delta between its source
+		// instant and THE HOST'S OWN instant, and this host furnishes none: its
+		// BindingSources is a flat identity-keyed map, and `Now` has no identity
+		// key, so there is nowhere for the instant to live. That is a deliberate
+		// reduction of this renderer's surface (it carries no locale either)
+		// rather than an oversight — the codec in wire/ round-trips `Since`
+		// faithfully, which is the conformance obligation.
+		//
+		// The empty string, NOT the plain number: an epoch integer rendered
+		// where a reader expects "3 hours ago" is a silently wrong answer, and
+		// the empty string is the surface every unresolvable binding already
+		// gets here.
+		return ""
 	default:
 		// None / Date / Custom: the plain numeric form.
 		return plainNumber(num)
