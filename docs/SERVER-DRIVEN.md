@@ -250,8 +250,33 @@ companion POST endpoint you wire to `SSEChannel.Inbound`.
 
 **WebSocket** (`ws.go`) — a hand-written RFC 6455 handshake and frame codec, no
 third-party module. `ServeWebSocket(w, r)` upgrades and returns the channel; run
-`Listen()` in its own goroutine for the inbound read loop (it answers pings with
-pongs itself).
+`ListenAndRecover()` in its own goroutine for the inbound read loop (it answers
+pings with pongs itself).
+
+### The read loop must run under a recover, and does not by itself
+
+`net/http` recovers a panic in the goroutine it started for a request. The read
+loop runs in one **you** started, so a panic there — in the framing, or in your
+own inbound handler, which this package cannot vouch for — takes the *process*
+down rather than the connection, ending every other connection the server holds.
+`ListenAndRecover()` is `Listen()` under that boundary and returns the recovered
+value as an ordinary error; use it unless you have a boundary of your own.
+
+### Inbound frames are capped before they are allocated
+
+A frame header declares its own payload length, so a peer can claim a size
+before sending a byte of it. `MaxFrameBytes` (1 MiB) bounds the declared length
+**before** it is narrowed to `int` and before anything is allocated, which is the
+only ordering that helps: the declared value is an unauthenticated `uint64`, and
+`0xFFFFFFFFFFFFFFFF` narrows to `-1`. A breach is answered with a close frame
+carrying RFC 6455 status **1009** and returned as a `*ProtocolError`; unmasked
+client frames and control frames over 125 bytes are refused the same way with
+**1002**. `NewWSChannelWithLimit` raises the ceiling for a host whose client
+genuinely sends larger messages — a non-positive value falls back to the default
+rather than meaning "unbounded".
+
+This is a *transport* cap and is not the §21 wire limits, which bound the
+structure of a document already read. Both apply.
 
 ### The WebSocket origin policy is the one thing to read before shipping
 

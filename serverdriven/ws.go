@@ -3,6 +3,7 @@ package serverdriven
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -20,15 +21,29 @@ import (
 // a mutex (the read loop and Push may race). The inbound read loop is started
 // by ServeWebSocket / Listen.
 type WSChannel struct {
-	rw      io.ReadWriter
-	writeMu sync.Mutex
-	handler func(Event)
-	closed  bool
+	rw       io.ReadWriter
+	writeMu  sync.Mutex
+	handler  func(Event)
+	closed   bool
+	maxFrame int
 }
 
-// NewWSChannel builds a WebSocket channel over an already-upgraded byte stream.
+// NewWSChannel builds a WebSocket channel over an already-upgraded byte stream,
+// bounding inbound frames at MaxFrameBytes.
 func NewWSChannel(rw io.ReadWriter) *WSChannel {
-	return &WSChannel{rw: rw}
+	return &WSChannel{rw: rw, maxFrame: MaxFrameBytes}
+}
+
+// NewWSChannelWithLimit is NewWSChannel with an explicit inbound frame cap, for
+// a host whose client genuinely sends larger messages. A non-positive limit
+// falls back to MaxFrameBytes rather than meaning "unbounded": an unbounded
+// reader is the defect this cap exists to close, and a zero value arriving from
+// an uninitialised config must not silently reinstate it.
+func NewWSChannelWithLimit(rw io.ReadWriter, maxFrameBytes int) *WSChannel {
+	if maxFrameBytes <= 0 {
+		maxFrameBytes = MaxFrameBytes
+	}
+	return &WSChannel{rw: rw, maxFrame: maxFrameBytes}
 }
 
 // Push writes the frame's canonical JSON body as one WebSocket text frame.
@@ -61,13 +76,32 @@ func (c *WSChannel) Close() error {
 // Event and deliver it to the registered handler; reply to pings with pongs.
 // It returns when the peer closes or the stream errors. Run it in its own
 // goroutine.
+//
+// A frame that breaches the protocol — oversized, unmasked, an outsized control
+// payload — is answered with a close frame carrying the RFC 6455 status and
+// then returned as a *ProtocolError. The connection is finished at that point;
+// the loop does not attempt to resynchronise on a stream whose framing it can
+// no longer trust.
+//
+// MUST RUN UNDER A RECOVER. This loop runs in a goroutine of the host's
+// choosing, and net/http recovers panics only in the goroutine it started for
+// a request — not in one the handler spawned. A panic here therefore takes the
+// PROCESS down, not the connection. The registered inbound handler is host
+// code and this package cannot vouch for it, so use ListenAndRecover unless
+// the host has its own recover boundary around the call.
 func (c *WSChannel) Listen() error {
 	reader := bufio.NewReader(c.rw)
 	for {
-		opcode, payload, err := readFrame(reader)
+		opcode, payload, err := readFrame(reader, c.frameLimit(), true)
 		if err != nil {
 			if errors.Is(err, errClose) || errors.Is(err, io.EOF) {
 				return nil
+			}
+			var pe *ProtocolError
+			if errors.As(err, &pe) {
+				c.writeMu.Lock()
+				_ = writeCloseFrame(c.rw, pe.CloseCode, pe.Reason)
+				c.writeMu.Unlock()
 			}
 			return err
 		}
@@ -83,6 +117,40 @@ func (c *WSChannel) Listen() error {
 			c.writeMu.Unlock()
 		}
 	}
+}
+
+// frameLimit is the channel's inbound cap, defaulting a zero-valued struct
+// (one built by literal rather than by the constructors) to MaxFrameBytes.
+func (c *WSChannel) frameLimit() int {
+	if c.maxFrame <= 0 {
+		return MaxFrameBytes
+	}
+	return c.maxFrame
+}
+
+// ListenAndRecover runs Listen under a recover boundary, converting a panic
+// from the read loop or from the host's inbound handler into an ordinary
+// error return.
+//
+// This is the wrapper the "MUST run under a recover" obligation above names,
+// supplied rather than merely documented because the failure it prevents is
+// total: a panic in a host-spawned goroutine is not recovered by net/http, so
+// one malformed connection would otherwise end the process serving every other
+// one. Use it unless the host has its own boundary.
+//
+// The recovered value is reported, not swallowed: the returned error names the
+// panic so the host can log it and, for a runtime error, still see what broke.
+func (c *WSChannel) ListenAndRecover() (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if recovered, ok := r.(error); ok {
+				err = fmt.Errorf("serverdriven: websocket read loop panicked: %w", recovered)
+				return
+			}
+			err = fmt.Errorf("serverdriven: websocket read loop panicked: %v", r)
+		}
+	}()
+	return c.Listen()
 }
 
 // ErrOriginNotAllowed is returned when the handshake's Origin fails the

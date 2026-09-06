@@ -55,7 +55,7 @@ func frameBodiesWS(t *testing.T, raw []byte) []string {
 	var out []string
 	r := bufio.NewReader(bytes.NewReader(raw))
 	for {
-		opcode, payload, err := readFrame(r)
+		opcode, payload, err := readFrame(r, MaxFrameBytes, false)
 		if err != nil {
 			break // EOF at the end of the buffer
 		}
@@ -126,7 +126,11 @@ func TestWSInboundDrivesConnection(t *testing.T) {
 	// The read stream carries masked client frames the browser would send.
 	var stream wsReadStream
 	stream.feed(maskedTextFrame([]byte(`{"connId":"c1","nodeId":"inc","event":"click","lastSeq":0}`)))
-	stream.feedRaw([]byte{0x88, 0x00}) // a close frame ends the read loop
+	// A masked, zero-length close frame ends the read loop. Masked because a
+	// browser masks EVERY client frame, close included (RFC 6455 §5.1) — the
+	// reader now holds it to that, so an unmasked fixture would be modelling a
+	// client no browser sends.
+	stream.feedRaw([]byte{0x88, 0x80, 0x00, 0x00, 0x00, 0x00})
 
 	ch := NewWSChannel(&stream)
 	session := newCounterSession(t)

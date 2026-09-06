@@ -65,7 +65,7 @@ func TestWSTextFrameRoundTrip(t *testing.T) {
 	if err := writeTextFrame(&buf, payload); err != nil {
 		t.Fatalf("writeTextFrame: %v", err)
 	}
-	opcode, got, err := readFrame(&buf)
+	opcode, got, err := readFrame(&buf, MaxFrameBytes, false)
 	if err != nil {
 		t.Fatalf("readFrame: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestWSReadUnmasksClientFrame(t *testing.T) {
 	for i, b := range payload {
 		frame = append(frame, b^mask[i&3])
 	}
-	opcode, got, err := readFrame(bytes.NewReader(frame))
+	opcode, got, err := readFrame(bytes.NewReader(frame), MaxFrameBytes, true)
 	if err != nil {
 		t.Fatalf("readFrame: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestWSReadUnmasksClientFrame(t *testing.T) {
 }
 
 func TestWSReadCloseFrame(t *testing.T) {
-	_, _, err := readFrame(bytes.NewReader([]byte{0x88, 0x00})) // FIN+close, no payload
+	_, _, err := readFrame(bytes.NewReader([]byte{0x88, 0x00}), MaxFrameBytes, false) // FIN+close, no payload
 	if err != errClose {
 		t.Errorf("close frame err = %v, want errClose", err)
 	}
