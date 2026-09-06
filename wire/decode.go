@@ -631,6 +631,13 @@ var (
 	// answer to an unknown token is to say which of the two was meant, not to
 	// widen the enum. `Modal` is the identity and omits at it.
 	modalityCases = newCaseSet("Modal", "Popover")
+	// Phase 1536 — which browsing context an `Action.Navigate` lands in. A bare
+	// enum (§3.5), omitted at `Self`. Two cases and NO lenient spelling: HTML's
+	// `_self` / `_blank` / `_parent` / `_top` are not accepted as aliases, because
+	// two of them are frame-busting gestures a hosted tree must not be able to ask
+	// for and accepting the two harmless ones would teach an emitter that the HTML
+	// vocabulary is the one in force here.
+	navigateTargetCases = newCaseSet("Self", "Blank")
 	// Phase 1116 — §3.6.10's `CaptureSource`, a closed pair. `Screen` is
 	// deliberately absent: the HTML capture attribute cannot ask for a display
 	// at all, and a screen capture is a standing grant reaching every window the
@@ -1587,8 +1594,25 @@ func decodeAction(w *walkState, raw any, path string) Value {
 		return Obj{Tag: tag, Fields: map[string]Value{"channel": Str(channel), "payload": payload}}
 	case "Navigate":
 		// Field aliases: href / url / to — the HTML / router prior.
-		route := expectString(requireAliased(obj, "route", path, "href", "url", "to"), path+".route")
-		return Obj{Tag: tag, Fields: map[string]Value{"route": Str(route)}}
+		//
+		// Phase 1536 — the route is a `TextSource`, not a bare string, so a tree
+		// can name a destination it computes from what the reader is looking at.
+		// The bare JSON string IS `Literal`'s canonical form, so every document
+		// written before the widening decodes exactly as it did — including one
+		// using an alias, since the aliases are resolved before the value is
+		// decoded and there is still exactly one canonical field a router can be
+		// reached through.
+		//
+		// `target` is omitted at `Self`, so absence is the pre-1536 behaviour.
+		route := decodeTextSource(w, requireAliased(obj, "route", path, "href", "url", "to"), path+".route")
+		fields := map[string]Value{"route": route}
+		if rawTarget, ok := obj["target"]; ok {
+			target := enumStr(rawTarget, path+".target", navigateTargetCases, "target", noAliases)
+			if target != "Self" {
+				fields["target"] = Str(target)
+			}
+		}
+		return Obj{Tag: tag, Fields: fields}
 	case "SetState":
 		// Phase 818 — `value` (a literal JSON value, written verbatim) XOR
 		// `valueFrom` (a Binding evaluated at dispatch time inside the
