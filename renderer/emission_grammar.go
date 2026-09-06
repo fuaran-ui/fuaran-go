@@ -108,9 +108,38 @@ func sanitizeCSSValueForSlot(slot string, value string) (string, []attr) {
 	return "", []attr{{cssRefusalAttribute, slot}}
 }
 
-var colourKeywords = map[string]bool{
-	"none": true, "transparent": true, "currentcolor": true,
-	"inherit": true, "initial": true, "unset": true,
+// isCSSIdent reports whether a value is a bare CSS IDENT — an ASCII letter or
+// `-` followed by ASCII letters, digits, `-` and `_`.
+//
+// This is what admits the 148 named colours (red, steelblue, rebeccapurple),
+// the universal keywords (none, transparent, currentColor), the inheritance
+// keywords, the SVG2 paint keywords (context-fill, context-stroke) and every
+// colour keyword CSS has not shipped yet — as ONE rule rather than as a list
+// somebody has to keep.
+//
+// Enumerating the keywords instead is wrong, because the two ways of being
+// wrong here are not symmetric. A missing keyword produces no error an author
+// can see: the paint is replaced by "none", so a document that was correct
+// yesterday silently renders a differently-coloured picture. Meanwhile an ident
+// buys an attacker nothing at all — it cannot fetch, cannot leave its
+// declaration and cannot name a paint server, because every one of those needs
+// punctuation this test refuses.
+func isCSSIdent(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i, ch := range value {
+		if i == 0 {
+			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '-') {
+				return false
+			}
+			continue
+		}
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 var colourFunctions = []string{
@@ -146,10 +175,10 @@ func IsColourValue(value string) bool {
 		}
 		return true
 	}
-	lower := strings.ToLower(t)
-	if colourKeywords[lower] {
+	if isCSSIdent(t) {
 		return true
 	}
+	lower := strings.ToLower(t)
 	for _, fn := range colourFunctions {
 		if strings.HasPrefix(lower, fn) && strings.HasSuffix(lower, ")") && IsSafeCSSValue(t) {
 			return true
