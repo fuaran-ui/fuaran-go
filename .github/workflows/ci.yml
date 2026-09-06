@@ -49,7 +49,7 @@ jobs:
       run:
         working-directory: fuaran-go
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: fuaran-go
 
@@ -58,7 +58,7 @@ jobs:
       # point of giving it a single home. Pinning here would let this host drift
       # from the spec without anything going red.
       - name: Check out the wire-format conformance corpus
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: fuaran-ui/fuaran-ui-specification
           path: wire-format-fixtures
