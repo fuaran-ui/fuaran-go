@@ -207,6 +207,12 @@ var fuzzHostileTokens = []string{
 	"1e999", "-1e999", "1E-999", "NaN", "Infinity", "-Infinity",
 	"0x10", "00", "01", "1.2.3", "+1", ".5", "5.",
 	"\\u0000", "\\uD800", "\\uFFFF", "\\x41", "\\", "\\\"",
+	// §20.2 row 6, all four shapes: the two lone halves; both halves present but
+	// SEPARATED, which a host counting surrogates rather than pairing them
+	// adjacently reassembles into a scalar the author never wrote; and a
+	// well-formed pair, which must still be ACCEPTED — an alphabet carrying only
+	// the refusals is satisfied by a decoder that refuses every escape.
+	"\\uDC00", "\\uD800x\\uDC00", "\\uD800\\uDC00",
 	"\"$type\":\"\"", "\"$type\":null", "\"id\":\"\"", "\"id\":null", "\"id\":[]",
 	"\"kind\":\"Heading\"", "\"children\":\"x\"",
 	",", ":", "[", "]", "{", "}", "\"", "'", "/*", "*/", "//",

@@ -1,6 +1,10 @@
 package wire
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+	"unicode/utf8"
+)
 
 // itoa keeps the limit messages readable without pulling fmt into this file.
 func itoa(n int) string { return strconv.Itoa(n) }
@@ -66,7 +70,13 @@ const (
 	// carries a node, a spec, or a rule-12 payload.
 	MaxJSONDepth = 256
 
-	// MaxStringLength bounds a single decoded JSON string, in characters.
+	// MaxStringLength bounds a single decoded JSON string, in Unicode CODE
+	// POINTS (§21.6). Not in bytes, which is what Go's len() gives and what this
+	// host counted until §21.6 pinned the unit: a 600 000-character CJK string is
+	// 600 000 code points and 1 800 000 UTF-8 bytes, so a byte-counting host
+	// refuses a document three other hosts accept. The unit has to be a property
+	// of the text rather than of a host's string representation, and bytes make
+	// the allowance depend on the alphabet the author writes in.
 	MaxStringLength = 1048576
 
 	// MaxArrayLength bounds a single JSON array's elements and a single JSON
@@ -203,12 +213,12 @@ func checkShape(root any) {
 
 		switch v := f.value.(type) {
 		case string:
-			if len(v) > MaxStringLength {
+			if utf8.RuneCountInString(v) > MaxStringLength {
 				failExpecting(
 					CodeLimitExceeded,
 					"$",
 					"a string is longer than the wire limit MaxStringLength = "+itoa(MaxStringLength),
-					"strings of no more than "+itoa(MaxStringLength)+" characters",
+					"strings of no more than "+itoa(MaxStringLength)+" code points",
 				)
 			}
 		case map[string]any:
@@ -222,12 +232,12 @@ func checkShape(root any) {
 			}
 			for key, item := range v {
 				// Keys are strings on the wire and are bounded like any other.
-				if len(key) > MaxStringLength {
+				if utf8.RuneCountInString(key) > MaxStringLength {
 					failExpecting(
 						CodeLimitExceeded,
 						"$",
 						"a key is longer than the wire limit MaxStringLength = "+itoa(MaxStringLength),
-						"keys of no more than "+itoa(MaxStringLength)+" characters",
+						"keys of no more than "+itoa(MaxStringLength)+" code points",
 					)
 				}
 				stack = append(stack, frame{item, f.depth + 1})
@@ -262,6 +272,21 @@ func checkShape(root any) {
 // It is also the only bound on this host that is genuinely "on the way down" in
 // rule 4's sense: nothing has been allocated when it fires.
 //
+// The SURROGATE rule (§20.2 row 6) is enforced here for that reason and one
+// more. encoding/json lowers an unpaired \uD800-\uDBFF or \uDC00-\uDFFF escape
+// to U+FFFD — silently, with no error anywhere — so the same bytes meant one
+// thing to this host and another to a host that kept the code unit. That is one
+// of the two rows that change what a document MEANS rather than whether it is
+// accepted, which is why it cannot be left to the parser's discretion. And it
+// cannot be checked afterwards either: once the string is assembled, a
+// well-formed pair and two lone halves are indistinguishable, and on this host
+// both have already become U+FFFD. So it is checked on the escape TEXT, where a
+// high half must be followed IMMEDIATELY by a low half.
+//
+// A raw (unescaped) surrogate is refused too. It cannot occur in valid UTF-8,
+// but a Go string is a byte sequence, so the WTF-8 encoding of one — ED A0..BF —
+// would otherwise ride through this host as opaque bytes.
+//
 // String-aware, because a brace inside a string literal is not nesting. Escapes
 // are skipped so a `\"` inside a string does not read as the closing quote.
 func checkTextDepth(text string) {
@@ -276,9 +301,32 @@ func checkTextDepth(text string) {
 			case escaped:
 				escaped = false
 			case c == '\\':
+				if isUnicodeEscape(text, i) {
+					code := hexQuad(text, i+2)
+					switch {
+					case code >= 0xD800 && code <= 0xDBFF:
+						if !isLowSurrogateEscapeAt(text, i+6) {
+							failUnpairedSurrogate("HIGH", code,
+								`a \uD800-\uDBFF escape must be followed immediately by a \uDC00-\uDFFF escape`)
+						}
+						i += 11 // the whole pair, minus the loop's own increment
+						continue
+					case code >= 0xDC00 && code <= 0xDFFF:
+						// A low half is only ever consumed above, as the second
+						// element of a pair — reaching it here means it is alone.
+						failUnpairedSurrogate("LOW", code,
+							`a \uDC00-\uDFFF escape must be preceded immediately by a \uD800-\uDBFF escape`)
+					}
+					i += 5
+					continue
+				}
 				escaped = true
 			case c == '"':
 				inString = false
+			case c == 0xED && i+2 < len(text) && text[i+1] >= 0xA0 && text[i+1] <= 0xBF:
+				failUnpairedSurrogate("RAW",
+					rune(0xD000|(int(text[i+1]&0x3F)<<6)|int(text[i+2]&0x3F)),
+					"a surrogate code unit cannot appear in a UTF-8 document")
 			}
 			continue
 		}
@@ -299,4 +347,61 @@ func checkTextDepth(text string) {
 			depth--
 		}
 	}
+}
+
+// isUnicodeEscape reports whether text[i] begins a well-formed \uXXXX escape.
+// A malformed one is left to encoding/json, which is the authority on syntax.
+func isUnicodeEscape(text string, i int) bool {
+	if i+5 >= len(text) || text[i+1] != 'u' {
+		return false
+	}
+	for j := i + 2; j < i+6; j++ {
+		if !isHexDigit(text[j]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// hexQuad reads the four hex digits at text[i:i+4]. Only called once
+// isUnicodeEscape has confirmed they are there.
+func hexQuad(text string, i int) rune {
+	var v rune
+	for j := i; j < i+4; j++ {
+		c := text[j]
+		switch {
+		case c >= '0' && c <= '9':
+			v = v<<4 | rune(c-'0')
+		case c >= 'a' && c <= 'f':
+			v = v<<4 | rune(c-'a'+10)
+		default:
+			v = v<<4 | rune(c-'A'+10)
+		}
+	}
+	return v
+}
+
+// isLowSurrogateEscapeAt reports whether a \uDC00-\uDFFF escape begins at
+// text[i] — the ONLY position at which a high half's partner may sit, since
+// "immediately" is what tells a pair from two halves that happen to co-occur.
+func isLowSurrogateEscapeAt(text string, i int) bool {
+	if i >= len(text) || text[i] != '\\' || !isUnicodeEscape(text, i) {
+		return false
+	}
+	code := hexQuad(text, i+2)
+	return code >= 0xDC00 && code <= 0xDFFF
+}
+
+func failUnpairedSurrogate(half string, code rune, why string) {
+	failExpecting(
+		CodeInvalidJSON,
+		"$",
+		"an unpaired "+half+" surrogate U+"+strings.ToUpper(strconv.FormatInt(int64(code), 16))+
+			" (WIRE_FORMAT.md §20.2 row 6): "+why,
+		"every surrogate half paired, so the document names Unicode scalar values only",
+	)
 }
