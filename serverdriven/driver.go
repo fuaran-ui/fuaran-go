@@ -1,6 +1,8 @@
 package serverdriven
 
 import (
+	"strings"
+
 	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
@@ -26,6 +28,13 @@ const (
 	// ReasonDispatchDenied — the host handler refused the event, or produced
 	// TreeOps that do not apply to the current tree (default-deny by shape).
 	ReasonDispatchDenied RejectReason = "DispatchDenied"
+	// ReasonCapabilityDenied — a driven op was refused by the capability gate
+	// (it introduced a Mount declaring capabilities the host has not granted).
+	ReasonCapabilityDenied RejectReason = "CapabilityDenied"
+	// ReasonHandlerPanicked — the host handler panicked. Recovered at this
+	// boundary and reported as a refusal: the connection survives, the tree is
+	// untouched, and the failure is named rather than taking the process.
+	ReasonHandlerPanicked RejectReason = "HandlerPanicked"
 )
 
 // Reject is a structured refusal: a reason plus a human/AI-readable detail.
@@ -33,6 +42,9 @@ type Reject struct {
 	Reason  RejectReason
 	NodeID  string
 	Message string
+	// MissingCapabilities names the ungranted ids for a
+	// ReasonCapabilityDenied reject; empty for every other reason.
+	MissingCapabilities []string
 }
 
 // Handler is the host's per-event decision function: given the current tree
@@ -73,12 +85,34 @@ func legitimateEvents(kind string) map[string]bool {
 type Session struct {
 	tree    wire.Node
 	handler Handler
+	gate    *CapabilityGate
+	onPanic func(nodeID string, recovered any)
 }
 
 // NewSession builds a session over an initial tree and the host's event
-// handler.
+// handler. No capability gate is applied until WithCapabilityGate is called —
+// see the gate.go header for why this host opts in rather than denying by
+// default.
 func NewSession(tree wire.Node, handler Handler) *Session {
 	return &Session{tree: tree, handler: handler}
+}
+
+// WithCapabilityGate turns on the authority gate: every op the handler produces
+// is vetted before it can touch the tree, and one introducing a Mount whose
+// declared capabilities are not granted is refused as CapabilityDenied.
+// Builder-style — call it at construction.
+func (s *Session) WithCapabilityGate(gate CapabilityGate) *Session {
+	s.gate = &gate
+	return s
+}
+
+// WithOnHandlerPanic registers a sink for a recovered handler panic. The reject
+// already names it; this is for the host that wants the recovered value and a
+// stack in its own logs, which the reject deliberately does not carry (a panic
+// message can hold anything, and it goes to a client).
+func (s *Session) WithOnHandlerPanic(sink func(nodeID string, recovered any)) *Session {
+	s.onPanic = sink
+	return s
 }
 
 // Tree is the current server-held tree.
@@ -88,22 +122,48 @@ func (s *Session) Tree() wire.Node { return s.tree }
 // handler for the ops, apply each op to advance the server tree, and return
 // the applied ops (the frame content). A refused event returns a non-nil
 // *Reject and leaves the tree untouched. An empty op list is a legitimate
-// no-op (the caller pushes no frame). Never panics.
+// no-op (the caller pushes no frame).
+//
+// NEVER PANICS, and that is now true rather than merely written down. The
+// handler is host code this package cannot vouch for, and a panic from it used
+// to propagate — on the WebSocket transport, straight out of a goroutine
+// net/http does not recover, ending the process. It is recovered here, at the
+// boundary that knows which event caused it, and reported as a
+// HandlerPanicked reject: the connection survives, the tree is untouched.
 func (s *Session) Step(ev Event) ([]wire.Obj, *Reject) {
 	node, found := findNode(s.tree, ev.NodeID)
 	if !found {
-		return nil, &Reject{ReasonUnknownNode, ev.NodeID,
-			"unknown node '" + ev.NodeID + "' (stale or forged id)"}
+		return nil, &Reject{Reason: ReasonUnknownNode, NodeID: ev.NodeID,
+			Message: "unknown node '" + ev.NodeID + "' (stale or forged id)"}
 	}
 	if !legitimateEvents(node.Kind.Tag)[ev.Event] {
-		return nil, &Reject{ReasonIllegitimateEvent, ev.NodeID,
-			"event '" + ev.Event + "' is not legitimate for a " + node.Kind.Tag}
+		return nil, &Reject{Reason: ReasonIllegitimateEvent, NodeID: ev.NodeID,
+			Message: "event '" + ev.Event + "' is not legitimate for a " + node.Kind.Tag}
 	}
 
-	opsList, err := s.handler(s.tree, ev)
+	opsList, err, panicked := s.runHandler(ev)
+	if panicked != nil {
+		return nil, panicked
+	}
 	if err != nil {
-		return nil, &Reject{ReasonDispatchDenied, ev.NodeID,
-			"dispatch denied for node '" + ev.NodeID + "': " + err.Error()}
+		return nil, &Reject{Reason: ReasonDispatchDenied, NodeID: ev.NodeID,
+			Message: "dispatch denied for node '" + ev.NodeID + "': " + err.Error()}
+	}
+
+	// Authority gate — every driven op is vetted before it can touch the tree.
+	// A denied op names the ungranted capabilities, so the host learns which
+	// grant is missing rather than only that something was refused.
+	if s.gate != nil {
+		for _, op := range opsList {
+			if missing := s.gate.opMissingCapabilities(op); len(missing) > 0 {
+				return nil, &Reject{
+					Reason:              ReasonCapabilityDenied,
+					NodeID:              ev.NodeID,
+					Message:             "driven op refused by the capability gate; ungranted: " + strings.Join(missing, ", "),
+					MissingCapabilities: missing,
+				}
+			}
+		}
 	}
 
 	// Apply each op to advance the authoritative tree; an op the handler
@@ -113,8 +173,8 @@ func (s *Session) Step(ev Event) ([]wire.Obj, *Reject) {
 	for _, op := range opsList {
 		applied, applyErr := ops.Apply(op, next)
 		if applyErr != nil {
-			return nil, &Reject{ReasonDispatchDenied, ev.NodeID,
-				"handler produced an inapplicable op: " + applyErr.Error()}
+			return nil, &Reject{Reason: ReasonDispatchDenied, NodeID: ev.NodeID,
+				Message: "handler produced an inapplicable op: " + applyErr.Error()}
 		}
 		next = applied
 	}
@@ -193,4 +253,29 @@ func asNode(value wire.Value) (wire.Node, bool) {
 		return wire.Node{ID: string(id), Kind: kind, Extras: extras}, true
 	}
 	return wire.Node{}, false
+}
+
+// runHandler calls the host handler under a recover boundary.
+//
+// The recovered value is NOT put in the reject message. A panic string can
+// carry anything the handler happened to be holding — a query, a token, a file
+// path — and a reject travels to the client. The host gets the value through
+// WithOnHandlerPanic, where it belongs; the client gets the fact.
+func (s *Session) runHandler(ev Event) (opsList []wire.Obj, err error, panicked *Reject) {
+	defer func() {
+		if r := recover(); r != nil {
+			if s.onPanic != nil {
+				s.onPanic(ev.NodeID, r)
+			}
+			opsList = nil
+			err = nil
+			panicked = &Reject{
+				Reason:  ReasonHandlerPanicked,
+				NodeID:  ev.NodeID,
+				Message: "the host handler panicked while handling '" + ev.Event + "' on node '" + ev.NodeID + "'",
+			}
+		}
+	}()
+	opsList, err = s.handler(s.tree, ev)
+	return opsList, err, nil
 }

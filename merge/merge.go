@@ -44,6 +44,11 @@ var facetExtras = map[string]bool{"style": true, "state": true, "accessibility":
 const (
 	classConcurrentEdit      = "ConcurrentEdit"
 	classReorderVsStructural = "ReorderVsStructural"
+	// classUnencodableFacet — a facet whose canonical bytes could not be
+	// produced, so the branches cannot be compared at all. Always blocking:
+	// primacy resolves a DISAGREEMENT, and this is a failure to establish
+	// whether there is one.
+	classUnencodableFacet = "UnencodableFacet"
 
 	// Every choice a refusal offers names a POPULATED slot of that refusal.
 	// choiceKeepPrimary / choiceKeepSecondary name the precedence view, which is
@@ -247,23 +252,53 @@ func mkNode(src wire.Node, kind wire.Obj, style, state, acc wire.Value) wire.Nod
 	return wire.Node{ID: src.ID, Kind: kind, Extras: extras}
 }
 
-func mustEncode(v wire.Value) string {
-	s, _ := wire.EncodeValue(v)
-	return s
+// encodeFacet canonical-encodes one facet projection, REPORTING failure.
+//
+// It used to swallow the error and return "", which made every unencodable
+// facet compare equal to every other one — so a merge whose two branches could
+// not be encoded at all concluded that they agreed, and returned one of them.
+// The one case where the comparison is meaningless is exactly the case that
+// produced the strongest possible verdict.
+func encodeFacet(v wire.Value) (string, error) {
+	return wire.EncodeValue(v)
 }
 
 // ── facet-isolation canonical probes (closure-safe bytes) ───────────────────
 
-func kindCanonical(n wire.Node) string {
-	return mustEncode(mkNode(n, childlessKind(n.Kind), nil, nil, nil))
+func kindCanonical(n wire.Node) (string, error) {
+	return encodeFacet(mkNode(n, childlessKind(n.Kind), nil, nil, nil))
 }
 
-func stateCanonical(shell wire.Obj, n wire.Node) string {
-	return mustEncode(mkNode(n, shell, nil, n.Extras["state"], nil))
+func stateCanonical(shell wire.Obj, n wire.Node) (string, error) {
+	return encodeFacet(mkNode(n, shell, nil, n.Extras["state"], nil))
 }
 
-func accessibilityCanonical(shell wire.Obj, n wire.Node) string {
-	return mustEncode(mkNode(n, shell, nil, nil, n.Extras["accessibility"]))
+func accessibilityCanonical(shell wire.Obj, n wire.Node) (string, error) {
+	return encodeFacet(mkNode(n, shell, nil, nil, n.Extras["accessibility"]))
+}
+
+// facetTriple encodes one facet across base / a / b, returning the first error.
+func facetTriple(baseC, aC, bC string, errs ...error) (string, string, string, error) {
+	for _, err := range errs {
+		if err != nil {
+			return baseC, aC, bC, err
+		}
+	}
+	return baseC, aC, bC, nil
+}
+
+// recordUnencodableFacet refuses a facet whose canonical bytes could not be
+// produced. It is a CONFLICT and not an agreement: an encode failure means the
+// merge cannot tell what the two branches hold, and "cannot tell" is the one
+// thing that must never resolve to "the same".
+func recordUnencodableFacet(conflicts *[]Conflict, res resolution, nodeID, facet string, err error) {
+	detail := "facet could not be canonically encoded: " + err.Error()
+	*conflicts = append(*conflicts, Conflict{
+		NodeID: nodeID, Facet: facet, ConflictClass: classUnencodableFacet,
+		A:            &Side{Value: detail, Tag: res.aTag},
+		B:            &Side{Value: detail, Tag: res.bTag},
+		SecondaryTag: res.secondaryTag, PrimacyHeld: false, Choices: res.choices,
+	})
 }
 
 func styleField(n wire.Node, name string) *string {
@@ -467,7 +502,15 @@ func merge3(conflicts *[]Conflict, res resolution, base wire.Node, aOpt, bOpt *w
 	shell := childlessKind(base.Kind)
 
 	// kind facet
-	kindPick := pickCanonical(conflicts, res, nodeID, "kind", kindCanonical(base), kindCanonical(a), kindCanonical(b))
+	kindBaseC, kindBaseErr := kindCanonical(base)
+	kindAC, kindAErr := kindCanonical(a)
+	kindBC, kindBErr := kindCanonical(b)
+	kindPick := 0
+	if bC, aC, cC, err := facetTriple(kindBaseC, kindAC, kindBC, kindBaseErr, kindAErr, kindBErr); err != nil {
+		recordUnencodableFacet(conflicts, res, nodeID, "kind", err)
+	} else {
+		kindPick = pickCanonical(conflicts, res, nodeID, "kind", bC, aC, cC)
+	}
 	kindSource := base
 	if kindPick == 1 {
 		kindSource = a
@@ -479,13 +522,27 @@ func merge3(conflicts *[]Conflict, res resolution, base wire.Node, aOpt, bOpt *w
 	mergedStyle := mergeStyle(conflicts, res, nodeID, base, a, b)
 
 	// state facet
-	statePick := pickCanonical(conflicts, res, nodeID, "state",
-		stateCanonical(shell, base), stateCanonical(shell, a), stateCanonical(shell, b))
+	stBaseC, stBaseErr := stateCanonical(shell, base)
+	stAC, stAErr := stateCanonical(shell, a)
+	stBC, stBErr := stateCanonical(shell, b)
+	statePick := 0
+	if bC, aC, cC, err := facetTriple(stBaseC, stAC, stBC, stBaseErr, stAErr, stBErr); err != nil {
+		recordUnencodableFacet(conflicts, res, nodeID, "state", err)
+	} else {
+		statePick = pickCanonical(conflicts, res, nodeID, "state", bC, aC, cC)
+	}
 	mergedState := pickExtra(base, a, b, statePick, "state")
 
 	// accessibility facet
-	accPick := pickCanonical(conflicts, res, nodeID, "accessibility",
-		accessibilityCanonical(shell, base), accessibilityCanonical(shell, a), accessibilityCanonical(shell, b))
+	acBaseC, acBaseErr := accessibilityCanonical(shell, base)
+	acAC, acAErr := accessibilityCanonical(shell, a)
+	acBC, acBErr := accessibilityCanonical(shell, b)
+	accPick := 0
+	if bC, aC, cC, err := facetTriple(acBaseC, acAC, acBC, acBaseErr, acAErr, acBErr); err != nil {
+		recordUnencodableFacet(conflicts, res, nodeID, "accessibility", err)
+	} else {
+		accPick = pickCanonical(conflicts, res, nodeID, "accessibility", bC, aC, cC)
+	}
 	mergedAcc := pickExtra(base, a, b, accPick, "accessibility")
 
 	// children facet (structural)
@@ -520,7 +577,19 @@ func merge3(conflicts *[]Conflict, res resolution, base wire.Node, aOpt, bOpt *w
 			// shared-children guard reaches it, so the guard and this check
 			// land together or the merge trades a spurious refusal for a
 			// divergence.
-			acC, bcC := mustEncode(ac), mustEncode(bc)
+			acC, acErr := encodeFacet(ac)
+			bcC, bcErr := encodeFacet(bc)
+			if acErr != nil || bcErr != nil {
+				// Two branches that cannot be encoded are not two branches
+				// that agree. Refuse and keep the A side unmerged; the merge
+				// has already failed, so no caller reads this value.
+				err := acErr
+				if err == nil {
+					err = bcErr
+				}
+				recordUnencodableFacet(conflicts, res, cid, "insert", err)
+				return ac
+			}
 			if acC == bcC {
 				return ac
 			}

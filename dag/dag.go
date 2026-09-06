@@ -43,6 +43,7 @@ package dag
 
 import (
 	"encoding/json"
+	"errors"
 	"sort"
 	"strconv"
 
@@ -156,7 +157,11 @@ func EncodeDagRecord(record Record) (string, error) {
 // DecodeDagRecord decodes a canonical-wire DAG-record document. Never panics;
 // returns a *wire.DecodeError on any wire-shape violation.
 func DecodeDagRecord(text string) (Record, error) {
-	raw, err := wire.ParseCanonical(text)
+	// ParseBounded, not ParseCanonical: the envelope's own strings and arrays —
+	// the actor, the message, the parent list — are read straight off this
+	// parse and never pass through the node or op decoders, so ParseCanonical's
+	// syntactic-depth bound was the only §21 limit reaching them.
+	raw, err := wire.ParseBounded(text)
 	if err != nil {
 		return Record{}, err
 	}
@@ -193,12 +198,18 @@ func DecodeDagRecord(text string) (Record, error) {
 		return Record{}, rerootErr(err, "$.op")
 	}
 
+	timestamp, tsErr := asInt(obj["timestamp"])
+	if tsErr != nil {
+		return Record{}, &wire.DecodeError{Code: wire.CodeWrongType, Path: "$.timestamp",
+			Message: tsErr.Error() + " at $.timestamp"}
+	}
+
 	rec := Record{
 		StreamID:  asString(obj["streamId"]),
 		Hash:      asString(obj["hash"]),
 		Op:        op,
 		Actor:     actor,
-		Timestamp: asInt(obj["timestamp"]),
+		Timestamp: timestamp,
 		Result:    Success,
 	}
 	rawParents, ok := obj["parents"].([]any)
@@ -294,14 +305,25 @@ func asString(v any) string {
 	return s
 }
 
-func asInt(v any) int64 {
-	// ParseCanonical yields numbers as json.Number (UseNumber), preserving the
+// asInt reads a json.Number as an int64, REPORTING a value that does not fit
+// or is not a number at all.
+//
+// It used to discard both failures and return 0. A DAG record's integers are
+// sequence-like — the thing whose ordering the record exists to establish — so
+// a silent 0 is not a degraded reading, it is a different record that still
+// decodes, verifies and hashes.
+func asInt(v any) (int64, error) {
+	// ParseBounded yields numbers as json.Number (UseNumber), preserving the
 	// int/float distinction.
-	if n, ok := v.(json.Number); ok {
-		i, _ := n.Int64()
-		return i
+	n, ok := v.(json.Number)
+	if !ok {
+		return 0, errors.New("expected a JSON number")
 	}
-	return 0
+	i, err := n.Int64()
+	if err != nil {
+		return 0, errors.New("integer literal " + string(n) + " does not fit an int64")
+	}
+	return i, nil
 }
 
 func rerootErr(err error, prefix string) error {

@@ -37,6 +37,7 @@ const (
 	CodePathNotSupportedYet ApplyErrorCode = "PathNotSupportedYet"
 	CodeOrderingMismatch    ApplyErrorCode = "OrderingMismatch"
 	CodeBatchAborted        ApplyErrorCode = "BatchAborted"
+	// CodeLimitExceeded is declared in limits.go beside the guard that emits it.
 )
 
 // ApplyError is a structured, recoverable apply failure (never panicked).
@@ -63,6 +64,14 @@ func Apply(op wire.Obj, tree wire.Node) (wire.Node, error) {
 	result, applyErr := applyOne(op, tree)
 	if applyErr != nil {
 		return tree, applyErr
+	}
+	// The §21 apply-time guard (limits.go). Only the ops that can grow the tree
+	// pay for it, and it runs on the RESULT because the op alone does not
+	// determine the figures.
+	if opCanGrow(op) {
+		if limitErr := checkTreeLimits(result); limitErr != nil {
+			return tree, limitErr
+		}
 	}
 	return result, nil
 }

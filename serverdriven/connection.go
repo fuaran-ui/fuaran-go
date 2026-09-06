@@ -1,5 +1,11 @@
 package serverdriven
 
+import (
+	"sync"
+
+	"github.com/fuaran-ui/fuaran-go/wire"
+)
+
 // One live connection binds a Session to a Channel. On each inbound event it
 // steps the driver, advances the op sequence, and pushes a Frame when the step
 // produced ops. A rejected step pushes nothing and leaves the session
@@ -14,16 +20,33 @@ package serverdriven
 const DefaultReplayBufferCapacity = 512
 
 // Connection drives one Session through one Channel, buffering frames for
-// reconnect-replay. It is single-goroutine per connection (Handle is not
-// re-entrant); a real transport serialises a connection's inbound events.
+// reconnect-replay.
+//
+// IT SERIALISES ITS OWN INBOUND PATH. The package comment used to say "a real
+// transport serialises a connection's inbound events" and leave it there, which
+// was not true of the transport shipped beside it: the SSE companion POST is an
+// ordinary HTTP handler, so every inbound event arrives on net/http's own
+// goroutine for that request while the streaming response is written from a
+// different one. Two rapid clicks then had Handle → Step → Push racing itself
+// over the session tree, the sequence counter, the replay buffer and the
+// ResponseWriter — interleaved SSE bytes, a lost or duplicated seq, a torn
+// tree. A documentation sentence cannot fix that, because the host cannot
+// serialise what net/http hands it in parallel.
+//
+// So the mutex lives here, at the one point that owns all four pieces of shared
+// state. Handle and Resync take it; Sequence and Session read under it. The
+// session's own "not safe for concurrent Step" contract is unchanged — this is
+// what makes it hold.
 type Connection struct {
-	connID    string
-	session   *Session
-	channel   Channel
-	seq       int
-	buffer    []Frame
-	bufferCap int
-	onReject  func(Reject)
+	connID        string
+	session       *Session
+	channel       Channel
+	mu            sync.Mutex
+	seq           int
+	buffer        []Frame
+	bufferCap     int
+	onReject      func(Reject)
+	projectReject func(Reject) []wire.Obj
 }
 
 // ConnectionOption configures a Connection at construction.
@@ -38,10 +61,32 @@ func WithReplayBufferCapacity(capacity int) ConnectionOption {
 	}
 }
 
-// WithOnReject registers a sink for rejected steps (the always-on audit hook;
-// the structured error frame back to the client is a documented follow-on).
+// WithOnReject registers a sink for rejected steps — the always-on audit hook.
 func WithOnReject(sink func(Reject)) ConnectionOption {
 	return func(c *Connection) { c.onReject = sink }
+}
+
+// WithRejectProjection lets a refusal reach the CLIENT, as an ordinary frame of
+// TreeOps the host projects from the reject.
+//
+// Until now a rejected step pushed nothing at all, so from the browser a
+// refused click and a click that never arrived were the same event: nothing
+// happened. The audit hook told the operator; the person who clicked was told
+// nothing.
+//
+// It is a host-supplied PROJECTION rather than a reject envelope this package
+// invents, deliberately. Showing a refusal is a UI decision — a banner, a
+// toast, a disabled control, a field-level message — and a new client-facing
+// wire shape would have to be specified, versioned and adopted by every client
+// before it could carry any of them. Ops are the vocabulary both ends already
+// speak, so this needs no wire change and no client change.
+//
+// The projected ops are pushed as a normal sequenced frame, so they replay on
+// reconnect like any other. Returning nil pushes nothing — the right answer for
+// a reject the user should not see. The projection runs under the connection
+// lock: keep it pure.
+func WithRejectProjection(project func(Reject) []wire.Obj) ConnectionOption {
+	return func(c *Connection) { c.projectReject = project }
 }
 
 // NewConnection binds a session to a channel and wires the channel's inbound
@@ -64,26 +109,48 @@ func NewConnection(connID string, session *Session, channel Channel, opts ...Con
 	return c
 }
 
-// Session returns the current server-held session.
+// Session returns the current server-held session. The session pointer is
+// stable; reading the tree THROUGH it while another goroutine is in Handle is
+// the caller's own race to avoid.
 func (c *Connection) Session() *Session { return c.session }
 
-// Sequence returns the current op sequence pushed to this connection.
-func (c *Connection) Sequence() int { return c.seq }
+// Sequence returns the current op sequence pushed to this connection, read
+// under the connection lock.
+func (c *Connection) Sequence() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.seq
+}
 
 // Handle steps the connection with one inbound event: drive the session,
 // advance the op sequence, and push a Frame when the step produced ops. A
 // rejected step records the reject and changes nothing.
 func (c *Connection) Handle(ev Event) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	opsList, reject := c.session.Step(ev)
 	if reject != nil {
 		if c.onReject != nil {
 			c.onReject(*reject)
 		}
-		return nil
+		if c.projectReject == nil {
+			return nil
+		}
+		rejectOps := c.projectReject(*reject)
+		if len(rejectOps) == 0 {
+			return nil
+		}
+		return c.pushOps(rejectOps)
 	}
 	if len(opsList) == 0 {
 		return nil // a legitimate no-op — no frame, no seq advance.
 	}
+	return c.pushOps(opsList)
+}
+
+// pushOps advances the sequence, buffers the frame for replay, and pushes it.
+// Callers hold the connection lock.
+func (c *Connection) pushOps(opsList []wire.Obj) error {
 	c.seq++
 	frame := Frame{Seq: c.seq, Ops: opsList}
 	c.bufferFrame(frame)
@@ -106,6 +173,8 @@ func (c *Connection) bufferFrame(frame Frame) {
 // retained window gets only the retained tail. Returns the number of frames
 // replayed, or the first push error.
 func (c *Connection) Resync(lastSeq int) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	replayed := 0
 	for _, frame := range c.buffer {
 		if frame.Seq > lastSeq {

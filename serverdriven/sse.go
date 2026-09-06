@@ -1,9 +1,11 @@
 package serverdriven
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 )
 
 // The Server-Sent-Events backend — a Channel over an io.Writer, plus a
@@ -22,6 +24,7 @@ import (
 // companion POST path to call.
 type SSEChannel struct {
 	w       io.Writer
+	writeMu sync.Mutex
 	flush   func()
 	handler func(Event)
 	closed  bool
@@ -38,10 +41,22 @@ func NewSSEChannel(w io.Writer) *SSEChannel {
 }
 
 // Push writes the frame as an SSE event.
+//
+// The write is guarded. An SSE frame is several lines and a blank separator, so
+// two concurrent writers do not merely interleave frames — they interleave
+// BYTES, and the client's parser sees one corrupt event rather than two good
+// ones. The pushes a Connection makes are already serialised by its own lock;
+// this covers the host that pushes directly (a heartbeat, an out-of-band
+// notification) alongside the driven ones.
 func (c *SSEChannel) Push(frame Frame) error {
 	sse, err := EncodeSSE(frame)
 	if err != nil {
 		return err
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.closed {
+		return errors.New("serverdriven: channel closed")
 	}
 	if _, err := io.WriteString(c.w, sse); err != nil {
 		return err
@@ -55,8 +70,11 @@ func (c *SSEChannel) Push(frame Frame) error {
 // Receive registers the inbound handler (invoked by the companion POST path).
 func (c *SSEChannel) Receive(handler func(Event)) { c.handler = handler }
 
-// Close marks the channel closed.
+// Close marks the channel closed; a later Push is refused rather than writing
+// into a response the host has finished with.
 func (c *SSEChannel) Close() error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	c.closed = true
 	return nil
 }

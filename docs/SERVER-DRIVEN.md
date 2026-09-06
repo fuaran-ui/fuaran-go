@@ -134,8 +134,8 @@ func counterHandler() serverdriven.Handler {
 
 ### What happens on each event
 
-`Session.Step` runs four checks in order, and stops at the first that refuses.
-None of them is optional and none can be turned off:
+`Session.Step` runs five checks in order, and stops at the first that refuses.
+Four are always on; the fifth is the capability gate, which you turn on:
 
 1. **Does the node exist in the current server tree?** No ⇒ `UnknownNode` — a
    stale or forged id.
@@ -146,22 +146,67 @@ None of them is optional and none can be turned off:
    `file-read`), `Tabs` and `Stepper` (`click` / `change`), and `Disclosure`
    (`click` / `change` / `toggle`).
 3. **Does your handler accept it?** An error ⇒ `DispatchDenied`.
-4. **Does every op it returned actually apply?** No ⇒ `DispatchDenied`, and the
+4. **Does every op it returned introduce only mounts you granted?** No ⇒
+   `CapabilityDenied`, naming the ungranted capability ids. This one is
+   **opt-in**: a session without `WithCapabilityGate` skips it entirely, and a
+   session with one denies by default. It is the authority boundary on what your
+   HANDLER returns, which is a different question from the trust boundary on
+   what the client sends — a handler is your code, but it routinely computes ops
+   from client-supplied values, so "I wrote this function" is not "I intended
+   this particular mount". Checks 1–4 are recursive through `Batch`; so is this.
+5. **Does every op it returned actually apply?** No ⇒ `DispatchDenied`, and the
    tree does not move at all — a partially-applying set advances nothing.
+
+And a panic from your handler is recovered at this boundary and reported as
+`HandlerPanicked` — the connection survives, the tree is untouched. `Step`'s
+"never panics" is now true rather than aspirational: on the WebSocket transport
+a handler panic used to leave a goroutine `net/http` does not recover, taking
+the process with it. `Session.WithOnHandlerPanic(sink)` hands you the recovered
+value; the reject deliberately does not carry it, because a panic message can
+hold whatever the handler was holding and a reject travels to the client.
 
 A refused step mutates nothing and pushes no frame:
 
 ```go
 type Reject struct {
-	Reason  RejectReason // UnknownNode | IllegitimateEvent | DispatchDenied
-	NodeID  string
-	Message string
+	Reason RejectReason // UnknownNode | IllegitimateEvent | DispatchDenied
+	//                  // | CapabilityDenied | HandlerPanicked
+	NodeID              string
+	Message             string
+	MissingCapabilities []string // CapabilityDenied only
 }
+
+session := serverdriven.NewSession(tree, handler).
+	WithCapabilityGate(serverdriven.NewCapabilityGate("storage.read"))
 ```
+
+`CapabilityGate.AuditMounts(tree)` gives the whole-tree view — which mounts are
+live and which are blocked, in document order.
 
 Wire `serverdriven.WithOnReject(sink)` at construction to audit refusals — it is
 the always-on hook, and a refusal that nobody logs is a refusal nobody can
 diagnose.
+
+`WithRejectProjection(project)` is the other half: it lets a refusal reach the
+**client**, as an ordinary frame of `TreeOp`s you project from the reject. Until
+you wire it, a rejected step pushes nothing, so from the browser a refused click
+and a click that never arrived are the same event — the operator is told, the
+person who clicked is not.
+
+```go
+conn := serverdriven.NewConnection("c1", session, ch,
+	serverdriven.WithOnReject(func(r serverdriven.Reject) { log.Printf("%+v", r) }),
+	serverdriven.WithRejectProjection(func(r serverdriven.Reject) []wire.Obj {
+		return []wire.Obj{ /* set a banner's text, disable a control, ... */ }
+	}))
+```
+
+It is a projection you supply rather than a reject envelope this package
+invents, because showing a refusal is a UI decision — a banner, a toast, a
+field-level message — and a new client-facing wire shape would have to be
+specified, versioned and adopted by every client before it could carry any of
+them. Ops are the vocabulary both ends already speak. Return `nil` for a reject
+the user should not see; the frame is sequenced and replays like any other.
 
 ### What a frame is
 
@@ -198,7 +243,7 @@ control message, so ordinary JSON is apt:
 ```
 
 `DecodeEvent` parses it. The driver does not trust any of it: `nodeId` and
-`event` go straight into the four checks above.
+`event` go straight into the checks above.
 
 ### Reconnects
 
@@ -250,8 +295,91 @@ companion POST endpoint you wire to `SSEChannel.Inbound`.
 
 **WebSocket** (`ws.go`) — a hand-written RFC 6455 handshake and frame codec, no
 third-party module. `ServeWebSocket(w, r)` upgrades and returns the channel; run
-`Listen()` in its own goroutine for the inbound read loop (it answers pings with
-pongs itself).
+`ListenAndRecover()` in its own goroutine for the inbound read loop (it answers
+pings with pongs itself).
+
+### The read loop must run under a recover, and does not by itself
+
+`net/http` recovers a panic in the goroutine it started for a request. The read
+loop runs in one **you** started, so a panic there — in the framing, or in your
+own inbound handler, which this package cannot vouch for — takes the *process*
+down rather than the connection, ending every other connection the server holds.
+`ListenAndRecover()` is `Listen()` under that boundary and returns the recovered
+value as an ordinary error; use it unless you have a boundary of your own.
+
+### Inbound frames are capped before they are allocated
+
+A frame header declares its own payload length, so a peer can claim a size
+before sending a byte of it. `MaxFrameBytes` (1 MiB) bounds the declared length
+**before** it is narrowed to `int` and before anything is allocated, which is the
+only ordering that helps: the declared value is an unauthenticated `uint64`, and
+`0xFFFFFFFFFFFFFFFF` narrows to `-1`. A breach is answered with a close frame
+carrying RFC 6455 status **1009** and returned as a `*ProtocolError`; unmasked
+client frames and control frames over 125 bytes are refused the same way with
+**1002**. `NewWSChannelWithLimit` raises the ceiling for a host whose client
+genuinely sends larger messages — a non-positive value falls back to the default
+rather than meaning "unbounded".
+
+This is a *transport* cap and is not the §21 wire limits, which bound the
+structure of a document already read. Both apply.
+
+### Deadlines, cancellation, and closing
+
+`Close()` closes the underlying socket, not just a flag. `ListenContext(ctx)`
+ends the loop when `ctx` is cancelled — by closing the socket, because a
+blocking `Read` on a `net.Conn` cannot be interrupted any other way.
+
+The loop refreshes a read deadline (`DefaultReadTimeout`, 60s) before every
+frame and sends a server ping every `DefaultPingInterval` (25s), so a healthy
+idle connection stays warm while a half-open one — lid closed, NAT entry
+expired, cable pulled — is reclaimed instead of parking a goroutine and a
+descriptor forever. `SetReadTimeout(readTimeout, pingEvery)` overrides both
+before `Listen`; a non-positive `readTimeout` disables the deadline, which is a
+real choice for a host keeping liveness elsewhere and deliberately not the
+default.
+
+`SetOnDrop` reports what the loop discards — a client frame that will not
+decode, a pong reply that could not be written. Both were silent, so a client
+sending malformed events looked exactly like a client sending nothing.
+
+### What the host still owns
+
+Two obligations this package cannot discharge for you, because they belong to
+your `http.Server` and your routes:
+
+```go
+srv := &http.Server{
+	Handler:           mux,
+	ReadHeaderTimeout: 10 * time.Second,
+	ReadTimeout:       30 * time.Second,   // not applied to a hijacked WS conn
+	WriteTimeout:      0,                  // 0 for the SSE stream — it is long-lived by design
+	IdleTimeout:       120 * time.Second,
+}
+```
+
+`ReadTimeout` and `ReadHeaderTimeout` bound a slow-loris client on every
+ordinary route. `WriteTimeout` must be **0** on a mux serving the SSE stream, or
+the stream is cut mid-connection; put the SSE endpoint on its own server, or
+rely on the connection's own read deadline, if you need a write timeout
+elsewhere.
+
+And bound the companion POST body — use `DecodeEventRequest(w, r)`, which reads
+through an `http.MaxBytesReader` at `MaxEventBytes`, rather than reading
+`r.Body` yourself. An event is a small control message; `io.ReadAll` on an
+unauthenticated body is a memory-exhaustion primitive reachable with nothing
+but the URL. An oversized body comes back as a `*http.MaxBytesError` — answer
+413.
+
+### Inbound events are serialised for you
+
+`Connection` holds a mutex over `Handle` and `Resync`, so the session tree, the
+sequence counter, the replay buffer and the response writer are never touched
+concurrently. This is not merely documented discipline: the SSE companion POST
+is an ordinary HTTP handler, so net/http hands you inbound events on parallel
+goroutines whether or not you want it to, and no amount of host care can
+serialise what it did not schedule. Two rapid clicks used to interleave SSE
+bytes and lose or duplicate a `seq`. `SSEChannel.Push` is guarded too, which
+covers a host pushing out-of-band (a heartbeat) alongside the driven frames.
 
 ### The WebSocket origin policy is the one thing to read before shipping
 
