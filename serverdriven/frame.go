@@ -15,6 +15,8 @@ package serverdriven
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -88,7 +90,19 @@ type wireEvent struct {
 	LastSeq int    `json:"lastSeq"`
 }
 
-// DecodeEvent parses an inbound client event message.
+// MaxEventBytes bounds an inbound client event message, in bytes.
+//
+// An Event is a small control message — a connection id, a node id, an event
+// name, a short payload string, a sequence number. There is no legitimate
+// megabyte-sized one, and the SSE companion POST is an ordinary HTTP endpoint
+// any peer can call, so the body must be bounded before it is read rather than
+// after. Held to the same figure as MaxFrameBytes so the two transports refuse
+// the same message.
+const MaxEventBytes = MaxFrameBytes
+
+// DecodeEvent parses an inbound client event message from bytes ALREADY READ.
+// The caller is responsible for bounding how many that is — DecodeEventRequest
+// is the bounded form for an HTTP body.
 func DecodeEvent(raw []byte) (Event, error) {
 	var we wireEvent
 	if err := json.Unmarshal(raw, &we); err != nil {
@@ -101,4 +115,34 @@ func DecodeEvent(raw []byte) (Event, error) {
 		Payload: we.Payload,
 		LastSeq: we.LastSeq,
 	}, nil
+}
+
+// DecodeEventRequest reads the SSE companion POST's body through an
+// http.MaxBytesReader and decodes it — the bounded inbound path for the
+// one-directional transport.
+//
+// Use this rather than reading r.Body yourself. An http.Request body is an
+// unbounded stream from an unauthenticated peer: io.ReadAll on it is a
+// memory-exhaustion primitive that needs no protocol knowledge to reach, only
+// the endpoint's URL. MaxBytesReader also caps what the SERVER buffers and
+// signals the client, which a length-check after reading cannot do.
+//
+// A body over the limit returns a *http.MaxBytesError — respond 413. A body
+// that will not parse returns the decode error — respond 400.
+func DecodeEventRequest(w http.ResponseWriter, r *http.Request) (Event, error) {
+	return DecodeEventRequestWithLimit(w, r, MaxEventBytes)
+}
+
+// DecodeEventRequestWithLimit is DecodeEventRequest with an explicit body cap.
+// A non-positive limit falls back to MaxEventBytes rather than meaning
+// "unbounded" — the same reasoning as NewWSChannelWithLimit.
+func DecodeEventRequestWithLimit(w http.ResponseWriter, r *http.Request, maxBytes int64) (Event, error) {
+	if maxBytes <= 0 {
+		maxBytes = MaxEventBytes
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBytes))
+	if err != nil {
+		return Event{}, err
+	}
+	return DecodeEvent(body)
 }

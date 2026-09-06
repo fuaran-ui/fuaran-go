@@ -278,6 +278,64 @@ rather than meaning "unbounded".
 This is a *transport* cap and is not the §21 wire limits, which bound the
 structure of a document already read. Both apply.
 
+### Deadlines, cancellation, and closing
+
+`Close()` closes the underlying socket, not just a flag. `ListenContext(ctx)`
+ends the loop when `ctx` is cancelled — by closing the socket, because a
+blocking `Read` on a `net.Conn` cannot be interrupted any other way.
+
+The loop refreshes a read deadline (`DefaultReadTimeout`, 60s) before every
+frame and sends a server ping every `DefaultPingInterval` (25s), so a healthy
+idle connection stays warm while a half-open one — lid closed, NAT entry
+expired, cable pulled — is reclaimed instead of parking a goroutine and a
+descriptor forever. `SetReadTimeout(readTimeout, pingEvery)` overrides both
+before `Listen`; a non-positive `readTimeout` disables the deadline, which is a
+real choice for a host keeping liveness elsewhere and deliberately not the
+default.
+
+`SetOnDrop` reports what the loop discards — a client frame that will not
+decode, a pong reply that could not be written. Both were silent, so a client
+sending malformed events looked exactly like a client sending nothing.
+
+### What the host still owns
+
+Two obligations this package cannot discharge for you, because they belong to
+your `http.Server` and your routes:
+
+```go
+srv := &http.Server{
+	Handler:           mux,
+	ReadHeaderTimeout: 10 * time.Second,
+	ReadTimeout:       30 * time.Second,   // not applied to a hijacked WS conn
+	WriteTimeout:      0,                  // 0 for the SSE stream — it is long-lived by design
+	IdleTimeout:       120 * time.Second,
+}
+```
+
+`ReadTimeout` and `ReadHeaderTimeout` bound a slow-loris client on every
+ordinary route. `WriteTimeout` must be **0** on a mux serving the SSE stream, or
+the stream is cut mid-connection; put the SSE endpoint on its own server, or
+rely on the connection's own read deadline, if you need a write timeout
+elsewhere.
+
+And bound the companion POST body — use `DecodeEventRequest(w, r)`, which reads
+through an `http.MaxBytesReader` at `MaxEventBytes`, rather than reading
+`r.Body` yourself. An event is a small control message; `io.ReadAll` on an
+unauthenticated body is a memory-exhaustion primitive reachable with nothing
+but the URL. An oversized body comes back as a `*http.MaxBytesError` — answer
+413.
+
+### Inbound events are serialised for you
+
+`Connection` holds a mutex over `Handle` and `Resync`, so the session tree, the
+sequence counter, the replay buffer and the response writer are never touched
+concurrently. This is not merely documented discipline: the SSE companion POST
+is an ordinary HTTP handler, so net/http hands you inbound events on parallel
+goroutines whether or not you want it to, and no amount of host care can
+serialise what it did not schedule. Two rapid clicks used to interleave SSE
+bytes and lose or duplicate a `seq`. `SSEChannel.Push` is guarded too, which
+covers a host pushing out-of-band (a heartbeat) alongside the driven frames.
+
 ### The WebSocket origin policy is the one thing to read before shipping
 
 The same-origin policy **does not cover WebSockets**. A browser will let a page on
