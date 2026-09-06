@@ -145,7 +145,7 @@ func checkSwitch(kind wire.Obj, path string, findings *[]Finding) {
 		if !ok {
 			continue
 		}
-		// Phase 1535 — FUARAN142: a case selects on a string `match` XOR a
+		// Phase 1535 — FUARAN147: a case selects on a string `match` XOR a
 		// `when` predicate. The PRE-EMIT twin of the decoder's own refusal, and
 		// it exists for the reason every pre-emit shape rule does: a tree
 		// authored in Go never passes through the decoder, so without it the one
@@ -155,7 +155,7 @@ func checkSwitch(kind wire.Obj, path string, findings *[]Finding) {
 		switch {
 		case hasMatch && hasWhen:
 			*findings = append(*findings, Finding{
-				Code: "FUARAN142", Path: fmt.Sprintf("%s.cases[%d]", path, index),
+				Code: "FUARAN147", Path: fmt.Sprintf("%s.cases[%d]", path, index),
 				Message: "switch case carries both 'match' and 'when' — exactly one selects a case; " +
 					"'match' compares the switch's `on` selector against a literal, 'when' evaluates " +
 					"a Binding<bool> and needs no selector",
@@ -163,7 +163,7 @@ func checkSwitch(kind wire.Obj, path string, findings *[]Finding) {
 			})
 		case !hasMatch && !hasWhen:
 			*findings = append(*findings, Finding{
-				Code: "FUARAN142", Path: fmt.Sprintf("%s.cases[%d]", path, index),
+				Code: "FUARAN147", Path: fmt.Sprintf("%s.cases[%d]", path, index),
 				Message: "switch case carries neither 'match' nor 'when' — a case that names no " +
 					"condition can never be selected; give it a literal 'match' against the switch's " +
 					"`on` selector, or a 'when' Binding<bool> predicate",

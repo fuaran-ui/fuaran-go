@@ -86,7 +86,7 @@ func TestVisibleAndAriaHiddenStayDistinct(t *testing.T) {
 func TestVisibleDefaultVisibleSpellingNeedsNoHostState(t *testing.T) {
 	// `visible-until-dismissed` declares defaultValue: true. That spelling is
 	// what an author needs, because a DEFAULT-LESS State predicate follows the
-	// shared Binding.State rule and resolves false — the FUARAN143 shape.
+	// shared Binding.State rule and resolves false — the FUARAN148 shape.
 	const shown = "Shown until the reader dismisses it"
 
 	assertContains(t, renderFixture(t, "node-visible", nil), shown, "the declared default")
