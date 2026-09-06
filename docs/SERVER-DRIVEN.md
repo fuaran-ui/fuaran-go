@@ -134,8 +134,8 @@ func counterHandler() serverdriven.Handler {
 
 ### What happens on each event
 
-`Session.Step` runs four checks in order, and stops at the first that refuses.
-None of them is optional and none can be turned off:
+`Session.Step` runs five checks in order, and stops at the first that refuses.
+Four are always on; the fifth is the capability gate, which you turn on:
 
 1. **Does the node exist in the current server tree?** No ⇒ `UnknownNode` — a
    stale or forged id.
@@ -146,18 +146,42 @@ None of them is optional and none can be turned off:
    `file-read`), `Tabs` and `Stepper` (`click` / `change`), and `Disclosure`
    (`click` / `change` / `toggle`).
 3. **Does your handler accept it?** An error ⇒ `DispatchDenied`.
-4. **Does every op it returned actually apply?** No ⇒ `DispatchDenied`, and the
+4. **Does every op it returned introduce only mounts you granted?** No ⇒
+   `CapabilityDenied`, naming the ungranted capability ids. This one is
+   **opt-in**: a session without `WithCapabilityGate` skips it entirely, and a
+   session with one denies by default. It is the authority boundary on what your
+   HANDLER returns, which is a different question from the trust boundary on
+   what the client sends — a handler is your code, but it routinely computes ops
+   from client-supplied values, so "I wrote this function" is not "I intended
+   this particular mount". Checks 1–4 are recursive through `Batch`; so is this.
+5. **Does every op it returned actually apply?** No ⇒ `DispatchDenied`, and the
    tree does not move at all — a partially-applying set advances nothing.
+
+And a panic from your handler is recovered at this boundary and reported as
+`HandlerPanicked` — the connection survives, the tree is untouched. `Step`'s
+"never panics" is now true rather than aspirational: on the WebSocket transport
+a handler panic used to leave a goroutine `net/http` does not recover, taking
+the process with it. `Session.WithOnHandlerPanic(sink)` hands you the recovered
+value; the reject deliberately does not carry it, because a panic message can
+hold whatever the handler was holding and a reject travels to the client.
 
 A refused step mutates nothing and pushes no frame:
 
 ```go
 type Reject struct {
-	Reason  RejectReason // UnknownNode | IllegitimateEvent | DispatchDenied
-	NodeID  string
-	Message string
+	Reason RejectReason // UnknownNode | IllegitimateEvent | DispatchDenied
+	//                  // | CapabilityDenied | HandlerPanicked
+	NodeID              string
+	Message             string
+	MissingCapabilities []string // CapabilityDenied only
 }
+
+session := serverdriven.NewSession(tree, handler).
+	WithCapabilityGate(serverdriven.NewCapabilityGate("storage.read"))
 ```
+
+`CapabilityGate.AuditMounts(tree)` gives the whole-tree view — which mounts are
+live and which are blocked, in document order.
 
 Wire `serverdriven.WithOnReject(sink)` at construction to audit refusals — it is
 the always-on hook, and a refusal that nobody logs is a refusal nobody can
@@ -198,7 +222,7 @@ control message, so ordinary JSON is apt:
 ```
 
 `DecodeEvent` parses it. The driver does not trust any of it: `nodeId` and
-`event` go straight into the four checks above.
+`event` go straight into the checks above.
 
 ### Reconnects
 
