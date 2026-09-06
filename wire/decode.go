@@ -499,6 +499,12 @@ var (
 	durationUnitCases     = newCaseSet("Seconds", "Minutes", "Hours")
 	durationStyleCases    = newCaseSet("Compact", "Clock", "Long")
 	relativeTimeUnitCases = newCaseSet("Second", "Minute", "Hour", "Day", "Week", "Month", "Year")
+	// Phase 1533 — the resolution a `Binding.Now` declares for the
+	// host-furnished instant. A strict SUBSET of relativeTimeUnitCases: `Week`
+	// / `Month` / `Year` are refused rather than quietly accepted, because this
+	// is a truncation of a calendar instant and those three have no truncation
+	// every host agrees on (which weekday starts a week; which calendar).
+	timeGrainCases = newCaseSet("Second", "Minute", "Hour", "Day")
 	// Phase 821 — the standalone Icon display kind's size enum.
 	iconSizeCases    = newCaseSet("Small", "Medium", "Large")
 	columnWidthCases = newCaseSet("Auto", "Fixed", "Flex")
@@ -960,8 +966,18 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		}
 		return Obj{Tag: "State", Fields: fields}
 	case "Now":
-		// Phase 765 — the host-furnished current instant. Tag-only on the wire
-		// (`{"$type":"Now"}`); the clock lives in the host, never the tree.
+		// Phase 765 — the host-furnished current INSTANT is never on the wire:
+		// the clock lives in the host, never the tree. Phase 1533 — the declared
+		// `grain` is the one wire field, optional, absent meaning `Second`, so a
+		// grain-less `Now` is still the bare `{"$type":"Now"}`.
+		//
+		// Present-but-unreadable is a REFUSAL rather than a silent fallback to
+		// the default: a document that names a grain the host cannot honour must
+		// not be rendered at a neighbouring resolution in silence.
+		if raw, ok := obj["grain"]; ok {
+			grain := enumStr(raw, path+".grain", timeGrainCases, "grain", noAliases)
+			return Obj{Tag: "Now", Fields: map[string]Value{"grain": Str(grain)}}
+		}
 		return Obj{Tag: "Now", Fields: map[string]Value{}}
 	case "Computed":
 		return Obj{Tag: "Computed", Fields: map[string]Value{"fn": Str(closureSentinel)}}
