@@ -3,7 +3,6 @@ package wire
 import (
 	"errors"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -23,11 +22,13 @@ import (
 //   - strings escaped per rule 6 only (canonical.EscapeString);
 //   - no insignificant whitespace.
 //
-// Key comparison note: Go's sort.Strings is byte-wise over UTF-8, which equals
-// Unicode-code-point order; .NET StringComparer.Ordinal compares UTF-16 code
-// units. The two diverge only for keys mixing supplementary-plane and high-BMP
-// characters — the wire vocabulary's keys are ASCII, where all three orders
-// coincide.
+// Key comparison note: rule 2's "Ordinal" means UTF-16 code-unit order, which is
+// NOT what Go's sort.Strings gives — that is byte-wise over UTF-8, equal to
+// code-point order, and the two diverge for keys mixing supplementary-plane and
+// high-BMP characters. The wire vocabulary's own keys are ASCII, where the
+// orders coincide, but a rule-12 structured payload carries author-supplied
+// keys and is where a non-BMP key actually arrives. canonical.SortKeys does the
+// conversion; see its doc comment for why the difference is observable.
 
 func encodeValue(v Value) (string, error) {
 	var sb strings.Builder
@@ -42,7 +43,7 @@ func appendValue(sb *strings.Builder, v Value) error {
 	case Str:
 		sb.WriteString(canonical.EscapeString(string(t)))
 	case Int:
-		sb.WriteString(strconv.FormatInt(int64(t), 10))
+		appendInt(sb, int64(t))
 	case Float:
 		appendFloat(sb, float64(t))
 	case Bool:
@@ -76,6 +77,26 @@ func appendValue(sb *strings.Builder, v Value) error {
 	return nil
 }
 
+// appendInt renders an integer per rule 5. Inside ±(2⁵³−1) that is the integer
+// layout: plain decimal, no leading zeroes, no point, no exponent. Outside it a
+// conformant encoder MUST NOT emit an integer token at all, so the value is
+// rendered as the double a conformant decoder will read it back as — which is
+// what every host that routes numbers through a double would have produced from
+// the same document, and what keeps encode(decode(x)) stable here.
+//
+// Go is one of the two hosts where this can arise: its Int carries an int64, so
+// a 19-digit identifier reaches the encoder intact and would otherwise ride onto
+// the wire as a token three other hosts cannot reproduce. Carry such a value as
+// a string; this rendering is the floor beneath that instruction, not a
+// substitute for it.
+func appendInt(sb *strings.Builder, i int64) {
+	if i >= -PayloadIntMax && i <= PayloadIntMax {
+		sb.WriteString(strconv.FormatInt(i, 10))
+		return
+	}
+	sb.WriteString(canonical.FormatFiniteDouble(float64(i)))
+}
+
 // appendFloat renders a float per rule 5: the canonical finite layout, or the
 // quoted sentinels for the three specials (RFC 8259 forbids them as bare
 // numbers).
@@ -100,7 +121,7 @@ func appendObj(sb *strings.Builder, o Obj) error {
 	if o.Tag != "" {
 		keys = append(keys, "$type")
 	}
-	sort.Strings(keys)
+	canonical.SortKeys(keys)
 	sb.WriteByte('{')
 	for i, k := range keys {
 		if i > 0 {
@@ -126,7 +147,7 @@ func appendNode(sb *strings.Builder, n Node) error {
 	for k := range n.Extras {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	canonical.SortKeys(keys)
 	sb.WriteByte('{')
 	for i, k := range keys {
 		if i > 0 {

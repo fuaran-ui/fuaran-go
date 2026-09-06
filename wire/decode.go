@@ -92,7 +92,87 @@ func parseJSON(text string) any {
 	if dec.Decode(new(any)) != io.EOF {
 		fail(CodeInvalidJSON, "$", "input carries content after the JSON document")
 	}
+	checkNoRepeatedMembers(text)
 	return raw
+}
+
+// checkNoRepeatedMembers refuses an object carrying the same member twice
+// (WIRE_FORMAT.md §20.2 row 1).
+//
+// This is one of the two rows that change what a document MEANS rather than
+// whether it is accepted, and every other check here is blind to it.
+// encoding/json unmarshals into a map, so the LAST occurrence wins and the
+// earlier ones are simply gone — while the reference host's parser kept the
+// FIRST. Two hosts therefore read different trees from identical bytes with no
+// error raised anywhere, which is exactly the failure §20 exists to close.
+//
+// It is a second pass over an already-validated token stream rather than a hook:
+// the standard library offers no per-member callback, and re-implementing its
+// parser to get one would trade a bounded cost at a trust boundary for a
+// permanent divergence risk. Duplicate DETECTION is a decision about this wire
+// format; JSON PARSING is not, and this host should keep exactly one parser.
+func checkNoRepeatedMembers(text string) {
+	dec := json.NewDecoder(strings.NewReader(text))
+	dec.UseNumber()
+
+	// One frame per open container. `seen` is nil for an array — an array has no
+	// members to repeat — and `expectKey` alternates within an object.
+	type frame struct {
+		seen      map[string]struct{}
+		expectKey bool
+	}
+	var stack []frame
+
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			// The document already parsed cleanly above, so the only error
+			// reachable here is end-of-input.
+			return
+		}
+
+		if len(stack) > 0 {
+			top := &stack[len(stack)-1]
+			if top.seen != nil && top.expectKey {
+				if key, ok := tok.(string); ok {
+					if _, repeated := top.seen[key]; repeated {
+						failExpecting(
+							CodeInvalidJSON,
+							"$",
+							"the object member '"+key+"' appears more than once (WIRE_FORMAT.md §20.2 row 1): "+
+								"hosts disagreed on which occurrence wins, so the same bytes meant different trees",
+							"each member named at most once within one object",
+						)
+					}
+					top.seen[key] = struct{}{}
+					top.expectKey = false
+					continue
+				}
+			}
+		}
+
+		if delim, isDelim := tok.(json.Delim); isDelim {
+			switch delim {
+			case '{':
+				stack = append(stack, frame{seen: map[string]struct{}{}, expectKey: true})
+				continue
+			case '[':
+				stack = append(stack, frame{})
+				continue
+			case '}', ']':
+				stack = stack[:len(stack)-1]
+			}
+		}
+
+		// A value has just been consumed, or a container just closed, so the next
+		// token in the enclosing object is a key again.
+		if len(stack) > 0 {
+			top := &stack[len(stack)-1]
+			if top.seen != nil {
+				top.expectKey = true
+			}
+		}
+	}
 }
 
 // ── Case sets ───────────────────────────────────────────────────────────────
@@ -173,16 +253,77 @@ func expectArray(raw any, path string) []any {
 	return arr
 }
 
+// The width of every typed integer slot this format declares (§7.1). Not §2
+// rule 5's ±(2⁵³−1), which is a different bound answering a different question:
+// that one is where integer IDENTITY stops in an untyped payload position, this
+// one is the width of the SLOT, and a value the slot cannot hold has nowhere to
+// land.
+const (
+	intSlotMin = -2147483648
+	intSlotMax = 2147483647
+)
+
+// expectInt is the §7.1 integer-slot accept set: a JSON number that is finite,
+// has no fractional part, and lies within the signed 32-bit range.
+//
+// `2.0` decodes as 2 — a document whose intent is unambiguous should not be
+// refused for its spelling, and this host refused it. `2.5` is a WRONG_TYPE
+// rather than a truncation to 2, which is the other half of the same
+// reconciliation: truncating discards a value at a slot the author chose to type
+// as an integer. `1e10` is a WRONG_TYPE too, and that row was measured — the
+// same bytes became Int32.MinValue on one runtime and 1410065408 on another, an
+// implementation-defined cast where the format needs an answer.
 func expectInt(raw any, path string) int64 {
 	n, ok := unwrapStaticAny(raw).(json.Number)
-	if !ok || !isIntegerLiteral(string(n)) {
+	if !ok {
 		fail(CodeWrongType, path, "expected an integer at "+path)
 	}
-	i, err := strconv.ParseInt(string(n), 10, 64)
-	if err != nil {
-		fail(CodeWrongType, path, "expected an integer at "+path)
+	lit := string(n)
+	if isIntegerLiteral(lit) {
+		i, err := strconv.ParseInt(lit, 10, 64)
+		if err != nil {
+			// Beyond int64 — necessarily beyond int32 as well.
+			failIntSlotRange(path)
+		}
+		if i < intSlotMin || i > intSlotMax {
+			failIntSlotRange(path)
+		}
+		return i
 	}
-	return i
+	// A number written with a fraction or an exponent. It is admissible exactly
+	// when its VALUE is an integer the slot can hold.
+	f, err := n.Float64()
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		failExpecting(
+			CodeWrongType,
+			path,
+			"expected a finite integer at "+path+" — an integer slot has no non-finite form",
+			"a finite integral number within the signed 32-bit range",
+		)
+	}
+	if f != math.Trunc(f) {
+		failExpecting(
+			CodeWrongType,
+			path,
+			"expected an integer at "+path+", but the value has a fractional part — an integer slot "+
+				"holds no fraction, and truncating it would discard a value the author typed",
+			"a finite integral number within the signed 32-bit range",
+		)
+	}
+	if f < intSlotMin || f > intSlotMax {
+		failIntSlotRange(path)
+	}
+	return int64(f)
+}
+
+func failIntSlotRange(path string) {
+	failExpecting(
+		CodeWrongType,
+		path,
+		"the value at "+path+" is outside the signed 32-bit range a typed integer slot can hold ("+
+			itoa(intSlotMin)+" … "+itoa(intSlotMax)+")",
+		"a finite integral number within the signed 32-bit range",
+	)
 }
 
 // nonFiniteSentinel maps the three §5/§7 quoted sentinels to their float value.
@@ -231,14 +372,31 @@ func isIntegerLiteral(lit string) bool {
 	return !strings.ContainsAny(lit, ".eE")
 }
 
+// PayloadIntMax is where INTEGER IDENTITY stops in an untyped rule-12 payload
+// position (§2 rule 5) — the range in which every conformant host's number
+// representation agrees exactly.
+//
+// It is a boundary of the FORMAT, not of this host. Go can hold an int64 and
+// Python an arbitrary-precision integer, while three hosts route every number
+// through a double; beyond ±(2⁵³−1) one document therefore canonicalises to
+// different bytes, and to different hash-chain and teleport digests, depending
+// on which host read it. A conformant encoder MUST NOT emit an integer token
+// outside this range — carry a uint64 column or a 19-digit identifier as a
+// string — and a conformant decoder MUST take one it receives as a double and
+// accept the rounding, which is what the clause below does.
+const PayloadIntMax = 9007199254740991
+
 // numberValue keeps the wire's int-vs-float distinction: an integer literal
-// stays Int (plain-decimal re-encode); anything with a decimal point or
-// exponent — or an integer too large for int64 — is Float (canonical layout).
+// within ±(2⁵³−1) stays Int (plain-decimal re-encode); anything with a decimal
+// point or exponent, or an integer token outside that range, is Float (canonical
+// layout).
 func numberValue(n json.Number) Value {
 	lit := string(n)
 	if isIntegerLiteral(lit) {
 		if i, err := strconv.ParseInt(lit, 10, 64); err == nil {
-			return Int(i)
+			if i >= -PayloadIntMax && i <= PayloadIntMax {
+				return Int(i)
+			}
 		}
 	}
 	f, _ := n.Float64()

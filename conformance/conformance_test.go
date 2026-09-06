@@ -499,3 +499,51 @@ func collectOpKinds(raw any, ops, kinds, controls map[string]bool) {
 		collectNodeKinds(state["onEmpty"], kinds, controls)
 	}
 }
+
+// TestCorpusFamiliesBeyondTheFloorAreNamed prints, by name and count, every
+// corpus family this host does not run.
+//
+// A declared lag and a silent omission are indistinguishable from a green
+// suite, and only one of them is honest. The contract-card family is a
+// deliberate lag here, as it is on the Python host — but a reader has no way to
+// tell that from a suite which simply never mentions it. The Rust host has
+// printed this list since Phase 553; this is the same declaration.
+//
+// It always passes: the output IS the declaration. The one assertion guards the
+// list going stale in the other direction — a family named as covered that the
+// corpus no longer holds, which would mean this list, and not the corpus, is
+// what changed.
+func TestCorpusFamiliesBeyondTheFloorAreNamed(t *testing.T) {
+	_, m := loadCorpus(t)
+	covered := map[string]bool{
+		"node-round-trip":           true,
+		"op-round-trip":             true,
+		"reject":                    true,
+		"lenient-accept":            true,
+		"envelope-round-trip":       true,
+		"envelope-reject":           true,
+		"elicitation-round-trip":    true,
+		"elicitation-reject":        true,
+		"elicitation-answer-accept": true,
+		"elicitation-answer-reject": true,
+	}
+	present := map[string]int{}
+	for _, fx := range m.Fixtures {
+		present[fx.Kind]++
+	}
+	kinds := make([]string, 0, len(present))
+	for kind := range present {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	for _, kind := range kinds {
+		if !covered[kind] {
+			t.Logf("skipped family (declared lag, not covered by this host): %s x %d", kind, present[kind])
+		}
+	}
+	for kind := range covered {
+		if present[kind] == 0 {
+			t.Errorf("named as covered but absent from the corpus: %s", kind)
+		}
+	}
+}
