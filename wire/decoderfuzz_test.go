@@ -986,7 +986,27 @@ func fuzzSummarise(s fuzzRunStats) string {
 
 // ─── The gate ───────────────────────────────────────────────────────────────
 
+// fuzzSeed is the FIXED seed the bounded gate and the go-red self-tests run on: a
+// red gate must be the same red gate on the next run. The long run is exploration
+// and takes a fresh draw from the caller instead (FUARAN_FUZZ_SEED, the
+// TypeScript leg's spelling), so two scheduled sweeps never repeat one stream.
 const fuzzSeed uint64 = 1023
+
+// fuzzSeedFromEnv returns FUARAN_FUZZ_SEED when set, else fuzzSeed. Only the
+// gate test reads it; the mutant self-tests stay on the constant so their
+// go-red proof does not depend on the caller's environment.
+func fuzzSeedFromEnv(t *testing.T) uint64 {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv("FUARAN_FUZZ_SEED"))
+	if raw == "" {
+		return fuzzSeed
+	}
+	n, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		t.Fatalf("FUARAN_FUZZ_SEED: %q is not an unsigned integer", raw)
+	}
+	return n
+}
 
 func fuzzEnvInt(t *testing.T, name string, fallback int) int {
 	t.Helper()
@@ -1020,8 +1040,9 @@ func TestDecoderFuzz(t *testing.T) {
 		iterations = 250000
 	}
 	iterations = fuzzEnvInt(t, "FUARAN_FUZZ_ITERATIONS", iterations)
+	seed := fuzzSeedFromEnv(t)
 
-	stats := fuzzRun(fuzzRealSubjects, fuzzDefaultBudgets, cfg, fuzzSeed, iterations, seeds, vocab, true)
+	stats := fuzzRun(fuzzRealSubjects, fuzzDefaultBudgets, cfg, seed, iterations, seeds, vocab, true)
 	stats.CorpusPresent = corpus != ""
 	t.Logf("[decoder-fuzz] %s", fuzzSummarise(stats))
 
@@ -1043,10 +1064,10 @@ func TestDecoderFuzz(t *testing.T) {
 			t.Errorf("... and %d further counterexamples", len(stats.finds)-5)
 			break
 		}
-		detail := c.describe(fuzzSeed, cfg.name)
+		detail := c.describe(seed, cfg.name)
 		// The report line truncates at 300 characters, which is right for a log and
 		// useless for a repro. A find nobody can reproduce is a find nobody fixes.
-		if path, err := fuzzPersist(fuzzReproDir(), c, fuzzSeed, cfg.name); err == nil {
+		if path, err := fuzzPersist(fuzzReproDir(), c, seed, cfg.name); err == nil {
 			detail += "\n\nrepro persisted at " + path
 		} else {
 			detail += "\n\n(could not persist the repro: " + err.Error() + ")"

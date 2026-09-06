@@ -38,6 +38,40 @@ func transformBinding(binding wire.Value) (wire.Obj, bool) {
 	return wire.Obj{}, false
 }
 
+// exprBinding reports a Phase-1534 Binding.Expr, rewritten as the equivalent
+// one-row Transform.
+//
+// The rewrite IS the implementation, on purpose: param resolution, list-param
+// substitution and the evaluator are then literally the code the pipeline runs,
+// so an expression cannot mean one thing inside a `derive` and another inside an
+// `Expr`. A second evaluator here would be a second thing to specify, certify on
+// five hosts, and keep in step.
+//
+// The frame carries one column of one row so `derive` has a row to produce; the
+// expression never reads it (a `col` reference is refused at decode), and the
+// trailing `project` drops it so the result is 1x1 by construction rather than
+// by inspection.
+func exprBinding(binding wire.Value) (wire.Obj, bool) {
+	obj, ok := binding.(wire.Obj)
+	if !ok || obj.Tag != "Expr" {
+		return wire.Obj{}, false
+	}
+	unitFrame := wire.Obj{Fields: map[string]wire.Value{
+		"columns": wire.Obj{Fields: map[string]wire.Value{"__unit": wire.Arr{wire.Bool(true)}}},
+	}}
+	pipeline := wire.Arr{
+		wire.Obj{Tag: "derive", Fields: map[string]wire.Value{"expr": obj.Fields["expr"], "name": wire.Str("__value")}},
+		wire.Obj{Tag: "project", Fields: map[string]wire.Value{
+			"cols": wire.Arr{wire.Obj{Fields: map[string]wire.Value{"a": wire.Str("__value"), "b": wire.Str("__value")}}},
+		}},
+	}
+	fields := map[string]wire.Value{"pipeline": pipeline, "source": unitFrame}
+	if params, ok := obj.Fields["params"]; ok {
+		fields["params"] = params
+	}
+	return wire.Obj{Tag: "Transform", Fields: fields}, true
+}
+
 // liveSourceBinding reports a Phase-818 preserved LIVE Transform source — a
 // binding-shaped source (State / Selection / Query) the decoder kept verbatim
 // so a runtime re-evaluates the pipeline with subscription semantics. This
@@ -421,6 +455,14 @@ func trailingGlobalCount(t wire.Obj) bool {
 // other binding resolves via resolveBinding then stringifies — so a
 // `Selection.defaultValue` in a text slot renders resolved (Phase 629).
 func resolveScalarText(binding wire.Value, sources BindingSources) (string, bool) {
+	if e, ok := exprBinding(binding); ok {
+		// Phase 1534 — the scalar expression, through the same 1x1 law.
+		cell, outcome := evalScalarTransform(e, sources)
+		if outcome == scalarResolved {
+			return displayString(cell), true
+		}
+		return "", false
+	}
 	if t, ok := transformBinding(binding); ok {
 		cell, outcome := evalScalarTransform(t, sources)
 		if outcome == scalarResolved {
@@ -441,6 +483,20 @@ func resolveScalarText(binding wire.Value, sources BindingSources) (string, bool
 // every other binding resolves via resolveBinding unchanged, so non-Transform
 // slots keep their established behaviour.
 func resolveScalarNumber(binding wire.Value, sources BindingSources) wire.Value {
+	if e, ok := exprBinding(binding); ok {
+		// Phase 1534 — the scalar expression. Admitted only when numeric, on the
+		// same rule the Transform arm below follows: a text / bool / date cell in
+		// a numeric slot renders absence, never a wrong number.
+		cell, outcome := evalScalarTransform(e, sources)
+		if outcome != scalarResolved {
+			return nil
+		}
+		switch cell.(type) {
+		case wire.Int, wire.Float:
+			return cell
+		}
+		return nil
+	}
 	if t, ok := transformBinding(binding); ok {
 		cell, outcome := evalScalarTransform(t, sources)
 		if outcome != scalarResolved {
