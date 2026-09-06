@@ -121,7 +121,14 @@ func (r *renderer) drawStyleAttrs(style wire.Value, defaultFillNone bool) string
 
 	if v, ok := f["fill"]; ok {
 		if resolved := resolveBinding(v, r.sources); resolved != nil {
-			b.WriteString(` fill="` + drawEscape(displayString(resolved)) + `"`)
+			// A paint is a CLOSED colour grammar, not a free string. drawEscape
+			// makes a value safe as MARKUP and says nothing about what it MEANS,
+			// and url(https://collector/x) in an SVG fill names a paint server the
+			// user agent FETCHES — on render, with no user act, outside the egress
+			// policy. It also contains no character the generic CSS rule forbids,
+			// which is why these two slots need a positive grammar. A refused paint
+			// emits "none": an empty fill INHERITS the enclosing group's paint.
+			b.WriteString(` fill="` + drawEscape(SanitizePaintValue(displayString(resolved))) + `"`)
 		}
 	} else if defaultFillNone {
 		b.WriteString(` fill="none"`)
@@ -133,7 +140,7 @@ func (r *renderer) drawStyleAttrs(style wire.Value, defaultFillNone bool) string
 	}
 	if v, ok := f["stroke"]; ok {
 		if resolved := resolveBinding(v, r.sources); resolved != nil {
-			b.WriteString(` stroke="` + drawEscape(displayString(resolved)) + `"`)
+			b.WriteString(` stroke="` + drawEscape(SanitizePaintValue(displayString(resolved))) + `"`)
 		}
 	}
 	if v, ok := f["strokeWidth"]; ok {

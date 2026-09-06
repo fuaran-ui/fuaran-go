@@ -1,0 +1,28 @@
+{
+  "iterations": 250000,
+  "inputs": 500000,
+  "corpusSeeds": 450,
+  "corpusPresent": true,
+  "rejectCodes": {
+    "EMPTY_NODE_ID": 91,
+    "INVALID_JSON": 357198,
+    "LIMIT_EXCEEDED": 17641,
+    "MISSING_FIELD": 56285,
+    "UNKNOWN_DU_CASE": 3389,
+    "WRONG_NODE_KIND": 5964,
+    "WRONG_TYPE": 53796
+  },
+  "accepted": 5636,
+  "maxDecodeMs": 327.091,
+  "maxCanonicalAmplification": 1.968294229549778,
+  "elapsedSeconds": 380.4551007,
+  "seed": "20260906",
+  "config": "long",
+  "host": "fuaran-go",
+  "entryPoints": [
+    "DecodeNode",
+    "DecodeOp"
+  ],
+  "counterexamples": 0,
+  "generatedAt": "2026-09-06T21:57:52Z"
+}
