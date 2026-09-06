@@ -201,7 +201,13 @@ func (r *renderer) a11yAttrs(node wire.Node) []attr {
 	// resolves TRUE. False and unresolved both emit NOTHING — `aria-hidden`
 	// is not a tri-state, and emitting "false" on an unresolved binding would
 	// be a claim the tree never made.
-	if hidden, ok := resolveBinding(a11y.Fields["hidden"], r.sources).(wire.Bool); ok && bool(hidden) {
+	//
+	// Phase 1535 — through the SCALAR resolver. resolveBinding's Transform arm is
+	// row-shaped, so a pipeline yielding the 1x1 bool cell an author obviously
+	// meant here ("hide it when the grid is empty") could never resolve.
+	// resolveScalarBool reads the lone cell through the same seam every other
+	// scalar slot uses; every other binding case resolves exactly as before.
+	if hidden, ok := resolveScalarBool(a11y.Fields["hidden"], r.sources); ok && hidden {
 		out = append(out, attr{"aria-hidden", "true"})
 	}
 	return out
@@ -323,6 +329,19 @@ func withTooltipDescribedBy(hintID string, attrs []attr) []attr {
 // node is marked as an island, the boundary wrapper around it (whose children
 // are exactly this node's static HTML, so client hydration is mismatch-free).
 func (r *renderer) renderNode(node wire.Node) string {
+	// Phase 1535 — CONDITIONAL PRESENCE, before anything else is computed. A
+	// resolved false on the envelope's `visible` predicate emits NOTHING: no
+	// element, no placeholder, no aria-hidden, nothing in the layout and nothing
+	// in the accessibility tree. Absent, unresolved and errored predicates all
+	// render.
+	//
+	// The guard sits on this one function rather than at every call site that
+	// produces a child, so a kind added tomorrow inherits it without anyone
+	// remembering to.
+	if !isNodeVisible(node, r.sources) {
+		return ""
+	}
+
 	// Phase 1112 — the node-level tooltip trait. An EMPTY resolved hint emits
 	// NOTHING at all: no hint element, no aria-describedby, no focus stop. A
 	// declared hint that says nothing is markup that reveals an empty box on
@@ -2143,27 +2162,27 @@ func (r *renderer) mapVis(fields map[string]wire.Value) string {
 // the branch the client's first render will.
 func (r *renderer) switchKind(fields map[string]wire.Value) string {
 	valueStr := ""
+	selectorResolved := false
 	if key, ok := fields["stateKey"].(wire.Str); ok {
 		if current, found := r.sources[string(key)]; found {
 			valueStr = displayString(current)
+			selectorResolved = true
 		}
 	} else if on, ok := fields["on"]; ok {
-		if resolved := resolveBinding(on, r.sources); resolved != nil {
-			valueStr = displayString(resolved)
+		// Phase 1535 — the SCALAR resolver. resolveBinding's Transform arm is
+		// row-shaped and cannot serve a string slot, so a computed selector fell
+		// through to `default` with nothing saying why. Every other binding case
+		// resolves exactly as before.
+		if resolved, ok := resolveScalarText(on, r.sources); ok {
+			valueStr = resolved
+			selectorResolved = true
 		}
 	}
-	if cases, ok := fields["cases"].(wire.Arr); ok {
-		for _, item := range cases {
-			caseObj, ok := item.(wire.Obj)
-			if !ok {
-				continue
-			}
-			if match, ok := caseObj.Fields["match"].(wire.Str); ok && string(match) == valueStr {
-				if child, ok := asNode(caseObj.Fields["child"]); ok {
-					return r.renderNode(child)
-				}
-			}
-		}
+	// Phase 1535 — first-match-wins over both kinds of case, through the one
+	// shared definition, so this renderer cannot drift from the others on the
+	// order or on what a predicate that fails to resolve means.
+	if child, ok := selectSwitchCase(fields["cases"], valueStr, selectorResolved, r.sources); ok {
+		return r.renderNode(child)
 	}
 	if def, ok := asNode(fields["default"]); ok {
 		return r.renderNode(def)
