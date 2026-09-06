@@ -215,7 +215,7 @@ func sanitizeMarkdownHTML(html string) string {
 			// ASCII-only fold: the byte offsets below index into `result`, so the
 			// searched copy must stay byte-aligned with it (see asciiLower).
 			lower := asciiLower(result)
-			i := strings.Index(lower, openTag)
+			i := indexOfElementOpen(lower, openTag)
 			if i < 0 {
 				break
 			}
@@ -229,6 +229,75 @@ func sanitizeMarkdownHTML(html string) string {
 		}
 	}
 	result = stripEventHandlers(result)
-	result = dangerousProtocolRe.ReplaceAllString(result, "about:blank")
+	result = stripDangerousProtocols(result)
 	return result
+}
+
+// stripDangerousProtocols rewrites javascript: / vbscript: URLs to about:blank,
+// but only inside tag interiors — the same discipline stripEventHandlers
+// already keeps, and here for the same reason.
+//
+// Unanchored, this sweep rewrote VISIBLE PROSE. The markdown source
+// "Never write `javascript:` in an href" renders to a <code> element whose TEXT
+// is the literal token, and the substitution replaced it with about:blank — so a
+// document explaining the hazard could not state it, and the reader was shown a
+// sentence the author never wrote.
+//
+// A real javascript: URL can only do harm as the VALUE of an attribute — href,
+// src, action, formaction, xlink:href, data, poster — and every one of those
+// sits inside a <…> tag. Restricting the scan to tag interiors is therefore not
+// a heuristic narrowing: it is the precise set of positions where the token is a
+// URL rather than a word.
+//
+// Reusing tagSpanRe keeps this byte-for-byte with the handler sweep beside it,
+// and inherits the same approximation: a > inside a quoted attribute value ends
+// the span early, which SKIPS a rewrite — the direction of error that leaves
+// prose intact.
+func stripDangerousProtocols(html string) string {
+	return tagSpanRe.ReplaceAllStringFunc(html, func(tag string) string {
+		return dangerousProtocolRe.ReplaceAllString(tag, "about:blank")
+	})
+}
+
+// isTagNameBoundary reports whether index marks the end of a tag NAME.
+//
+// An HTML tag name ends at whitespace, `/` or `>`, so a match on the bare
+// prefix is a match on a DIFFERENT element: `<metadata>` is not `<meta>`, and
+// `<linearGradient>` is not `<link>`. Both are real SVG elements the drawing
+// builder emits, and with the bare prefix the first of them lost its opening
+// tag to this sweep, leaving the provenance document's text loose in the
+// figure.
+//
+// Requiring the boundary narrows only false positives: no spelling of a real
+// `<meta>` element survives it, because the name has to be delimited for a
+// parser to read it as that element in the first place. End of input counts as
+// a boundary, so a truncated `...<script` is still stripped.
+//
+// Parity-locked with the F# Sanitize.sanitizeMarkdownHtml and the TypeScript
+// renderer's sanitize.ts.
+func isTagNameBoundary(s string, index int) bool {
+	if index >= len(s) {
+		return true
+	}
+	c := s[index]
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '/' || c == '>'
+}
+
+// indexOfElementOpen finds the first "<tag" whose name is DELIMITED, i.e. the
+// first position where openTag names the element rather than merely prefixing a
+// longer name. Returns -1 when there is none.
+func indexOfElementOpen(s string, openTag string) int {
+	from := 0
+	for from <= len(s)-len(openTag) {
+		i := strings.Index(s[from:], openTag)
+		if i < 0 {
+			return -1
+		}
+		i += from
+		if isTagNameBoundary(s, i+len(openTag)) {
+			return i
+		}
+		from = i + 1
+	}
+	return -1
 }
