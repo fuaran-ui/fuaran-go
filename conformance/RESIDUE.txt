@@ -1,0 +1,55 @@
+# Conformance residue — the named, current set of failing tests in this host.
+#
+# WHAT THIS IS. Every line names one test (or subtest) that fails against the
+# CURRENT shared corpus on a clean tree. `cmd/conformance-residue` runs the whole
+# suite with no exclusions and compares what actually failed against this list:
+#
+#   * a failure NOT on this list is a REGRESSION      -> red, named;
+#   * a line on this list that now PASSES is STALE    -> red, named, delete it.
+#
+# Red in both directions is the whole point. It replaces a `go test -skip`
+# quarantine that could only ever be wrong in the second direction silently: the
+# patterns it carried named `form-toggle`, `now-environment-binding` and
+# `switch-on-selection`, which the decoder adopted on 2026-08-11, so by the time
+# this file was written the quarantine excluded eight WHOLE tests to suppress
+# three fixtures that had passed for weeks — and in doing so hid the nine real
+# failures below, none of which it names. A stale exclusion is worse than no
+# exclusion, because it reads as a measured cap.
+#
+# HOW TO SHRINK IT. Fix the decoder, delete the line, and the gate stays green.
+# There is no way to make this file grow that does not show up in a diff.
+#
+# `go test ./...` and `pwsh ./run.ps1` still run the suite RAW and will show
+# these as ordinary failures. That is deliberate: this file caps what BLOCKS,
+# never what is reported.
+#
+# ── Root causes, so a line is never just a name ─────────────────────────────
+#
+# (a) `Now.grain` is not modelled by the decoder. The round-trip loses the
+#     member, and the invalid-grain document is accepted.
+# (b) Non-BMP (astral-plane) characters in a JSON object KEY do not survive the
+#     round trip — `𝄞` re-encodes as a replacement character.
+# (c) `encoding/json` is more permissive than the wire format requires: it
+#     accepts duplicate object keys, and it substitutes U+FFFD for lone or split
+#     surrogates instead of refusing the document. The four reject vectors below
+#     all need a scanner that refuses rather than repairs.
+# (d) The §1521 integer lenience rules are unimplemented: an integral float in an
+#     int slot is refused where the corpus accepts it, and an integer beyond
+#     2^53 is not normalised to the boundary value.
+
+# (a) Now.grain
+TestRoundTrip/now-grain
+TestReject/reject-now-grain-invalid
+
+# (b) astral-plane object keys
+TestRoundTrip/custom-nonascii-keys
+
+# (c) encoding/json repairs what the wire format refuses
+TestReject/reject-json-duplicate-key
+TestReject/reject-json-lone-high-surrogate
+TestReject/reject-json-lone-low-surrogate
+TestReject/reject-json-surrogate-pair-split
+
+# (d) §1521 integer lenience
+TestLenientAccept/lenient-1521-int-slot-integral-float
+TestLenientAccept/lenient-1521-payload-integer-beyond-int53

@@ -26,13 +26,23 @@ on:
   push:
     branches: [main]
 
+# Least privilege, stated rather than inherited. The cross-repo dispatch below
+# runs on a SHORT-LIVED App installation token, never on the job's own token, so
+# the default one needs nothing beyond reading this repository.
+permissions:
+  contents: read
+
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
       - name: Mint a workspace App installation token
         id: workspace-token
-        uses: actions/create-github-app-token@v2
+        # SHA-PINNED, not tag-pinned: this step receives the App private key and
+        # mints a token with `Contents: write` on the dispatch target, so a moved
+        # `v2` is credential-bearing code nobody reviewed. `# v2.2.2` records
+        # which release the digest is; Dependabot proposes the bumps.
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: 4797739 # fuaran-ui-workspace-broker
           private-key: ${{ secrets.FUARAN_WORKSPACE_APP_PRIVATE_KEY }}

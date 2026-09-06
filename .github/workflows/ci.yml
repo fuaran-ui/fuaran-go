@@ -15,6 +15,21 @@
 # Every corpus-dependent test calls t.Skip when the corpus is absent, so a
 # layout drift would not fail the job — it would silently retire the entire
 # conformance leg and report green. The assertion turns that into a hard stop.
+#
+# ── What replaced the quarantine ─────────────────────────────────────────────
+# This job used to carry a `go test -skip` quarantine: two env patterns naming
+# eight whole tests and three fixtures. A skip pattern is structurally incapable
+# of telling you it has stopped matching anything, and this one had: the three
+# fixtures it named (form-toggle, now-environment-binding, switch-on-selection)
+# were adopted by the decoder on 2026-08-11, so it was excluding eight set-level
+# tests to suppress three cases that had passed for weeks — and hiding the nine
+# genuine failures it never mentioned.
+#
+# The gate is now `cmd/conformance-residue`: it runs the WHOLE suite with no
+# exclusions and compares what failed against the named set in
+# conformance/RESIDUE.txt, going red in BOTH directions — an unnamed failure is
+# a regression, and a named entry that now passes is a stale cap. The second
+# direction is the one a skip list could never report.
 
 name: CI
 
@@ -26,37 +41,6 @@ on:
 
 permissions:
   contents: read
-
-env:
-  # ── QUARANTINE ─────────────────────────────────────────────────────────────
-  # These cases fail on a clean tree TODAY, and are excluded from the blocking
-  # gate so that a NEW regression is caught while this existing drift stays
-  # visible. They are not a judgement that the cases are wrong — they are a
-  # record of known, understood, outstanding work.
-  #
-  # Single root cause: the shared corpus has moved ahead of this decoder. Three
-  # fixtures — form-toggle, now-environment-binding, switch-on-selection — carry
-  # vocabulary the decoder does not yet model (a `Toggle` form-field kind, a
-  # `Now` binding, and a required `stateKey` on `Switch`). The five whole tests
-  # below assert over the corpus as a SET, so they fail on the same three
-  # fixtures without offering a per-fixture subtest to exclude.
-  #
-  # Two invocations are needed because `go test -skip` splits its pattern on
-  # unbracketed slashes and matches each part positionally: one pattern cannot
-  # express both "skip this whole test" and "skip only these subtests".
-  #
-  #   QUARANTINE_WHOLE    — tests excluded entirely (the five set-level asserts,
-  #                         plus the three corpus-wide tests, which the second
-  #                         invocation then re-runs per-fixture).
-  #   QUARANTINE_FIXTURES — the three fixtures excluded from those corpus-wide
-  #                         tests. Every OTHER fixture in them is still gated.
-  #
-  # This list SHRINKS TO EMPTY when the decoder models that vocabulary. Delete
-  # entries as they start passing; do not add to it to make a red build green —
-  # a new failure here is the regression this gate exists to catch.
-  QUARANTINE_WHOLE: '^(TestFormFieldKindSetMatchesManifest|TestDiscriminatorExhaustiveness|TestDiffCorpusSelfIsEmpty|TestDiffCorpusPairsRoundTrip|TestDiffCorpusMutationRoundTrip|TestRoundTrip|TestClassVocabularyParity|TestAiToolsIntrospectionOverCorpus)$'
-  CORPUS_WIDE: '^(TestRoundTrip|TestClassVocabularyParity|TestAiToolsIntrospectionOverCorpus)$'
-  QUARANTINE_FIXTURES: '^(form-toggle|now-environment-binding|switch-on-selection)$'
 
 jobs:
   build:
@@ -103,15 +87,16 @@ jobs:
       - name: Build
         run: go build ./...
 
-      # Print what this gate does NOT cover, on every run. A cap nobody can see
-      # reads as "covered everything".
-      - name: Report the conformance quarantine
+      # Print what this gate does NOT block on, on every run. A cap nobody can
+      # see reads as "covered everything".
+      - name: Report the conformance residue
         run: |
-          echo "The blocking gate below EXCLUDES these known-failing cases:"
-          echo "  whole tests:  $QUARANTINE_WHOLE"
-          echo "  fixtures (within the corpus-wide tests): $QUARANTINE_FIXTURES"
+          echo "The blocking gate below runs the WHOLE suite and permits ONLY these"
+          echo "named failures (conformance/RESIDUE.txt):"
           echo
-          echo "ALSO NOT GATED HERE — inert rather than quarantined:"
+          grep -vE '^[[:space:]]*(#|$)' conformance/RESIDUE.txt | sed 's/^/  /'
+          echo
+          echo "ALSO NOT GATED HERE — inert rather than capped:"
           echo "  - the class-vocabulary parity oracle reads the reference host's source"
           echo "    from a sibling checkout this workflow does not make, so it Skipf's and"
           echo "    asserts NOTHING in CI. (This repo has been bitten by that before: a"
@@ -120,40 +105,27 @@ jobs:
           echo "    Cross-host parity is covered by the scheduled cross-implementation"
           echo "    run, not by this gate."
           {
-            echo "### Conformance quarantine (excluded from the blocking gate)"
+            echo "### Conformance residue (permitted failures, named)"
             echo
-            echo "Cause: the shared corpus carries vocabulary this decoder does not yet model"
-            echo "(\`Toggle\` form-field kind, \`Now\` binding, required \`Switch.stateKey\`)."
+            echo "Each line is a known, understood failure against the current corpus."
+            echo "An unnamed failure reds the gate; so does a named one that starts passing."
             echo
             echo '```'
-            echo "whole tests:  $QUARANTINE_WHOLE"
-            echo "fixtures:     $QUARANTINE_FIXTURES"
+            grep -vE '^[[:space:]]*(#|$)' conformance/RESIDUE.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Non-blocking: runs the FULL suite so the size of the existing drift is
-      # measured on every run rather than inferred from the quarantine list.
-      - name: Conformance drift (reported, non-blocking)
-        continue-on-error: true
-        run: |
-          set +e
-          go test ./... > drift.log 2>&1
-          tail -40 drift.log
-          {
-            echo "### Full suite, including quarantined cases (non-blocking)"
-            echo
-            echo '```'
-            grep -cE '^--- FAIL|^    --- FAIL' drift.log | sed 's/^/failing test lines: /'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+      # THE GATE — the whole suite, no exclusions, measured against the named
+      # residue set. `-count=1` is inside the runner: the corpus is a sibling
+      # checkout OUTSIDE this module, so Go's test cache cannot see it change and
+      # a cached PASS could otherwise stand in for a run against a moved corpus.
+      - name: Test (gated — full suite vs the named residue)
+        run: go run ./cmd/conformance-residue
 
-      # THE GATE, part 1 — every package, every test outside the quarantine.
-      - name: Test (gated — all packages outside the quarantine)
-        run: go test ./... -skip "$QUARANTINE_WHOLE"
-
-      # THE GATE, part 2 — the three corpus-wide tests, run over every fixture
-      # EXCEPT the three quarantined ones. Without this step the quarantine
-      # would silently drop ~96 fixtures per test rather than three.
-      - name: Test (gated — corpus-wide tests, quarantined fixtures excluded)
-        run: go test ./conformance/... -run "$CORPUS_WIDE" -skip "$CORPUS_WIDE/$QUARANTINE_FIXTURES"
+      # The gate's own go-red proof. It re-runs the comparison against two
+      # deliberately wrong residue sets — one missing a current failure (a
+      # regression), one naming a test that cannot fail (a stale cap) — and fails
+      # if either goes unnoticed. Without it, a bug that made the failure set come
+      # back empty would leave this job green forever.
+      - name: Gate self-test (it must go red in both directions)
+        run: go run ./cmd/conformance-residue -selftest
