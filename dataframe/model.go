@@ -289,6 +289,11 @@ const (
 	UnknownType    = "UNKNOWN_TYPE"
 	TypeMismatch   = "TYPE_MISMATCH"
 	LengthMismatch = "LENGTH_MISMATCH"
+	// LimitExceeded — the document is well-formed but breaches a §21 wire
+	// limit (depth, string length, array/object width). Distinct from NotJSON
+	// because §21.2 rule 2 forbids reporting a well-formed-but-too-large
+	// document as malformed: it sends an author to repair the wrong thing.
+	LimitExceeded = "LIMIT_EXCEEDED"
 )
 
 // ColumnError is a wire-shape violation.

@@ -3,6 +3,8 @@ package thememanifest
 import (
 	"encoding/json"
 	"sort"
+
+	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
 // sortedKeys yields an object's keys in a deterministic order (Go maps are
@@ -38,7 +40,21 @@ func asStr(v any) *string {
 func asNum(v any) *float64 {
 	// A JSON bool decodes to a Go bool (not float64), so it is excluded here —
 	// matching the Python _as_num guard.
-	if f, ok := v.(float64); ok {
+	//
+	// json.Number is accepted alongside float64 because the parse now runs
+	// through wire.ParseBounded, which uses UseNumber to preserve the
+	// int-vs-float distinction the canonical wire requires. A manifest number is
+	// a ratio or a weight and is wanted as a float either way, so this converts
+	// rather than branching further out; float64 stays accepted so a caller
+	// handing us a value parsed some other way still works.
+	switch n := v.(type) {
+	case float64:
+		return &n
+	case json.Number:
+		f, err := n.Float64()
+		if err != nil {
+			return nil
+		}
 		return &f
 	}
 	return nil
@@ -201,10 +217,19 @@ func OfJSON(root any) ThemeManifest {
 	return ThemeManifest{Meta: AnonymousMeta, Tokens: walkTokens("", root)}
 }
 
-// Decode decodes a manifest from JSON; returns an error on a parse failure.
+// Decode decodes a manifest from JSON; returns an error on a parse failure or a
+// §21 limit breach.
+//
+// The parse runs through wire.ParseBounded rather than encoding/json directly.
+// A manifest is untrusted text — it is exactly the artefact a design system
+// hands over — and this walk is recursive over the token tree, so nothing else
+// bounded its depth, its string lengths or its object widths. A breach comes
+// back as a *wire.DecodeError with code LIMIT_EXCEEDED rather than as a syntax
+// error, which is the classification §21.2 rule 2 requires for a well-formed
+// document that is merely too large.
 func Decode(jsonStr string) (ThemeManifest, error) {
-	var root any
-	if err := json.Unmarshal([]byte(jsonStr), &root); err != nil {
+	root, err := wire.ParseBounded(jsonStr)
+	if err != nil {
 		return EmptyManifest, err
 	}
 	return OfJSON(root), nil

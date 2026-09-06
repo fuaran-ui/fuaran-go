@@ -237,11 +237,20 @@ func EncodePipeline(pipeline []Transform) (string, error) {
 
 func cerr(code, detail string) *ColumnError { return &ColumnError{Code: code, Detail: detail} }
 
+// parseJSON parses one Compute-layer document under the §21 limits.
+//
+// This is the HOST-FED Query path — a column pipeline arrives as text from
+// wherever the host got it — and it used to call encoding/json directly, so no
+// §21 limit reached it at all. A 10 001-deep payload was reported as NOT_JSON,
+// which is both wrong (the document is well-formed) and misleading (rule 2
+// forbids that classification precisely because it sends an author to repair
+// the wrong thing). Strings and arrays were unbounded outright.
 func parseJSON(text string) (any, *ColumnError) {
-	dec := json.NewDecoder(strings.NewReader(text))
-	dec.UseNumber()
-	var raw any
-	if err := dec.Decode(&raw); err != nil {
+	raw, err := wire.ParseBounded(text)
+	if err != nil {
+		if de, ok := err.(*wire.DecodeError); ok && de.Code == wire.CodeLimitExceeded {
+			return nil, cerr(LimitExceeded, de.Message)
+		}
 		return nil, cerr(NotJSON, err.Error())
 	}
 	return raw, nil

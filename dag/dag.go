@@ -156,7 +156,11 @@ func EncodeDagRecord(record Record) (string, error) {
 // DecodeDagRecord decodes a canonical-wire DAG-record document. Never panics;
 // returns a *wire.DecodeError on any wire-shape violation.
 func DecodeDagRecord(text string) (Record, error) {
-	raw, err := wire.ParseCanonical(text)
+	// ParseBounded, not ParseCanonical: the envelope's own strings and arrays —
+	// the actor, the message, the parent list — are read straight off this
+	// parse and never pass through the node or op decoders, so ParseCanonical's
+	// syntactic-depth bound was the only §21 limit reaching them.
+	raw, err := wire.ParseBounded(text)
 	if err != nil {
 		return Record{}, err
 	}

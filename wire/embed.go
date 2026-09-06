@@ -21,6 +21,33 @@ func ParseCanonical(text string) (raw any, err error) {
 	return parseJSON(text), nil
 }
 
+// ParseBounded parses exactly one JSON document under the FULL §21 limit set —
+// syntactic depth on the way down, then string length and array/object width
+// over the parsed result — and returns the raw value for a downstream decoder
+// to walk. A breach is a *DecodeError with code LIMIT_EXCEEDED; malformed input
+// is INVALID_JSON at "$".
+//
+// USE THIS, not encoding/json, at every entry point that reads untrusted text.
+//
+// ParseCanonical bounds syntactic depth only, because the node and op decoders
+// downstream of it apply the remaining §21 axes themselves as they walk. An
+// entry point that parses text and then reads the result WITHOUT going through
+// those decoders — a column pipeline, a theme manifest, a capability
+// declaration — gets no other bound at all, so the limits reach it only if it
+// asks. Four such entry points each rolled their own encoding/json call and
+// answered a 10 001-deep document with a syntax error, which §21.2 rule 2
+// explicitly forbids for a document that is well-formed and merely too large:
+// it sends an author to repair the wrong thing.
+//
+// The cost is one extra iterative pass over an already-parsed document, paid at
+// a trust boundary. It is not paid on the node/op path, which is the hot one.
+func ParseBounded(text string) (raw any, err error) {
+	defer recoverDecode(&err)
+	parsed := parseJSON(text)
+	checkShape(parsed)
+	return parsed, nil
+}
+
 // DecodeOpValue decodes a TreeOp from an already-parsed value (as produced by
 // ParseCanonical), for an op nested inside a larger document. Malformed input
 // returns a *DecodeError.
