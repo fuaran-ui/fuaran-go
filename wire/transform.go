@@ -853,3 +853,78 @@ func decodeComputePipeline(raw any) Value {
 	}
 	return out
 }
+
+// exprWalk walks one decoded ColExpr, collecting its `param` names into names
+// and counting its nodes into count; it returns true when a `col` reference is
+// present (Phase 1534).
+//
+// Written here rather than derived from the algebra because neither question is
+// the ALGEBRA's: `col` is perfectly ordinary in a pipeline expression, and the
+// node ceiling is this WIRE's limit. One traversal answers both, and it stops as
+// soon as either verdict is settled — a hostile expression is exactly the input
+// that must not be walked to the end.
+func exprWalk(expr Value, names *[]string, count *int) bool {
+	*count++
+	if *count > MaxExprNodes {
+		return false
+	}
+	o, ok := expr.(Obj)
+	if !ok {
+		return false
+	}
+	push := func(n string) {
+		for _, seen := range *names {
+			if seen == n {
+				return
+			}
+		}
+		*names = append(*names, n)
+	}
+	switch o.Tag {
+	case "col":
+		return true
+	case "param":
+		if n, ok := o.Fields["name"].(Str); ok {
+			push(string(n))
+		}
+		return false
+	}
+	sawCol := false
+	for _, key := range []string{"expr", "left", "right", "else"} {
+		if child, ok := o.Fields[key]; ok {
+			if exprWalk(child, names, count) {
+				sawCol = true
+			}
+		}
+	}
+	for _, key := range []string{"exprs", "args", "items"} {
+		if children, ok := o.Fields[key].(Arr); ok {
+			for _, child := range children {
+				if exprWalk(child, names, count) {
+					sawCol = true
+				}
+			}
+		}
+	}
+	if branches, ok := o.Fields["cases"].(Arr); ok {
+		for _, branch := range branches {
+			if bo, ok := branch.(Obj); ok {
+				for _, key := range []string{"when", "then"} {
+					if child, ok := bo.Fields[key]; ok {
+						if exprWalk(child, names, count) {
+							sawCol = true
+						}
+					}
+				}
+			}
+		}
+	}
+	if o.Tag == "in" {
+		// The `in`/`param` spelling names a LIST param in a `param` MEMBER
+		// rather than in a nested `param` node, so the walk above cannot see it.
+		if p, ok := o.Fields["param"].(Str); ok {
+			push(string(p))
+		}
+	}
+	return sawCol
+}

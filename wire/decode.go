@@ -2,6 +2,7 @@ package wire
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"sort"
@@ -648,7 +649,7 @@ var (
 	// a bare-Binding slot, accepted leniently and unwrapped in place.
 	bindingCases = newCaseSet(
 		"Static", "Query", "Filter", "Selection", "State", "Now", "Computed",
-		"I18n", "Local", "Format", "Data", "Transform", "Invoke", "Bound",
+		"I18n", "Local", "Format", "Data", "Transform", "Expr", "Invoke", "Bound",
 	)
 	cellFormatCases = newCaseSet("None", "Number", "Currency", "Percent", "SignificantDigits", "Date", "Duration", "RelativeTime", "Custom")
 	// Phase 819 — the Duration / RelativeTime format enums (shared by the
@@ -1267,6 +1268,61 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 			}
 		}
 		return Obj{Tag: "Transform", Fields: fields}
+	case "Expr":
+		// Phase 1534 — the scalar expression binding (WIRE_FORMAT §3.3.2). One
+		// ColExpr in the SAME encoding the pipeline's steps carry — the case
+		// mints no operator — plus the same optional `params` list Transform
+		// carries, decoded by the same helper.
+		//
+		// Three refusals, all here because each wants a $-rooted path and a
+		// code: a `col` reference (an Expr has no row, so `col` names nothing —
+		// and the remedy is a different BINDING, which the message says), a
+		// `param` this binding's own `params` does not bind (decidable
+		// statically here where it is NOT for Transform, whose unbound filter
+		// params are pruned under the deliberate unset-chip leniency), and an
+		// expression over MaxExprNodes.
+		exprRaw := require(obj, "expr", path)
+		expr := atComputePath(path+".expr", func() Value { return decodeComputeExpr(exprRaw) })
+		var names []string
+		count := 0
+		sawCol := exprWalk(expr, &names, &count)
+		if sawCol {
+			failExpecting(CodeWrongType, path+".expr",
+				"a `col` reference is not admitted inside an Expr binding — an Expr evaluates against its params alone and has no row for a column name to read. Use `Binding.Transform`, whose source supplies the frame, and put the column expression in a `derive` step",
+				"a ColExpr over `param` / `lit` / operators only (no `col`)")
+		}
+		if count > MaxExprNodes {
+			failExpecting(CodeLimitExceeded, path+".expr",
+				fmt.Sprintf("expression exceeds the maximum of %d expression nodes (WIRE_FORMAT 21)", MaxExprNodes),
+				fmt.Sprintf("at most %d ColExpr nodes in one Expr binding", MaxExprNodes))
+		}
+		exprFields := map[string]Value{"expr": expr}
+		bound := map[string]bool{}
+		if raw, ok := obj["params"]; ok {
+			params := decodeTransformParams(w, raw, path+".params")
+			for _, p := range params {
+				if po, ok := p.(Obj); ok {
+					if n, ok := po.Fields["name"].(Str); ok {
+						bound[string(n)] = true
+					}
+				}
+			}
+			if len(params) > 0 {
+				exprFields["params"] = params
+			}
+		}
+		var missing []string
+		for _, n := range names {
+			if !bound[n] {
+				missing = append(missing, "'"+n+"'")
+			}
+		}
+		if len(missing) > 0 {
+			failExpecting(CodeWrongType, path+".expr",
+				"the expression reads param(s) "+strings.Join(missing, ", ")+" that this binding's `params` does not bind — an Expr has no rows and no filter to prune, so an unbound param has no value to take; add a params entry naming each, or drop the reference",
+				`{"$type":"Expr","expr":{…},"params":[{"name":"<name>","from":<Binding>}]}`)
+		}
+		return Obj{Tag: "Expr", Fields: exprFields}
 	case "Invoke":
 		capabilityID := expectString(require(obj, "capabilityId", path), path+".capabilityId")
 		args := decodeInvokeArgs(w, require(obj, "args", path), path+".args")

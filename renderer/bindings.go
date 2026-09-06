@@ -62,6 +62,16 @@ func resolveBinding(binding wire.Value, sources BindingSources) wire.Value {
 	if obj.Tag == "Static" {
 		return obj.Fields["value"]
 	}
+	// Phase 1534 — the scalar expression in a slot with no coercion. A null
+	// result, and a failed evaluation, are both nil here: this seam has no error
+	// channel, and a text or numeric slot goes through resolveScalar* above,
+	// which distinguishes them.
+	if e, ok := exprBinding(obj); ok {
+		if cell, outcome := evalScalarTransform(e, sources); outcome == scalarResolved {
+			return cell
+		}
+		return nil
+	}
 	if key, ok := bindingKey(obj); ok {
 		if v, found := sources[key]; found {
 			return v

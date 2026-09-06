@@ -91,6 +91,23 @@ const (
 	// in the input, but the constant is not: a decoded tree is far larger in
 	// memory than the bytes that produced it.
 	MaxNodes = 100000
+
+	// MaxExprNodes bounds the ColExpr nodes in ONE Binding.Expr expression
+	// (WIRE_FORMAT.md §21.8, Phase 1534). Counted per expression, not per
+	// document: a tree may carry many Expr bindings, each bounded here, with the
+	// whole still bounded by MaxDocumentBytes. A breach is LIMIT_EXCEEDED at the
+	// path of the `expr` member.
+	//
+	// ONE count and not a count plus a depth: depth <= node count for every
+	// expression, so an expression 600 deep is already 600 nodes and already
+	// refused, and a second number would be one more figure to keep in step
+	// across the hosts while refusing nothing this one does not.
+	//
+	// Its SCOPE is Binding.Expr and nothing else. A ColExpr inside a
+	// Binding.Transform pipeline is NOT bounded by it, and was not bounded before
+	// it either — stated rather than left to be inferred, because a limit whose
+	// scope is guessed at is worse than no limit.
+	MaxExprNodes = 512
 )
 
 // walkState carries one decode call's §21 counters. Created per call, threaded
