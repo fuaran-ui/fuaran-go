@@ -686,6 +686,8 @@ var (
 	actionCases       = newCaseSet(
 		"Chain", "Dispatch", "Navigate", "SetState", "Notify", "WriteToClipboard",
 		"ReadFileBody", "Call", "AiTool", "CommitLocal", "Invoke", "Print",
+		// Phase 1537 — the confirm-before-action dialogue and the focus move.
+		"Confirm", "Focus",
 	)
 	callTargetCases = newCaseSet("State", "Query")
 )
@@ -1688,6 +1690,38 @@ func decodeAction(w *walkState, raw any, path string) Value {
 				"no member beside $type — Print takes no payload (WIRE_FORMAT.md §3.6.14)")
 		}
 		return Obj{Tag: tag, Fields: map[string]Value{}}
+	case "Confirm":
+		// Phase 1537 — ask, then act. `prompt` is a `TextSource` (so the question
+		// can name what the reader selected), `onConfirm` is required and
+		// `onCancel` optional; an author who declares no cancel branch means
+		// "nothing happens", which an absent action already expresses.
+		//
+		// THE DEPTH-ONE REFUSAL is the substance of this arm. A `Confirm`
+		// reachable from either continuation is refused, and the check walks the
+		// DECODED continuation rather than its immediate `$type`, so a nested
+		// confirm inside a `Chain` is caught by the same line that catches a
+		// bare one. A dialogue that answers a dialogue is a modal stack the
+		// reader cannot escape, and it says nothing one question does not.
+		//
+		// WRONG_TYPE follows the `SetState` value/valueFrom and Print-with-
+		// payload precedents: a decoder POLICY refusal reuses it rather than
+		// minting a code every host in the roster would owe an adoption for.
+		prompt := decodeTextSource(w, require(obj, "prompt", path), path+".prompt")
+		onConfirm := decodeAction(w, require(obj, "onConfirm", path), path+".onConfirm")
+		refuseNestedConfirm(onConfirm, path+".onConfirm")
+		fields := map[string]Value{"onConfirm": onConfirm, "prompt": prompt}
+		if rawCancel, ok := obj["onCancel"]; ok {
+			onCancel := decodeAction(w, rawCancel, path+".onCancel")
+			refuseNestedConfirm(onCancel, path+".onCancel")
+			fields["onCancel"] = onCancel
+		}
+		return Obj{Tag: tag, Fields: fields}
+	case "Focus":
+		// Phase 1537 — a bare node id, the `CommitLocal` shape above. It
+		// addresses a node in THIS document, so there is nothing for a binding
+		// to compute and no `TextSource` here.
+		focusNodeID := expectString(require(obj, "nodeId", path), path+".nodeId")
+		return Obj{Tag: tag, Fields: map[string]Value{"nodeId": Str(focusNodeID)}}
 	case "ReadFileBody":
 		fileRef := expectString(require(obj, "fileRef", path), path+".fileRef")
 		encoding := enumStr(require(obj, "encoding", path), path+".encoding",
@@ -1701,6 +1735,34 @@ func decodeAction(w *walkState, raw any, path string) Value {
 		capabilityID := expectString(require(obj, "capabilityId", path), path+".capabilityId")
 		args := decodeInvokeArgs(w, require(obj, "args", path), path+".args")
 		return Obj{Tag: tag, Fields: map[string]Value{"args": args, "capabilityId": Str(capabilityID)}}
+	}
+}
+
+// refuseNestedConfirm fails when a `Confirm` is reachable from `action`
+// (Phase 1537). Confirmation is bounded at ONE question: a dialogue that
+// answers a dialogue is a modal stack the reader cannot escape, and it
+// expresses no intent a single question does not.
+//
+// It walks the DECODED action rather than raw JSON, and descends `Chain`,
+// because a chain is otherwise a hiding place — a check written against the
+// continuation's immediate `$type` passes a nested confirm one level down.
+func refuseNestedConfirm(action Value, path string) {
+	obj, ok := action.(Obj)
+	if !ok {
+		return
+	}
+	switch obj.Tag {
+	case "Confirm":
+		fail(CodeWrongType, path,
+			"a Confirm may not appear inside another Confirm's continuation — confirmation is bounded at one question (WIRE_FORMAT.md §3.6.22)")
+	case "Chain":
+		ops, isArr := obj.Fields["ops"].(Arr)
+		if !isArr {
+			return
+		}
+		for i, inner := range ops {
+			refuseNestedConfirm(inner, path+".ops["+strconv.Itoa(i)+"]")
+		}
 	}
 }
 
