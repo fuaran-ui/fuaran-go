@@ -476,6 +476,111 @@ func resolveScalarText(binding wire.Value, sources BindingSources) (string, bool
 	return "", false
 }
 
+// resolveScalarBool resolves a boolean-slot binding to (value, true), or
+// (false, false) when unresolved / ambiguous / non-boolean (Phase 1535).
+//
+// The third of the trio beside resolveScalarText / resolveScalarNumber, so a
+// Transform or an Expr reaches a boolean slot through the same 1x1 seam a text
+// or numeric one does.
+//
+// STRICT: only a genuine boolean resolves. 0, "" and "false" are all refused
+// rather than read as false, because every language that has guessed at
+// truthiness has guessed differently and five hosts agreeing on a rendering is
+// the whole point of the corpus. The vocabulary already carries the total
+// spellings (isNull, =, not), so refusing costs an author nothing but the
+// explicit operator.
+func resolveScalarBool(binding wire.Value, sources BindingSources) (bool, bool) {
+	if e, ok := exprBinding(binding); ok {
+		cell, outcome := evalScalarTransform(e, sources)
+		if outcome != scalarResolved {
+			return false, false
+		}
+		b, isBool := cell.(wire.Bool)
+		return bool(b), isBool
+	}
+	if t, ok := transformBinding(binding); ok {
+		cell, outcome := evalScalarTransform(t, sources)
+		if outcome != scalarResolved {
+			return false, false
+		}
+		b, isBool := cell.(wire.Bool)
+		return bool(b), isBool
+	}
+	b, ok := resolveBinding(binding, sources).(wire.Bool)
+	return bool(b), ok
+}
+
+// ── Conditional presence and predicate branching (Phase 1535) ───────────────
+//
+// Two decisions a renderer takes BEFORE it draws anything, stated once here so
+// every rendering surface in this package takes them identically.
+
+// isNodeVisible is THE rule for whether a node reaches the output at all
+// (WIRE_FORMAT §3.1).
+//
+// A node is removed ONLY on a resolved false. An absent predicate, an
+// unresolved one and an errored one all RENDER, and the asymmetry is the design
+// rather than a leniency: a false is an author saying "not now", and every
+// other outcome is the renderer failing to answer the question. Content that
+// vanishes because a source was missing is the one failure a reader cannot see,
+// cannot report and cannot work around.
+func isNodeVisible(node wire.Node, sources BindingSources) bool {
+	raw, declared := node.Extras["visible"]
+	if !declared {
+		return true
+	}
+	value, ok := resolveScalarBool(raw, sources)
+	return !ok || value
+}
+
+// selectSwitchCase is first-match-wins over BOTH kinds of case: a literal
+// `match` compared against the already-resolved selector, and a `when`
+// predicate evaluated here (Phase 1535).
+//
+// selector is the switch's resolved `on` value; selectorResolved says whether
+// it resolved at all, because "" is a legal match string and would otherwise be
+// indistinguishable from absence. A predicate case ignores both — which is why
+// a switch whose cases are all predicates needs no selector.
+//
+// A predicate case is taken ONLY on a resolved true; false, unresolved and
+// errored all fall through to the next case and ultimately to `default`. That
+// is the OPPOSITE default from isNodeVisible, and deliberately so: falling
+// through here lands on a `default` branch the author wrote, so no content
+// disappears — whereas a node with no verdict has no fallback.
+func selectSwitchCase(cases wire.Value, selector string, selectorResolved bool, sources BindingSources) (wire.Node, bool) {
+	arr, ok := cases.(wire.Arr)
+	if !ok {
+		return wire.Node{}, false
+	}
+	for _, item := range arr {
+		caseObj, ok := item.(wire.Obj)
+		if !ok {
+			continue
+		}
+		if match, hasMatch := caseObj.Fields["match"].(wire.Str); hasMatch {
+			if selectorResolved && string(match) == selector {
+				if child, ok := asNode(caseObj.Fields["child"]); ok {
+					return child, true
+				}
+			}
+			continue
+		}
+		// A case carrying neither is unreachable from the wire (the decoder
+		// refuses it) and reported pre-emit; it is skipped rather than asserted
+		// away because a tree built in-process can still hold one.
+		when, hasWhen := caseObj.Fields["when"]
+		if !hasWhen {
+			continue
+		}
+		if value, ok := resolveScalarBool(when, sources); ok && value {
+			if child, ok := asNode(caseObj.Fields["child"]); ok {
+				return child, true
+			}
+		}
+	}
+	return wire.Node{}, false
+}
+
 // resolveScalarNumber resolves a numeric-slot binding (Metric / LabelValueRow
 // value) to a wire numeric value, or nil when unresolved / ambiguous / empty. A
 // `Transform` yields its 1×1 result cell, admitted only when numeric (a text /

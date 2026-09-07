@@ -140,11 +140,40 @@ func checkSwitch(kind wire.Obj, path string, findings *[]Finding) {
 	}
 	seen := make(map[string]bool)
 	reported := make(map[string]bool)
-	for _, item := range cases {
+	for index, item := range cases {
 		caseObj, ok := item.(wire.Obj)
 		if !ok {
 			continue
 		}
+		// Phase 1535 — FUARAN147: a case selects on a string `match` XOR a
+		// `when` predicate. The PRE-EMIT twin of the decoder's own refusal, and
+		// it exists for the reason every pre-emit shape rule does: a tree
+		// authored in Go never passes through the decoder, so without it the one
+		// shape the wire refuses is reachable by construction.
+		_, hasMatch := caseObj.Fields["match"]
+		_, hasWhen := caseObj.Fields["when"]
+		switch {
+		case hasMatch && hasWhen:
+			*findings = append(*findings, Finding{
+				Code: "FUARAN147", Path: fmt.Sprintf("%s.cases[%d]", path, index),
+				Message: "switch case carries both 'match' and 'when' — exactly one selects a case; " +
+					"'match' compares the switch's `on` selector against a literal, 'when' evaluates " +
+					"a Binding<bool> and needs no selector",
+				Severity: SeverityError,
+			})
+		case !hasMatch && !hasWhen:
+			*findings = append(*findings, Finding{
+				Code: "FUARAN147", Path: fmt.Sprintf("%s.cases[%d]", path, index),
+				Message: "switch case carries neither 'match' nor 'when' — a case that names no " +
+					"condition can never be selected; give it a literal 'match' against the switch's " +
+					"`on` selector, or a 'when' Binding<bool> predicate",
+				Severity: SeverityError,
+			})
+		}
+		// FUARAN082 is over the MATCH cases only (Phase 1535). Two predicate
+		// cases are not duplicates of each other: `when` carries a binding, two
+		// bindings equal today may resolve differently tomorrow, and structural
+		// equality of two predicates is not the question this rule asks.
 		match, ok := caseObj.Fields["match"].(wire.Str)
 		if !ok {
 			continue

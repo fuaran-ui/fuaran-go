@@ -1976,11 +1976,38 @@ func decodeSingleNode(w *walkState, raw any, path string) Value {
 	return decodeNodeValue(w, raw, path)
 }
 
+// decodeSwitchCase decodes one Switch case.
+//
+// Phase 1535 — a case selects on a string `match` XOR a `when` predicate (a
+// Binding<bool> evaluated at render time). Exactly one; both and neither are
+// refused, naming both fields, on the Phase 818 `value` / `valueFrom`
+// precedent.
+//
+// "Neither" is refused rather than skipped at render because a case that names
+// no condition has no rendering that could be right: skipping it renders the
+// `default` and reports nothing.
 func decodeSwitchCase(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	child := decodeNodeValue(w, require(obj, "child", path), path+".child")
-	match := expectString(require(obj, "match", path), path+".match")
-	return Obj{Fields: map[string]Value{"child": child, "match": Str(match)}}
+	matchRaw, hasMatch := obj["match"]
+	whenRaw, hasWhen := obj["when"]
+	if hasMatch && hasWhen {
+		fail(CodeWrongType, path+".when",
+			"Switch case carries both 'match' and 'when' — exactly one is allowed: either 'match' "+
+				"(a literal string compared against the switch's `on` selector) or 'when' (a "+
+				"Binding<bool> predicate evaluated at render time, needing no selector)")
+	}
+	if !hasMatch && !hasWhen {
+		fail(CodeMissingField, path+".match",
+			"Switch case carries neither 'match' nor 'when' — give it a literal string under 'match' "+
+				"(compared against the switch's `on` selector), or a Binding<bool> under 'when' (a "+
+				"predicate evaluated at render time)")
+	}
+	if hasMatch {
+		match := expectString(matchRaw, path+".match")
+		return Obj{Fields: map[string]Value{"child": child, "match": Str(match)}}
+	}
+	return Obj{Fields: map[string]Value{"child": child, "when": decodeBinding(w, whenRaw, path+".when")}}
 }
 
 func decodeSwitchCases(w *walkState, raw any, path string) Value {
@@ -4249,6 +4276,13 @@ func decodeNodeValue(w *walkState, raw any, path string) Node {
 	// never decoded, and it stays an unknown key tolerated under rule 2.
 	if raw, ok := obj["tooltip"]; ok {
 		extras["tooltip"] = decodeTextSource(w, raw, path+".tooltip")
+	}
+	// Phase 1535 — the node-level visibility predicate. An ordinary optional
+	// Binding<bool>, decoded by the shared binding decoder for the reason the
+	// tooltip above states: the one time a host read a node-envelope slot as its
+	// own narrower thing it took two hosts and a ruling to unwind.
+	if raw, ok := obj["visible"]; ok {
+		extras["visible"] = decodeBinding(w, raw, path+".visible")
 	}
 	return Node{ID: id, Kind: kind, Extras: extras}
 }
