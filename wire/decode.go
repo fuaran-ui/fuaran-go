@@ -631,6 +631,13 @@ var (
 	// answer to an unknown token is to say which of the two was meant, not to
 	// widen the enum. `Modal` is the identity and omits at it.
 	modalityCases = newCaseSet("Modal", "Popover")
+	// Phase 1536 — which browsing context an `Action.Navigate` lands in. A bare
+	// enum (§3.5), omitted at `Self`. Two cases and NO lenient spelling: HTML's
+	// `_self` / `_blank` / `_parent` / `_top` are not accepted as aliases, because
+	// two of them are frame-busting gestures a hosted tree must not be able to ask
+	// for and accepting the two harmless ones would teach an emitter that the HTML
+	// vocabulary is the one in force here.
+	navigateTargetCases = newCaseSet("Self", "Blank")
 	// Phase 1116 — §3.6.10's `CaptureSource`, a closed pair. `Screen` is
 	// deliberately absent: the HTML capture attribute cannot ask for a display
 	// at all, and a screen capture is a standing grant reaching every window the
@@ -1635,8 +1642,25 @@ func decodeAction(w *walkState, raw any, path string) Value {
 		return Obj{Tag: tag, Fields: map[string]Value{"channel": Str(channel), "payload": payload}}
 	case "Navigate":
 		// Field aliases: href / url / to — the HTML / router prior.
-		route := expectString(requireAliased(obj, "route", path, "href", "url", "to"), path+".route")
-		return Obj{Tag: tag, Fields: map[string]Value{"route": Str(route)}}
+		//
+		// Phase 1536 — the route is a `TextSource`, not a bare string, so a tree
+		// can name a destination it computes from what the reader is looking at.
+		// The bare JSON string IS `Literal`'s canonical form, so every document
+		// written before the widening decodes exactly as it did — including one
+		// using an alias, since the aliases are resolved before the value is
+		// decoded and there is still exactly one canonical field a router can be
+		// reached through.
+		//
+		// `target` is omitted at `Self`, so absence is the pre-1536 behaviour.
+		route := decodeTextSource(w, requireAliased(obj, "route", path, "href", "url", "to"), path+".route")
+		fields := map[string]Value{"route": route}
+		if rawTarget, ok := obj["target"]; ok {
+			target := enumStr(rawTarget, path+".target", navigateTargetCases, "target", noAliases)
+			if target != "Self" {
+				fields["target"] = Str(target)
+			}
+		}
+		return Obj{Tag: tag, Fields: fields}
 	case "SetState":
 		// Phase 818 — `value` (a literal JSON value, written verbatim) XOR
 		// `valueFrom` (a Binding evaluated at dispatch time inside the
@@ -1938,11 +1962,38 @@ func decodeSingleNode(w *walkState, raw any, path string) Value {
 	return decodeNodeValue(w, raw, path)
 }
 
+// decodeSwitchCase decodes one Switch case.
+//
+// Phase 1535 — a case selects on a string `match` XOR a `when` predicate (a
+// Binding<bool> evaluated at render time). Exactly one; both and neither are
+// refused, naming both fields, on the Phase 818 `value` / `valueFrom`
+// precedent.
+//
+// "Neither" is refused rather than skipped at render because a case that names
+// no condition has no rendering that could be right: skipping it renders the
+// `default` and reports nothing.
 func decodeSwitchCase(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	child := decodeNodeValue(w, require(obj, "child", path), path+".child")
-	match := expectString(require(obj, "match", path), path+".match")
-	return Obj{Fields: map[string]Value{"child": child, "match": Str(match)}}
+	matchRaw, hasMatch := obj["match"]
+	whenRaw, hasWhen := obj["when"]
+	if hasMatch && hasWhen {
+		fail(CodeWrongType, path+".when",
+			"Switch case carries both 'match' and 'when' — exactly one is allowed: either 'match' "+
+				"(a literal string compared against the switch's `on` selector) or 'when' (a "+
+				"Binding<bool> predicate evaluated at render time, needing no selector)")
+	}
+	if !hasMatch && !hasWhen {
+		fail(CodeMissingField, path+".match",
+			"Switch case carries neither 'match' nor 'when' — give it a literal string under 'match' "+
+				"(compared against the switch's `on` selector), or a Binding<bool> under 'when' (a "+
+				"predicate evaluated at render time)")
+	}
+	if hasMatch {
+		match := expectString(matchRaw, path+".match")
+		return Obj{Fields: map[string]Value{"child": child, "match": Str(match)}}
+	}
+	return Obj{Fields: map[string]Value{"child": child, "when": decodeBinding(w, whenRaw, path+".when")}}
 }
 
 func decodeSwitchCases(w *walkState, raw any, path string) Value {
@@ -4211,6 +4262,13 @@ func decodeNodeValue(w *walkState, raw any, path string) Node {
 	// never decoded, and it stays an unknown key tolerated under rule 2.
 	if raw, ok := obj["tooltip"]; ok {
 		extras["tooltip"] = decodeTextSource(w, raw, path+".tooltip")
+	}
+	// Phase 1535 — the node-level visibility predicate. An ordinary optional
+	// Binding<bool>, decoded by the shared binding decoder for the reason the
+	// tooltip above states: the one time a host read a node-envelope slot as its
+	// own narrower thing it took two hosts and a ruling to unwind.
+	if raw, ok := obj["visible"]; ok {
+		extras["visible"] = decodeBinding(w, raw, path+".visible")
 	}
 	return Node{ID: id, Kind: kind, Extras: extras}
 }

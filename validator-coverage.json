@@ -11,7 +11,8 @@
     "FUARAN069",
     "FUARAN082",
     "FUARAN083",
-    "FUARAN100"
+    "FUARAN100",
+    "FUARAN147"
   ],
   "abstentionDefault": "Not ported. This is an honest 'not yet', not a principled exclusion: the set above is whichever rules this host happened to need, and an unported rule is a gap.",
   "abstained": {
