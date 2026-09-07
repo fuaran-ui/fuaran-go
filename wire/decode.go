@@ -3950,17 +3950,17 @@ func init() {
 			s.opt("transferOutKey", decodeString)
 			return s.build("DataGrid")
 		},
-		// `stacked` is carried on the wire; a legacy wire predating the field
-		// decodes to (and re-encodes with) the default false.
+		// Phase 1585 — `stacked` is OMITTED-WHEN-FALSE on both boundaries. It
+		// used to be set unconditionally, so absence and an explicit `false`
+		// both re-encoded as `"stacked":false`; the IDL now declares the member
+		// `omitDefault false`, which makes the omitted form canonical and the
+		// explicit one a §3.6 lenient accept that normalises to it. `optDrop`
+		// is the seam every other omitted-when-default flag already uses.
 		"Chart": func(w *walkState, obj map[string]any, path string) Obj {
 			s := newSpec(w, obj, path)
 			s.req("kind", enumDecoder(chartKindCases, "kind", noAliases))
 			s.req("source", decodeBindingRows, "data")
-			stacked := Value(Bool(false))
-			if raw, ok := s.take("stacked"); ok {
-				stacked = decodeBool(w, raw, path+".stacked")
-			}
-			s.set("stacked", stacked)
+			s.optDrop("stacked", decodeBool, isFalseValue)
 			s.req("xField", decodeString)
 			s.req("yFields", decodeStringArrayField)
 			s.opt("title", decodeTextSource)

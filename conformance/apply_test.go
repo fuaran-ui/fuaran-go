@@ -54,7 +54,12 @@ func gridBase(columns ...string) string {
 		`],"rowKey":"<closure>","source":{"$type":"Static","value":[]}}}`
 }
 
-const chartBase = `{"id":"chart-1","kind":{"$type":"Chart","kind":"Bar","source":{"$type":"Static","value":[]},"stacked":false,"xField":"month","yFields":["revenue","cost"]}}`
+// Phase 1585 — `stacked` is omit-at-default, so the canonical form of a grouped
+// chart carries no such member. This constant is BOTH the input and (with one
+// substitution) the expected output, so it must be canonical on both sides; the
+// pre-1585 spelling still decodes and is exercised where that is the subject,
+// in `wire/stacked_omit_default_test.go`.
+const chartBase = `{"id":"chart-1","kind":{"$type":"Chart","kind":"Bar","source":{"$type":"Static","value":[]},"xField":"month","yFields":["revenue","cost"]}}`
 
 func formBase(nameRequired, ageRequired string) string {
 	return `{"id":"form-1","kind":{"$type":"Form","fields":[` +

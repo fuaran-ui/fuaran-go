@@ -21,6 +21,14 @@ package fuarango
 
 // Version is the pre-release version of the fuaran-go host.
 //
+// 0.0.4-alpha carries the Phase 1585 WIRE-VISIBLE change to ChartSpec.stacked:
+// the member is omit-at-default (false), so this host stops emitting it for a
+// grouped chart and drops it on decode when a document spells it out. Every
+// pre-1585 document still decodes to the same tree — absence already meant
+// false here — but it now re-encodes one member shorter, so a caller comparing
+// its own stored bytes against a fresh encode of the same chart will see the
+// difference. Charts with stacked true are unaffected.
+//
 // 0.0.3-alpha is ADDITIVE over 0.0.2-alpha: the ChartSpec.annotations slot and
 // its three wire refusals (a non-finite address, an unparseable event date, an
 // unordered pair). A pre-1490 document decodes and re-encodes byte-for-byte as
@@ -30,4 +38,4 @@ package fuarango
 // dag.Record's bare UserID becomes the typed Actor, and pre-1144 DAG content
 // addresses do not carry forward. Recorded in README.md — this host declares no
 // STABILITY.md.
-const Version = "0.0.3-alpha"
+const Version = "0.0.4-alpha"
