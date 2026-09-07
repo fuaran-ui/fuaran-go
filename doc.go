@@ -21,6 +21,16 @@ package fuarango
 
 // Version is the pre-release version of the fuaran-go host.
 //
+// 0.0.5-alpha carries the Phase 1585 WIRE-VISIBLE change to TabsSpec.activeIndex,
+// the second half of the same phase: the member is omit-at-default at the
+// identity Static 0, so this host stops emitting it for a tab strip opening on
+// its first tab and drops it on decode when a document spells it out. Every
+// pre-1585 document still decodes to the same tree — absence already meant
+// Static 0 here — but it now re-encodes one member shorter, so a caller
+// comparing its own stored bytes against a fresh encode of the same tab strip
+// will see the difference. Any other binding is unaffected, including a Static
+// carrying a different index and every State / Filter / Selection / Query form.
+//
 // 0.0.4-alpha carries the Phase 1585 WIRE-VISIBLE change to ChartSpec.stacked:
 // the member is omit-at-default (false), so this host stops emitting it for a
 // grouped chart and drops it on decode when a document spells it out. Every
@@ -38,4 +48,4 @@ package fuarango
 // dag.Record's bare UserID becomes the typed Actor, and pre-1144 DAG content
 // addresses do not carry forward. Recorded in README.md — this host declares no
 // STABILITY.md.
-const Version = "0.0.4-alpha"
+const Version = "0.0.5-alpha"

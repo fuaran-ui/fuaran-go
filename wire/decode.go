@@ -3294,6 +3294,29 @@ func isFalseValue(v Value) bool     { return isBool(v, false) }
 func isTrueValue(v Value) bool      { return isBool(v, true) }
 func isNoneCellFormat(v Value) bool { return isTagOnly(v, "None") }
 
+// Phase 1585 — §3.6: `Tabs.activeIndex`'s identity is the `Static` binding
+// carrying the integer 0.
+//
+// The first `optDrop` predicate over a BINDING rather than a token, and the
+// difference is the point. A token identity has one inhabitant, so "is it the
+// default" and "which case is it" are the same question; a binding identity is
+// one inhabitant of a union whose payload domain is unbounded, so this tests the
+// CASE **and** its payload. A `Static` carrying any other index must survive,
+// and so must every `Query` / `Filter` / `Selection` / `State` binding —
+// dropping on the tag alone would discard a document's authored tab, and for a
+// writable binding its write-back destination with it.
+//
+// `Int` and not `Float`: `intStatic` yields `Int` for every accepted payload, so
+// a `Float` here is not a spelling this decoder produces.
+func isStaticIntZero(v Value) bool {
+	o, ok := v.(Obj)
+	if !ok || o.Tag != "Static" || len(o.Fields) != 1 {
+		return false
+	}
+	n, ok := o.Fields["value"].(Int)
+	return ok && n == 0
+}
+
 // Phase 867 — §3.6.1 clause 4: an absent `trendPolarity` IS `HigherIsBetter`.
 func isHigherIsBetter(v Value) bool { return isStr(v, "HigherIsBetter") }
 
@@ -3993,9 +4016,16 @@ func init() {
 		// making `activeStep` REQUIRED (as the reference host does) is a
 		// MISSING_FIELD parity question with no fixture behind it, and is
 		// deliberately not smuggled in alongside.
+		// Phase 1585 — `activeIndex` is OMITTED at the identity `Static 0` on
+		// both boundaries, the `stacked` treatment applied to a binding slot.
+		// This host's model is structural, so dropping the member on decode is
+		// what stops it being emitted; `optDrop` is the same seam every other
+		// omitted-when-default slot uses. `Stepper.activeStep` deliberately does
+		// NOT follow — it is IDL-`required`, not omit-at-default, and this
+		// decoder must not invent a rule the artefact does not state.
 		"Tabs": func(w *walkState, obj map[string]any, path string) Obj {
 			s := newSpec(w, obj, path)
-			s.opt("activeIndex", decodeBindingInt)
+			s.optDrop("activeIndex", decodeBindingInt, isStaticIntZero)
 			return s.build("Tabs")
 		},
 		"Stepper": func(w *walkState, obj map[string]any, path string) Obj {
