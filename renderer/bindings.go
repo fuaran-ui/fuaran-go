@@ -72,6 +72,22 @@ func resolveBinding(binding wire.Value, sources BindingSources) wire.Value {
 		}
 		return nil
 	}
+	// A decoded `Computed` has nothing to compute WITH: the case's whole payload
+	// is a host closure and it crosses the wire as the closure sentinel. It
+	// resolves to nothing, and this arm is EXPLICIT rather than a fall-through so
+	// it stays that way — the case carries no key / name / nodeId today, so the
+	// lookup below misses and the answer is the same, but a future member named
+	// like one of those would silently turn a host-only computation into a
+	// resolved value.
+	//
+	// KNOWN LIMIT, stated rather than implied: this seam has no error channel, so
+	// this host renders the slot's empty state where the F# and TypeScript hosts
+	// render an error naming Binding.Expr / Transform / State as the replacement.
+	// That is strictly better than the silent DEFAULT those hosts used to produce
+	// and strictly worse than the error they now do.
+	if obj.Tag == "Computed" {
+		return nil
+	}
 	if key, ok := bindingKey(obj); ok {
 		if v, found := sources[key]; found {
 			return v

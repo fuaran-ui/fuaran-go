@@ -1153,18 +1153,66 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		}
 		return Obj{Tag: "I18n", Fields: fields}
 	case "Local":
-		initialFrom := decodeBindingWith(w, require(obj, "initialFrom", path), path+".initialFrom", parse)
-		flushOn := Value(Obj{Tag: "OnBlur", Fields: map[string]Value{}})
-		if raw, ok := obj["flushOn"]; ok {
-			flushOn = decodeLocalFlushTrigger(w, raw, path+".flushOn")
+		// The declarative half of the buffer (WIRE_FORMAT.md Section 3.3.3).
+		// `format` / `onCommit` / `parse` are still the closure sentinels this
+		// host cannot restore; what it CAN do is refuse the two combinations a
+		// structural pass-through would admit silently.
+		//
+		// A `codec` whose Format case has no total, LOCALE-INDEPENDENT inverse.
+		// `Binding.Format` carries a LocaleSource because it renders for
+		// reading; a Local codec carries none, because whatever it renders it
+		// must also parse back from what the reader typed. `Currency` prepends a
+		// locale-chosen symbol, `Date`'s four styles are locale renditions, and
+		// `RelativeTime` / `Since` / `Duration` render a phrase. `Percent` is
+		// refused for a narrower reason worth recording, since it looks
+		// admissible: its inverse needs a x100 scale whose IEEE round-trip is not
+		// exact.
+		localFields := map[string]Value{
+			"format": Str(closureSentinel),
+			"parse":  Str(closureSentinel),
 		}
-		return Obj{Tag: "Local", Fields: map[string]Value{
-			"flushOn":     flushOn,
-			"format":      Str(closureSentinel),
-			"initialFrom": initialFrom,
-			"onCommit":    Str(closureSentinel),
-			"parse":       Str(closureSentinel),
-		}}
+		if raw, ok := obj["codec"]; ok {
+			codecObj := expectObject(raw, path+".codec")
+			tag, _ := codecObj["$type"].(string)
+			if tag != "Number" {
+				failExpecting(
+					CodeWrongType,
+					path+".codec",
+					"Binding.Local 'codec' must be a Format case with a total, locale-independent inverse - only 'Number' has one",
+					`use {"$type":"Number","decimals":2}, or drop the codec and let the buffer use the identity; a locale-rendered format (Currency / Date / RelativeTime / Since / Duration) cannot be parsed back from what the reader typed`,
+				)
+			}
+			localFields["codec"] = fromJSON(raw)
+		}
+		// Two commit destinations. Not resolved by a precedence rule, because
+		// the wire cannot carry the closure at all: a host honouring `onCommit`
+		// and a host honouring `commitTo` would write to different places from
+		// identical bytes.
+		_, onCommitPresent := obj["onCommit"]
+		if raw, ok := obj["commitTo"]; ok {
+			if onCommitPresent {
+				failExpecting(
+					CodeWrongType,
+					path+".commitTo",
+					"Binding.Local carries both 'onCommit' and 'commitTo' - exactly one commit destination is allowed",
+					"either 'onCommit' (a host closure, which crosses the wire only as the closure sentinel) or 'commitTo' (the State key the flush writes); a decoding host can honour only the second, so keeping both makes the same document commit to two different places depending on who read it",
+				)
+			}
+			localFields["commitTo"] = Str(expectString(raw, path+".commitTo"))
+		}
+		// PRESENCE, not a constant: this arm used to emit the sentinel
+		// unconditionally, so a document that never wrote the key gained one on
+		// re-encode — invisible while every Local carried a closure, and a
+		// byte divergence the moment one declared `commitTo` instead.
+		if onCommitPresent {
+			localFields["onCommit"] = Str(closureSentinel)
+		}
+		localFields["initialFrom"] = decodeBindingWith(w, require(obj, "initialFrom", path), path+".initialFrom", parse)
+		localFields["flushOn"] = Value(Obj{Tag: "OnBlur", Fields: map[string]Value{}})
+		if raw, ok := obj["flushOn"]; ok {
+			localFields["flushOn"] = decodeLocalFlushTrigger(w, raw, path+".flushOn")
+		}
+		return Obj{Tag: "Local", Fields: localFields}
 	case "Format":
 		format := fromJSON(require(obj, "format", path))
 		locale := fromJSON(require(obj, "locale", path))
