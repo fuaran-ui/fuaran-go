@@ -3923,6 +3923,16 @@ func init() {
 			// refused rather than read as "the default", which is what an
 			// absent member already means.
 			s.opt("destination", decodeUploadDestination)
+			// Phase 1548 — the two declared ceilings. Optional: absent declares
+			// no ceiling, which is the pre-1548 control and the wire identity.
+			// Both go through `decodePositiveInt`, so §7.1's slot rule decides
+			// the shape (a fractional value is not truncated, a value beyond the
+			// signed 32-bit slot is refused naming the slot's width) before the
+			// positive floor decides the sign. Zero is refused as firmly as a
+			// negative: a ceiling of zero is a control that can accept nothing,
+			// and the author who means "no ceiling" omits the member.
+			s.opt("maxBytes", decodePositiveInt)
+			s.opt("maxFiles", decodePositiveInt)
 			return s.build("FileUpload")
 		},
 		// 0.2.0 — editable omitted-when-false; `data` / `rows` alias `source`.

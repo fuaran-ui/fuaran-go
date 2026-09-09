@@ -615,6 +615,30 @@ func checkFileUploadPickerAlwaysPresent(t *testing.T) {
 	}
 }
 
+// FileUpload/ceiling-recorded-never-enforced (§3.6.23). TWO claims in one, and
+// the second is what a marker-emission test alone would miss: the marker records
+// only THAT a ceiling was declared, so a renderer that put the NUMBER in the
+// markup would pass an emission assertion while telling a reader this tier
+// enforces a bound it cannot enforce at all. Nothing on this path can act on the
+// number — HTML has no attribute for a byte ceiling, and `multiple` is a boolean
+// rather than a count.
+func checkFileUploadCeilingRecordedNeverEnforced(t *testing.T) {
+	bytesHTML := renderJSON(t, `{"id":"up","kind":{"$type":"FileUpload","accept":["application/pdf"],"label":"Attach a scan","maxBytes":5242880,"multiple":false,"onSelect":"<closure>"}}`)
+	mustEmit(t, bytesHTML, `data-fuaran-upload-max-bytes="declared"`, "a declared byte ceiling is recorded, so the declaration is visibly read rather than dropped")
+	mustNotEmit(t, bytesHTML, "5242880", "…and its VALUE is nowhere in the markup — carrying it would claim an enforcement that is not there")
+	mustNotEmit(t, bytesHTML, "data-fuaran-upload-max-files", "…and the count marker is absent when the count member is")
+
+	filesHTML := renderJSON(t, `{"id":"up","kind":{"$type":"FileUpload","accept":["image/*"],"label":"Attach up to three","maxFiles":3,"multiple":true,"onSelect":"<closure>"}}`)
+	mustEmit(t, filesHTML, `data-fuaran-upload-max-files="declared"`, "a declared count ceiling is recorded on the same terms")
+	mustNotEmit(t, filesHTML, "data-fuaran-upload-max-bytes", "…and the byte marker is absent when the byte member is")
+
+	// The polarity, which is what makes the members additive: an upload
+	// declaring neither is byte-identical in render to what it always was.
+	plain := renderJSON(t, `{"id":"up","kind":{"$type":"FileUpload","accept":[".csv"],"label":"Upload","multiple":false,"onSelect":"<closure>"}}`)
+	mustNotEmit(t, plain, "data-fuaran-upload-max-", "an upload declaring no ceiling carries no ceiling marker at all")
+	mustEmit(t, plain, `type="file"`, "and a declared ceiling changes nothing about the control itself")
+}
+
 // Modal/aria-modal-only-when-blocking (§3.6.11). `aria-modal="true"` is emitted
 // for `modality: Modal` and never for `modality: Popover`; BOTH carry
 // `role="dialog"`, and the popover carries no scrim element for the same reason
@@ -668,6 +692,7 @@ var checkers = []obligationChecker{
 	{"Image/srcset-ascending-by-width", checkImageSrcSetAscendingByWidth},
 	{"Custom/unregistered-custom-labelled", checkCustomUnregisteredLabelled},
 	{"FileUpload/picker-always-present", checkFileUploadPickerAlwaysPresent},
+	{"FileUpload/ceiling-recorded-never-enforced", checkFileUploadCeilingRecordedNeverEnforced},
 	{"Modal/aria-modal-only-when-blocking", checkModalAriaModalOnlyWhenBlocking},
 }
 

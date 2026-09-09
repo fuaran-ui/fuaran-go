@@ -1955,7 +1955,23 @@ func (r *renderer) combobox(field wire.Obj, fieldID string, kind wire.Obj) strin
 func (r *renderer) fileUpload(fields map[string]wire.Value) string {
 	label := element("span", []attr{{"class", "fuaran-file-upload-label"}}, escapeText(r.text(fields["label"])))
 	control := voidElement("input", []attr{{"class", "fuaran-file-upload-control"}, {"type", "file"}})
-	return element("label", []attr{{"class", "fuaran-file-upload"}}, label+control)
+	labelAttrs := []attr{{"class", "fuaran-file-upload"}}
+	// Phase 1548 — one read-marker per declared ceiling (WIRE_FORMAT §3.6.23
+	// obligation 4, on the §3.6.10 marker shape). This floor degrades entirely:
+	// HTML has no attribute for a byte ceiling, and `multiple` is a boolean
+	// rather than a count, so there is nothing a static emission could enforce.
+	// The marker therefore records only THAT a ceiling was declared and never
+	// its VALUE — nothing on this path can act on the number, so emitting it
+	// would invite a reader to believe this tier enforces it.
+	for _, m := range []struct{ member, marker string }{
+		{"maxBytes", "data-fuaran-upload-max-bytes"},
+		{"maxFiles", "data-fuaran-upload-max-files"},
+	} {
+		if _, ok := fields[m.member].(wire.Int); ok {
+			labelAttrs = append(labelAttrs, attr{m.marker, "declared"})
+		}
+	}
+	return element("label", labelAttrs, label+control)
 }
 
 // ── Visualisations ──────────────────────────────────────────────────────────
