@@ -92,21 +92,32 @@ const (
 	// memory than the bytes that produced it.
 	MaxNodes = 100000
 
-	// MaxExprNodes bounds the ColExpr nodes in ONE Binding.Expr expression
-	// (WIRE_FORMAT.md §21.8, Phase 1534). Counted per expression, not per
-	// document: a tree may carry many Expr bindings, each bounded here, with the
-	// whole still bounded by MaxDocumentBytes. A breach is LIMIT_EXCEEDED at the
-	// path of the `expr` member.
+	// MaxExprNodes bounds the ColExpr nodes in ONE expression (WIRE_FORMAT.md
+	// §21.8, Phase 1534/1662). Counted per expression, not per document: a tree
+	// may carry many bounded expressions, with the whole still bounded by
+	// MaxDocumentBytes. A breach is LIMIT_EXCEEDED at the path of the expression
+	// member.
 	//
 	// ONE count and not a count plus a depth: depth <= node count for every
 	// expression, so an expression 600 deep is already 600 nodes and already
 	// refused, and a second number would be one more figure to keep in step
 	// across the hosts while refusing nothing this one does not.
 	//
-	// Its SCOPE is Binding.Expr and nothing else. A ColExpr inside a
-	// Binding.Transform pipeline is NOT bounded by it, and was not bounded before
-	// it either — stated rather than left to be inferred, because a limit whose
-	// scope is guessed at is worse than no limit.
+	// Its SCOPE is EVERY expression a decoded document can name (Phase 1662): a
+	// Binding.Expr's expression, and the ColExpr a Binding.Transform pipeline
+	// embeds — a `derive`'s expression, a `filter`'s predicate. Those two are the
+	// whole surface: `filter` and `derive` are the only pipeline steps carrying
+	// an expression, and a `join` / `union` / `intersect` / `except` operand is a
+	// data source, never another pipeline.
+	//
+	// Until 1662 the pipeline surface was deliberately unbounded, and saying so
+	// made this limit bypassable by wrapping the expression in a Transform — the
+	// one shape from which a decoded document could still name an unbounded
+	// evaluation. Closing it changes what an already-shipped decoder accepts, so
+	// the refusal is stated in §21.8 rather than left to be read off the code: a
+	// document past the bound is refused OUTRIGHT, with no profile boundary and
+	// no grandfathering, because §21.2 rules 1 and 2 admit no second acceptance
+	// class.
 	MaxExprNodes = 512
 
 	// MaxSkeletonRows bounds the value of ONE Skeleton node's `rows` slot

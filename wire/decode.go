@@ -813,13 +813,56 @@ func decodeTextSource(w *walkState, raw any, path string) Value {
 		key := expectString(require(obj, "key", path), path+".key")
 		args := Value(Obj{Fields: map[string]Value{}})
 		if raw, ok := obj["args"]; ok {
-			args = fromJSONStrict(w, raw, path+".args")
+			args = decodeI18nArgs(w, raw, path+".args")
 		}
 		return Obj{Tag: "I18n", Fields: map[string]Value{"args": args, "key": Str(key)}}
 	default: // Bound
 		binding := decodeBinding(w, require(obj, "binding", path), path+".binding")
 		return Obj{Tag: "Bound", Fields: map[string]Value{"binding": binding}}
 	}
+}
+
+// decodeI18nArgs decodes a TextSource.I18n argument bag, discriminated BY
+// INSPECTION (WIRE_FORMAT.md §5, Phase 1661): an object carrying a $type member
+// is a BINDING and decodes as one, and every other JSON value is the LITERAL
+// argument — rule-12 strict, so a null rejects at the null's own path — and is
+// emitted BARE, which is why every literal-args document ever emitted is
+// byte-identical across the widening.
+//
+// The whole bag used to take the structural fromJSONStrict pass-through, which
+// validated nothing: a bound argument naming an unrecognised case, or a known
+// case missing a required member, went unraised here while the typed hosts
+// refused the same document, and a tagged Static was re-emitted tagged where
+// they collapse it. Both are divergences the widening would have manufactured.
+//
+// The Static arm is read here rather than through decodeBinding so the two
+// spellings of a literal agree: a missing or null value is Phase 677's
+// structural absence and stays {"$type":"Static"} (absence has no bare
+// spelling), and a PRESENT value collapses to the bare form under the same
+// strict decoder the bare spelling takes.
+func decodeI18nArgs(w *walkState, raw any, path string) Value {
+	argsObj := expectObject(raw, path)
+	out := make(map[string]Value, len(argsObj))
+	for k, v := range argsObj {
+		argPath := path + "." + k
+		if m, isObj := v.(map[string]any); isObj {
+			if tag, hasTag := m["$type"]; hasTag {
+				if s, isStr := tag.(string); isStr && s == "Static" {
+					inner, present := m["value"]
+					if !present || inner == nil {
+						out[k] = Obj{Tag: "Static", Fields: map[string]Value{}}
+					} else {
+						out[k] = fromJSONStrict(w, inner, argPath+".value")
+					}
+					continue
+				}
+				out[k] = decodeBinding(w, v, argPath)
+				continue
+			}
+		}
+		out[k] = fromJSONStrict(w, v, argPath)
+	}
+	return Obj{Fields: out}
 }
 
 // ── Bindings ────────────────────────────────────────────────────────────────
@@ -1326,6 +1369,10 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		}
 		pipeRaw := require(obj, "pipeline", path)
 		pipeline := atComputePath(path+".pipeline", func() Value { return decodeComputePipeline(pipeRaw) })
+		// Phase 1662 — §21.8's expression-node bound over the pipeline's own
+		// embedded expressions, at DECODE and not at validation: a document that
+		// decodes must not be able to name an unbounded evaluation.
+		checkPipelineExprBound(pipeline, path)
 		fields := map[string]Value{"pipeline": pipeline, "source": source}
 		if raw, ok := obj["params"]; ok {
 			params := decodeTransformParams(w, raw, path+".params")
