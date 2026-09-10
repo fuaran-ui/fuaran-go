@@ -303,15 +303,23 @@ func (r *renderer) a11yAttrs(node wire.Node) []attr {
 // it would break them without moving a single byte of anything an encoder
 // produces. Stated here rather than left ambiguous — the decision is "lenient
 // on the way in, canonical on the way out", the least breaking of the two.
+// Phase 1665 — the SCALAR path. This read resolveBinding + displayString
+// directly, which is what resolveScalarText does for every binding case EXCEPT
+// Transform and Expr — so a pipeline yielding the one cell an author obviously
+// meant ("name this region after what is in it") resolved to the rows list,
+// which has no display form, and this host emitted no aria-label at all. The
+// reference host and the erased host each got it wrong differently (a caught
+// cast error; the rows array in the attribute), and on the one trait with no
+// visible output none of the three was reported. Delegating here rather than
+// adding a Transform arm keeps the trio (text / number / bool) the one place
+// the 1x1 law lives. WIRE_FORMAT's accessibility-trait render obligations state
+// the rule; nodes/a11y-wrapper-transform-label and a11y-contract.json's
+// behaviour vectors pin it.
 func a11yName(value wire.Value, sources BindingSources) (string, bool, error) {
 	if bare, ok := value.(wire.Str); ok {
 		return string(bare), true, nil
 	}
-	resolved, err := resolveBinding(value, sources)
-	if resolved != nil {
-		return displayString(resolved), true, err
-	}
-	return "", false, err
+	return resolveScalarText(value, sources)
 }
 
 // forwardsToSemanticElement reports whether this kind renders a body that IS
@@ -1699,7 +1707,7 @@ func (r *renderer) treeState(fields map[string]wire.Value) (expandedKeyNamed boo
 		expandedKeyNamed = true
 		// An array of ROW IDS — set membership, and a set has one spelling
 		// where a map of booleans has two for "closed".
-		if rows, ok := r.sources[string(key)].(wire.Arr); ok {
+		if rows, ok := r.sources.Values[string(key)].(wire.Arr); ok {
 			for _, row := range rows {
 				if id, ok := row.(wire.Str); ok {
 					expanded[string(id)] = true
@@ -1709,7 +1717,7 @@ func (r *renderer) treeState(fields map[string]wire.Value) (expandedKeyNamed boo
 	}
 	if key, ok := fields["selectionStateKey"].(wire.Str); ok {
 		selects = true
-		if id, ok := r.sources[string(key)].(wire.Str); ok {
+		if id, ok := r.sources.Values[string(key)].(wire.Str); ok {
 			selected = string(id)
 		}
 	}
@@ -2329,7 +2337,7 @@ func (r *renderer) switchKind(fields map[string]wire.Value) string {
 	valueStr := ""
 	selectorResolved := false
 	if key, ok := fields["stateKey"].(wire.Str); ok {
-		if current, found := r.sources[string(key)]; found {
+		if current, found := r.sources.Values[string(key)]; found {
 			valueStr = displayString(current)
 			selectorResolved = true
 		}

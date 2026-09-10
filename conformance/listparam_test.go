@@ -105,11 +105,11 @@ func TestListParamNothingSelectedRendersTheUnfilteredTable(t *testing.T) {
 	node := loadListParamFixture(t)
 
 	t.Run("no host value", func(t *testing.T) {
-		assertDepts(t, renderHTML(t, node, nil), "eng", "sales", "ops")
+		assertDepts(t, renderHTML(t, node, renderer.BindingSources{}), "eng", "sales", "ops")
 	})
 
 	t.Run("explicitly deselected to empty", func(t *testing.T) {
-		html := renderHTML(t, node, renderer.BindingSources{"depts": wire.Arr{}})
+		html := renderHTML(t, node, renderer.Sources(map[string]wire.Value{"depts": wire.Arr{}}))
 		assertDepts(t, html, "eng", "sales", "ops")
 		if strings.Contains(html, `data-fuaran-row-count="0"`) {
 			t.Errorf("deselecting everything must not fail the transform to an empty grid:\n%s", html)
@@ -123,16 +123,16 @@ func TestListParamSelectionScopesTheRenderedRows(t *testing.T) {
 	node := loadListParamFixture(t)
 
 	t.Run("two selected", func(t *testing.T) {
-		html := renderHTML(t, node, renderer.BindingSources{
+		html := renderHTML(t, node, renderer.Sources(map[string]wire.Value{
 			"depts": wire.Arr{wire.Str("eng"), wire.Str("ops")},
-		})
+		}))
 		assertDepts(t, html, "eng", "ops")
 	})
 
 	t.Run("one selected", func(t *testing.T) {
-		html := renderHTML(t, node, renderer.BindingSources{
+		html := renderHTML(t, node, renderer.Sources(map[string]wire.Value{
 			"depts": wire.Arr{wire.Str("sales")},
-		})
+		}))
 		assertDepts(t, html, "sales")
 	})
 
@@ -140,9 +140,9 @@ func TestListParamSelectionScopesTheRenderedRows(t *testing.T) {
 		// A genuine constraint that nothing satisfies is an EMPTY table — which
 		// is the case the empty-selection rule above must never be confused
 		// with, so it is pinned beside it.
-		html := renderHTML(t, node, renderer.BindingSources{
+		html := renderHTML(t, node, renderer.Sources(map[string]wire.Value{
 			"depts": wire.Arr{wire.Str("legal")},
-		})
+		}))
 		assertDepts(t, html)
 	})
 }
@@ -151,7 +151,7 @@ func TestListParamSelectionScopesTheRenderedRows(t *testing.T) {
 // (correct-before-hydration: hydration may re-resolve, never first-fill).
 func TestListParamResolutionCarriesToTheIslandsSkeleton(t *testing.T) {
 	node := loadListParamFixture(t)
-	sources := renderer.BindingSources{"depts": wire.Arr{wire.Str("eng"), wire.Str("ops")}}
+	sources := renderer.Sources(map[string]wire.Value{"depts": wire.Arr{wire.Str("eng"), wire.Str("ops")}})
 
 	html, err := renderer.RenderWithIslands(node, sources, map[string]string{"dept-chip": "chip-island"})
 	if err != nil {
@@ -173,15 +173,15 @@ func TestListParamKindMismatchIsRefusedNotSilentlyScoped(t *testing.T) {
 	// A SCALAR bound to a name the pipeline reads as an in/param. A host that
 	// coerced it would emit the single "eng" row; a host that ignored the
 	// mismatch and pruned would emit all three. Neither is admissible.
-	html := renderHTML(t, node, renderer.BindingSources{"depts": wire.Str("eng")})
+	html := renderHTML(t, node, renderer.Sources(map[string]wire.Value{"depts": wire.Str("eng")}))
 	assertDepts(t, html)
 	if strings.Contains(html, `<td class="fuaran-grid-cell"><span>eng</span></td>`) {
 		t.Errorf("a scalar bound to an in/param must not silently scope the rows:\n%s", html)
 	}
 
 	// A LIST holding a non-scalar item has no membership reading at all.
-	nested := renderHTML(t, node, renderer.BindingSources{
+	nested := renderHTML(t, node, renderer.Sources(map[string]wire.Value{
 		"depts": wire.Arr{wire.Str("eng"), wire.Arr{wire.Str("ops")}},
-	})
+	}))
 	assertDepts(t, nested)
 }

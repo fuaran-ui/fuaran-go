@@ -29,7 +29,7 @@ func a11yWrapper(t *testing.T, section string, sources BindingSources) string {
 }
 
 func TestHiddenStaticTrueEmitsAriaHidden(t *testing.T) {
-	got := a11yWrapper(t, `"hidden":{"$type":"Static","value":true}`, nil)
+	got := a11yWrapper(t, `"hidden":{"$type":"Static","value":true}`, BindingSources{})
 	if !strings.Contains(got, `aria-hidden="true"`) {
 		t.Errorf("a hidden-marked node must be removed from the accessibility tree:\n%s", got)
 	}
@@ -45,10 +45,10 @@ func TestHiddenFalseAbsentOrUnresolvedEmitsNothing(t *testing.T) {
 		section string
 		sources BindingSources
 	}{
-		{"static false", `"hidden":{"$type":"Static","value":false}`, nil},
-		{"absent", `"label":"Decorative"`, nil},
-		{"unresolved binding", `"hidden":{"$type":"State","key":"decorative"}`, nil},
-		{"resolved false", `"hidden":{"$type":"State","key":"decorative"}`, BindingSources{"decorative": wire.Bool(false)}},
+		{"static false", `"hidden":{"$type":"Static","value":false}`, BindingSources{}},
+		{"absent", `"label":"Decorative"`, BindingSources{}},
+		{"unresolved binding", `"hidden":{"$type":"State","key":"decorative"}`, BindingSources{}},
+		{"resolved false", `"hidden":{"$type":"State","key":"decorative"}`, Sources(map[string]wire.Value{"decorative": wire.Bool(false)})},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -65,7 +65,7 @@ func TestHiddenFalseAbsentOrUnresolvedEmitsNothing(t *testing.T) {
 // conditionally-decorative subtree.
 func TestHiddenResolvesThroughHostSources(t *testing.T) {
 	got := a11yWrapper(t, `"hidden":{"$type":"State","key":"decorative"}`,
-		BindingSources{"decorative": wire.Bool(true)})
+		Sources(map[string]wire.Value{"decorative": wire.Bool(true)}))
 	if !strings.Contains(got, `aria-hidden="true"`) {
 		t.Errorf("a host-resolved hidden binding must hide the subtree:\n%s", got)
 	}
@@ -76,7 +76,7 @@ func TestHiddenResolvesThroughHostSources(t *testing.T) {
 // of the byte-level parity the hosts are held to.
 func TestProjectionEmitsTheSixSlotsInReferenceOrder(t *testing.T) {
 	got := a11yWrapper(t, `"label":"Home","labelledBy":"lbl","describedBy":"dsc",`+
-		`"role":"link","liveRegion":"polite","hidden":{"$type":"Static","value":true}`, nil)
+		`"role":"link","liveRegion":"polite","hidden":{"$type":"Static","value":true}`, BindingSources{})
 	want := `aria-label="Home" aria-labelledby="lbl" aria-describedby="dsc" ` +
 		`role="link" aria-live="polite" aria-hidden="true"`
 	if !strings.Contains(got, want) {
@@ -91,7 +91,7 @@ func TestProjectionEmitsTheSixSlotsInReferenceOrder(t *testing.T) {
 // red because the fixtures authored the bare form the renderer happened to
 // accept, which is why both directions are pinned below.
 func TestLabelStaticBindingEmitsAriaLabel(t *testing.T) {
-	got := a11yWrapper(t, `"label":{"$type":"Static","value":"Home"}`, nil)
+	got := a11yWrapper(t, `"label":{"$type":"Static","value":"Home"}`, BindingSources{})
 	if !strings.Contains(got, `aria-label="Home"`) {
 		t.Errorf("a canonical Static label must emit the accessible name:\n%s", got)
 	}
@@ -102,7 +102,7 @@ func TestLabelStaticBindingEmitsAriaLabel(t *testing.T) {
 // named node.
 func TestLabelResolvesThroughHostSources(t *testing.T) {
 	got := a11yWrapper(t, `"label":{"$type":"State","key":"navLabel"}`,
-		BindingSources{"navLabel": wire.Str("Primary navigation")})
+		Sources(map[string]wire.Value{"navLabel": wire.Str("Primary navigation")}))
 	if !strings.Contains(got, `aria-label="Primary navigation"`) {
 		t.Errorf("a host-resolved label binding must emit the accessible name:\n%s", got)
 	}
@@ -113,7 +113,7 @@ func TestLabelResolvesThroughHostSources(t *testing.T) {
 // an accident — and so dropping it becomes a deliberate act with a red test,
 // not a silent regression in the fixtures that already author it.
 func TestLabelAcceptsTheBareStringShorthand(t *testing.T) {
-	got := a11yWrapper(t, `"label":"Home"`, nil)
+	got := a11yWrapper(t, `"label":"Home"`, BindingSources{})
 	if !strings.Contains(got, `aria-label="Home"`) {
 		t.Errorf("the bare-string shorthand must still emit the accessible name:\n%s", got)
 	}
@@ -128,10 +128,10 @@ func TestLabelEmptyOrUnresolvedEmitsNothing(t *testing.T) {
 		section string
 		sources BindingSources
 	}{
-		{"empty bare", `"label":""`, nil},
-		{"empty static", `"label":{"$type":"Static","value":""}`, nil},
-		{"unresolved binding", `"label":{"$type":"State","key":"navLabel"}`, nil},
-		{"resolved empty", `"label":{"$type":"State","key":"navLabel"}`, BindingSources{"navLabel": wire.Str("")}},
+		{"empty bare", `"label":""`, BindingSources{}},
+		{"empty static", `"label":{"$type":"Static","value":""}`, BindingSources{}},
+		{"unresolved binding", `"label":{"$type":"State","key":"navLabel"}`, BindingSources{}},
+		{"resolved empty", `"label":{"$type":"State","key":"navLabel"}`, Sources(map[string]wire.Value{"navLabel": wire.Str("")})},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -147,7 +147,7 @@ func TestLabelEmptyOrUnresolvedEmitsNothing(t *testing.T) {
 // host emits what it was handed. This host case-folded it, which silently
 // rewrote a custom role the author had cased deliberately.
 func TestCustomRoleIsEmittedVerbatim(t *testing.T) {
-	got := a11yWrapper(t, `"role":"doc-pageFooter"`, nil)
+	got := a11yWrapper(t, `"role":"doc-pageFooter"`, BindingSources{})
 	if !strings.Contains(got, `role="doc-pageFooter"`) {
 		t.Errorf("a custom role must survive verbatim:\n%s", got)
 	}

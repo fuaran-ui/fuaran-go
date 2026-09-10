@@ -28,7 +28,7 @@ func TestDecodedComputedResolvesToAnErrorNamingItsReplacements(t *testing.T) {
 	node := mustDecode(t, metric)
 
 	// The seam itself, which is what a headless caller asks.
-	value, err := resolveBinding(wire.Obj{Tag: "Computed", Fields: map[string]wire.Value{}}, nil)
+	value, err := resolveBinding(wire.Obj{Tag: "Computed", Fields: map[string]wire.Value{}}, BindingSources{})
 	if value != nil {
 		t.Fatalf("a decoded Computed resolved to %v — the silent-default defect this closes", value)
 	}
@@ -44,7 +44,7 @@ func TestDecodedComputedResolvesToAnErrorNamingItsReplacements(t *testing.T) {
 	// half restated: no value of any kind, ever.
 	_, err = resolveBinding(
 		wire.Obj{Tag: "Computed", Fields: map[string]wire.Value{"fn": wire.Str("<closure>")}},
-		BindingSources{"fn": wire.Int(7), "key": wire.Int(0), "name": wire.Str(""), "nodeId": wire.Bool(false)},
+		Sources(map[string]wire.Value{"fn": wire.Int(7), "key": wire.Int(0), "name": wire.Str(""), "nodeId": wire.Bool(false)}),
 	)
 	if !errors.Is(err, ErrDecodedComputed) {
 		t.Fatalf("expected ErrDecodedComputed under a populated source bag, got %v", err)
@@ -53,7 +53,7 @@ func TestDecodedComputedResolvesToAnErrorNamingItsReplacements(t *testing.T) {
 	// The exported entry point returns it, and STILL returns the document: a
 	// render is a pure function of the tree and completes, so the caller gets both
 	// what could be rendered and the reason the rest could not.
-	html, err := RenderHTML(node, nil)
+	html, err := RenderHTML(node, BindingSources{})
 	if !errors.Is(err, ErrDecodedComputed) {
 		t.Fatalf("RenderHTML must report the resolution error, got %v", err)
 	}
@@ -72,7 +72,7 @@ func TestDecodedComputedResolvesToAnErrorNamingItsReplacements(t *testing.T) {
 
 	// The islands surface reports it on the same terms — the two emission paths
 	// must not differ, or a host would learn about this by marking a region.
-	if _, err := RenderWithIslands(node, nil, nil); !errors.Is(err, ErrDecodedComputed) {
+	if _, err := RenderWithIslands(node, BindingSources{}, nil); !errors.Is(err, ErrDecodedComputed) {
 		t.Fatalf("RenderWithIslands must report the resolution error, got %v", err)
 	}
 }
@@ -83,7 +83,7 @@ func TestDecodedComputedResolvesToAnErrorNamingItsReplacements(t *testing.T) {
 // answer rather than the document asking something unanswerable.
 func TestEveryOtherBindingStillResolvesOrSaysNotYet(t *testing.T) {
 	value, err := resolveBinding(
-		wire.Obj{Tag: "Static", Fields: map[string]wire.Value{"value": wire.Int(41)}}, nil)
+		wire.Obj{Tag: "Static", Fields: map[string]wire.Value{"value": wire.Int(41)}}, BindingSources{})
 	if err != nil {
 		t.Fatalf("a Static binding errored: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestEveryOtherBindingStillResolvesOrSaysNotYet(t *testing.T) {
 	}
 
 	value, err = resolveBinding(
-		wire.Obj{Tag: "Query", Fields: map[string]wire.Value{"name": wire.Str("sales")}}, nil)
+		wire.Obj{Tag: "Query", Fields: map[string]wire.Value{"name": wire.Str("sales")}}, BindingSources{})
 	if err != nil || value != nil {
 		t.Fatalf("an unwritten Query is absence, not an error: value=%v err=%v", value, err)
 	}
@@ -102,7 +102,7 @@ func TestEveryOtherBindingStillResolvesOrSaysNotYet(t *testing.T) {
 	// UNBOUND_PARAM and the slot renders absence. That must NOT reach the caller —
 	// making it reach is the over-reach this test pins against, and it reddened
 	// three corpus legs when the first draft of the phase did exactly that.
-	if _, err := RenderHTML(loadFixtureNode(t, "now-grain"), nil); err != nil {
+	if _, err := RenderHTML(loadFixtureNode(t, "now-grain"), BindingSources{}); err != nil {
 		t.Fatalf("an unevaluable pipeline must render as absence and report nothing, got %v", err)
 	}
 }

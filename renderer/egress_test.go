@@ -34,7 +34,7 @@ func TestProtectedEmailNeedsANonNetworkPolicy(t *testing.T) {
 	const json = `{"id":"plk","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"mailto:contact@example.com"},"label":"Email us","protection":"email"}}`
 	node := mustDecode(t, json)
 
-	refused := renderHTML(t, node, nil)
+	refused := renderHTML(t, node, BindingSources{})
 	if !strings.Contains(refused, `data-fuaran-egress-refused="hyperlink:mailto"`) {
 		t.Errorf("the ambient default did not refuse the mailto: destination:\n%s", refused)
 	}
@@ -47,7 +47,7 @@ func TestProtectedEmailNeedsANonNetworkPolicy(t *testing.T) {
 		}
 	}
 
-	permitted := renderHTMLWithEgress(t, node, nil, allowNonNetworkEgress())
+	permitted := renderHTMLWithEgress(t, node, BindingSources{}, allowNonNetworkEgress())
 	if !strings.Contains(permitted, "fuaran-link-protected-wrap") {
 		t.Errorf("the protected arm did not render under a policy permitting non-network egress:\n%s", permitted)
 	}

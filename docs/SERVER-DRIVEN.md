@@ -20,14 +20,38 @@ Both modes build on the plain render, so it is worth being precise about what it
 gives you:
 
 ```go
-html := renderer.RenderHTML(tree, nil)   // or renderer.BindingSources{"users": wire.Int(42)}
+html, err := renderer.RenderHTML(tree, renderer.BindingSources{})
+
+html, err = renderer.RenderHTML(tree, renderer.BindingSources{
+    Values: map[string]wire.Value{"users": wire.Int(42)},  // the identity-keyed map
+    Now:    "2026-08-02T06:59:24Z",                        // the host instant, ISO-8601 UTC
+    Locale: "en-GB",                                       // the ambient BCP-47 tag
+})
 ```
 
 `RenderHTML` returns a **body fragment, not a document** — you own the shell.
 `renderer.ReferenceCSS()` hands back the reference stylesheet to embed or serve.
-The second argument is a host-supplied binding map: `nil` resolves `Static`
-bindings and placeholders the rest to an em-dash, and a declared `State` default
-resolves ahead of the placeholder while a host-supplied source wins over both.
+
+The second argument is what the host furnishes this render pass. Its zero value
+is the headless baseline: `Static` bindings resolve, the rest placeholder to an
+em-dash, and a declared `State` default resolves ahead of the placeholder while a
+host-supplied source wins over both. `renderer.Sources(map[string]wire.Value{…})`
+lifts a bare map when values are all you have.
+
+`Now` is what `Binding.Now` and `Format.Since` resolve against. **The clock lives
+here, never on the wire and never read during resolution** — resolve it once per
+render pass and hold it, or two `Now` slots in one tree can disagree, and a
+replayed op-stream re-supplies the instant it recorded so a replay reproduces the
+original render. A declared `grain` truncates it before anything projects it. The
+`""` default means *this host furnishes no clock*, and the slot then resolves to
+absence rather than to a plausible wrong date.
+
+`Locale` is the tag a `LocaleSource.Ambient` reads (`""` = the runtime default).
+The `Format` cases this host renders — `Since`, `RelativeTime`, `Duration` — are
+locale-independent by declaration and consult no tag; `Number` / `Currency` /
+`Percent` / `Date` take their text from a locale database and resolve to absence
+here. `renderer.ResolveLocaleTag` hands you the tag a document asked for if you
+want to render those four yourself.
 
 The destination policy is **ambient**: `RenderHTML` runs `DenyNonLocalEgress()`
 with no caller opt-in, so a decoded tree may point at its own origin and nowhere

@@ -37,7 +37,7 @@ const a11ySection = `"accessibility":{"label":"Home","role":"link"}`
 
 func TestLinkA11yLandsOnTheAnchor(t *testing.T) {
 	node := mustDecode(t, `{"id":"lk","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"/home"},"label":"Home"},`+a11ySection+`}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	wrapper := wrapperTag(html)
 	if strings.Contains(wrapper, "role=") || strings.Contains(wrapper, "aria-label") {
@@ -57,7 +57,7 @@ func TestLinkA11yLandsOnTheAnchor(t *testing.T) {
 
 func TestButtonA11yLandsOnTheButton(t *testing.T) {
 	node := mustDecode(t, `{"id":"btn","kind":{"$type":"Button","label":"Go","onClick":{"$type":"Navigate","route":"/x"},"variant":"Primary"},`+a11ySection+`}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	if strings.Contains(wrapperTag(html), "aria-label") {
 		t.Errorf("the projection must not sit on the wrapper div:\n%s", wrapperTag(html))
@@ -69,7 +69,7 @@ func TestButtonA11yLandsOnTheButton(t *testing.T) {
 
 func TestImageA11yLandsOnTheImg(t *testing.T) {
 	node := mustDecode(t, `{"id":"img","kind":{"$type":"Image","alt":"Alt","src":{"$type":"Static","value":"/a.png"},"variant":"Default"},`+a11ySection+`}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	if strings.Contains(wrapperTag(html), "aria-label") {
 		t.Errorf("the projection must not sit on the wrapper div:\n%s", wrapperTag(html))
@@ -84,7 +84,7 @@ func TestImageA11yLandsOnTheImg(t *testing.T) {
 // projection on the wrapper. No single uniform placement can satisfy both.
 func TestNonForwardingKindKeepsTheProjectionOnTheWrapper(t *testing.T) {
 	node := mustDecode(t, `{"id":"md","kind":{"$type":"Markdown","text":"x"},`+a11ySection+`}`)
-	wrapper := wrapperTag(renderHTML(t, node, nil))
+	wrapper := wrapperTag(renderHTML(t, node, BindingSources{}))
 
 	for _, want := range []string{`role="link"`, `aria-label="Home"`} {
 		if !strings.Contains(wrapper, want) {
@@ -105,7 +105,7 @@ func TestProtectedEmailLinkA11yLandsOnTheWrapSpan(t *testing.T) {
 	// anchor — no wrap span to project onto. Naming the narrowest widening is
 	// what a host with a real mailto: surface does, and it is what this
 	// placement contract is about.
-	html := renderHTMLWithEgress(t, node, nil, allowNonNetworkEgress())
+	html := renderHTMLWithEgress(t, node, BindingSources{}, allowNonNetworkEgress())
 
 	if strings.Contains(wrapperTag(html), "aria-label") {
 		t.Errorf("the projection must not sit on the wrapper div:\n%s", wrapperTag(html))
