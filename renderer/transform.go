@@ -127,7 +127,15 @@ func normaliseLiveRows(v wire.Value) wire.Value {
 // rows). A non-tabular value is an error, so the caller renders absence
 // rather than a wrong value.
 func liveInputTable(obj wire.Obj, sources BindingSources) (dataframe.Table, error) {
-	v := resolveBinding(obj, sources)
+	v, err := resolveBinding(obj, sources)
+	if err != nil {
+		// Phase 1667 — an ERROR is not the unwritten store the fallback below
+		// is for: falling back to the carried snapshot there is right because the
+		// snapshot IS the answer until the store is written, whereas here there is
+		// no answer at all and evaluating over the snapshot would render a table
+		// the document did not ask for.
+		return dataframe.Table{}, resolutionFailure{err}
+	}
 	if v == nil {
 		if dv, ok := obj.Fields["defaultValue"]; ok {
 			v = dv
@@ -155,13 +163,17 @@ func liveInputTable(obj wire.Obj, sources BindingSources) (dataframe.Table, erro
 // evaluates through the certified evaluator; any other binding falls back to
 // resolveBinding (e.g. a Static row list). An evaluation failure resolves to nil
 // (the caller's empty / placeholder path) — never the scalar 1×1 law.
-func resolveSource(source wire.Value, sources BindingSources) wire.Value {
+func resolveSource(source wire.Value, sources BindingSources) (wire.Value, error) {
 	if t, ok := transformBinding(source); ok {
 		table, err := evalTransformFrame(t, sources)
 		if err != nil {
-			return nil
+			// Phase 1667 — a row context resolves to nil either way (the
+			// caller's empty / placeholder path), and reports only a RESOLUTION
+			// failure: an unevaluable pipeline is this renderer unable to answer,
+			// which has always rendered as absence and must keep doing so.
+			return nil, asResolutionFailure(err)
 		}
-		return tableToRows(table)
+		return tableToRows(table), nil
 	}
 	return resolveBinding(source, sources)
 }
@@ -281,7 +293,14 @@ func resolveTransformParams(
 		if !ok {
 			continue
 		}
-		resolved := resolveBinding(p.Fields["from"], sources)
+		resolved, err := resolveBinding(p.Fields["from"], sources)
+		if err != nil {
+			// Phase 1667 — an ERROR is not the UNBOUND below. Unbound is
+			// lenient on purpose (a filter step naming it is pruned, so the
+			// unfiltered table shows); pruning here would silently drop a
+			// constraint the document declared and could never satisfy.
+			return nil, nil, nil, resolutionFailure{err}
+		}
 		if resolved == nil {
 			unbound[string(name)] = true
 			continue
@@ -396,10 +415,15 @@ const (
 // (scalarError — never a silent first cell); an empty result renders absence
 // (scalarEmpty), EXCEPT a trailing global single-`count` groupBy over an empty
 // frame, which resolves 0 (the count of nothing is 0).
-func evalScalarTransform(t wire.Obj, sources BindingSources) (wire.Value, scalarOutcome) {
+//
+// Phase 1667 — the third return is a RESOLUTION failure only, on the same
+// rule resolveSource follows: the outcome vocabulary above already says
+// everything a slot needs about an unevaluable pipeline, and a resolution
+// failure is a fact about the document that no outcome can carry.
+func evalScalarTransform(t wire.Obj, sources BindingSources) (wire.Value, scalarOutcome, error) {
 	table, err := evalTransformFrame(t, sources)
 	if err != nil {
-		return nil, scalarError
+		return nil, scalarError, asResolutionFailure(err)
 	}
 	cols := len(table.Columns)
 	rows := 0
@@ -409,17 +433,17 @@ func evalScalarTransform(t wire.Obj, sources BindingSources) (wire.Value, scalar
 	if rows == 1 && cols == 1 {
 		cell := table.Columns[0].Cells[0]
 		if cell.Kind == dataframe.Null.Kind {
-			return nil, scalarEmpty
+			return nil, scalarEmpty, nil
 		}
-		return cellToWire(cell), scalarResolved
+		return cellToWire(cell), scalarResolved, nil
 	}
 	if rows == 0 {
 		if trailingGlobalCount(t) {
-			return wire.Int(0), scalarResolved
+			return wire.Int(0), scalarResolved, nil
 		}
-		return nil, scalarEmpty
+		return nil, scalarEmpty, nil
 	}
-	return nil, scalarError
+	return nil, scalarError, nil
 }
 
 // trailingGlobalCount reports a pipeline ending in a global single-`count`
@@ -454,26 +478,27 @@ func trailingGlobalCount(t wire.Obj) bool {
 // `Transform` yields its 1×1 result cell as text (never the rows list); every
 // other binding resolves via resolveBinding then stringifies — so a
 // `Selection.defaultValue` in a text slot renders resolved (Phase 629).
-func resolveScalarText(binding wire.Value, sources BindingSources) (string, bool) {
+func resolveScalarText(binding wire.Value, sources BindingSources) (string, bool, error) {
 	if e, ok := exprBinding(binding); ok {
 		// Phase 1534 — the scalar expression, through the same 1x1 law.
-		cell, outcome := evalScalarTransform(e, sources)
+		cell, outcome, err := evalScalarTransform(e, sources)
 		if outcome == scalarResolved {
-			return displayString(cell), true
+			return displayString(cell), true, err
 		}
-		return "", false
+		return "", false, err
 	}
 	if t, ok := transformBinding(binding); ok {
-		cell, outcome := evalScalarTransform(t, sources)
+		cell, outcome, err := evalScalarTransform(t, sources)
 		if outcome == scalarResolved {
-			return displayString(cell), true
+			return displayString(cell), true, err
 		}
-		return "", false
+		return "", false, err
 	}
-	if v := resolveBinding(binding, sources); v != nil {
-		return displayString(v), true
+	v, err := resolveBinding(binding, sources)
+	if v != nil {
+		return displayString(v), true, err
 	}
-	return "", false
+	return "", false, err
 }
 
 // resolveScalarBool resolves a boolean-slot binding to (value, true), or
@@ -489,25 +514,26 @@ func resolveScalarText(binding wire.Value, sources BindingSources) (string, bool
 // the whole point of the corpus. The vocabulary already carries the total
 // spellings (isNull, =, not), so refusing costs an author nothing but the
 // explicit operator.
-func resolveScalarBool(binding wire.Value, sources BindingSources) (bool, bool) {
+func resolveScalarBool(binding wire.Value, sources BindingSources) (bool, bool, error) {
 	if e, ok := exprBinding(binding); ok {
-		cell, outcome := evalScalarTransform(e, sources)
+		cell, outcome, err := evalScalarTransform(e, sources)
 		if outcome != scalarResolved {
-			return false, false
+			return false, false, err
 		}
 		b, isBool := cell.(wire.Bool)
-		return bool(b), isBool
+		return bool(b), isBool, err
 	}
 	if t, ok := transformBinding(binding); ok {
-		cell, outcome := evalScalarTransform(t, sources)
+		cell, outcome, err := evalScalarTransform(t, sources)
 		if outcome != scalarResolved {
-			return false, false
+			return false, false, err
 		}
 		b, isBool := cell.(wire.Bool)
-		return bool(b), isBool
+		return bool(b), isBool, err
 	}
-	b, ok := resolveBinding(binding, sources).(wire.Bool)
-	return bool(b), ok
+	resolved, err := resolveBinding(binding, sources)
+	b, ok := resolved.(wire.Bool)
+	return bool(b), ok, err
 }
 
 // ── Conditional presence and predicate branching (Phase 1535) ───────────────
@@ -524,13 +550,20 @@ func resolveScalarBool(binding wire.Value, sources BindingSources) (bool, bool) 
 // other outcome is the renderer failing to answer the question. Content that
 // vanishes because a source was missing is the one failure a reader cannot see,
 // cannot report and cannot work around.
-func isNodeVisible(node wire.Node, sources BindingSources) bool {
+//
+// Phase 1667 — "errored" above keeps its meaning: the evaluator could not
+// produce a cell, which is the renderer unable to answer. A resolution ERROR is
+// reported alongside the verdict rather than changing it, so the node still
+// renders and the caller still learns why the predicate had no answer. Hiding
+// content because a binding could never be answered would be the invisible
+// failure this rule exists to prevent, in a new disguise.
+func isNodeVisible(node wire.Node, sources BindingSources) (bool, error) {
 	raw, declared := node.Extras["visible"]
 	if !declared {
-		return true
+		return true, nil
 	}
-	value, ok := resolveScalarBool(raw, sources)
-	return !ok || value
+	value, ok, err := resolveScalarBool(raw, sources)
+	return !ok || value, err
 }
 
 // selectSwitchCase is first-match-wins over BOTH kinds of case: a literal
@@ -547,10 +580,16 @@ func isNodeVisible(node wire.Node, sources BindingSources) bool {
 // is the OPPOSITE default from isNodeVisible, and deliberately so: falling
 // through here lands on a `default` branch the author wrote, so no content
 // disappears — whereas a node with no verdict has no fallback.
-func selectSwitchCase(cases wire.Value, selector string, selectorResolved bool, sources BindingSources) (wire.Node, bool) {
+func selectSwitchCase(cases wire.Value, selector string, selectorResolved bool, sources BindingSources) (wire.Node, bool, error) {
+	var firstErr error
+	note := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 	arr, ok := cases.(wire.Arr)
 	if !ok {
-		return wire.Node{}, false
+		return wire.Node{}, false, nil
 	}
 	for _, item := range arr {
 		caseObj, ok := item.(wire.Obj)
@@ -560,7 +599,7 @@ func selectSwitchCase(cases wire.Value, selector string, selectorResolved bool, 
 		if match, hasMatch := caseObj.Fields["match"].(wire.Str); hasMatch {
 			if selectorResolved && string(match) == selector {
 				if child, ok := asNode(caseObj.Fields["child"]); ok {
-					return child, true
+					return child, true, firstErr
 				}
 			}
 			continue
@@ -572,13 +611,15 @@ func selectSwitchCase(cases wire.Value, selector string, selectorResolved bool, 
 		if !hasWhen {
 			continue
 		}
-		if value, ok := resolveScalarBool(when, sources); ok && value {
+		value, ok, err := resolveScalarBool(when, sources)
+		note(err)
+		if ok && value {
 			if child, ok := asNode(caseObj.Fields["child"]); ok {
-				return child, true
+				return child, true, firstErr
 			}
 		}
 	}
-	return wire.Node{}, false
+	return wire.Node{}, false, firstErr
 }
 
 // resolveScalarNumber resolves a numeric-slot binding (Metric / LabelValueRow
@@ -587,31 +628,31 @@ func selectSwitchCase(cases wire.Value, selector string, selectorResolved bool, 
 // bool / date cell in a numeric slot renders absence, never a wrong number);
 // every other binding resolves via resolveBinding unchanged, so non-Transform
 // slots keep their established behaviour.
-func resolveScalarNumber(binding wire.Value, sources BindingSources) wire.Value {
+func resolveScalarNumber(binding wire.Value, sources BindingSources) (wire.Value, error) {
 	if e, ok := exprBinding(binding); ok {
 		// Phase 1534 — the scalar expression. Admitted only when numeric, on the
 		// same rule the Transform arm below follows: a text / bool / date cell in
 		// a numeric slot renders absence, never a wrong number.
-		cell, outcome := evalScalarTransform(e, sources)
+		cell, outcome, err := evalScalarTransform(e, sources)
 		if outcome != scalarResolved {
-			return nil
+			return nil, err
 		}
 		switch cell.(type) {
 		case wire.Int, wire.Float:
-			return cell
+			return cell, err
 		}
-		return nil
+		return nil, err
 	}
 	if t, ok := transformBinding(binding); ok {
-		cell, outcome := evalScalarTransform(t, sources)
+		cell, outcome, err := evalScalarTransform(t, sources)
 		if outcome != scalarResolved {
-			return nil
+			return nil, err
 		}
 		switch cell.(type) {
 		case wire.Int, wire.Float:
-			return cell
+			return cell, err
 		}
-		return nil
+		return nil, err
 	}
 	return resolveBinding(binding, sources)
 }

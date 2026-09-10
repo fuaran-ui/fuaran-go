@@ -21,6 +21,26 @@ package fuarango
 
 // Version is the pre-release version of the fuaran-go host.
 //
+// 0.0.6-alpha carries the Phase 1667 COMPILE-BREAKING change to the renderer's
+// exported entry points: renderer.RenderHTML and renderer.RenderHTMLWithEgress
+// answer (string, error) where they answered a bare string. The error is a
+// binding-resolution error and rides ALONGSIDE the HTML rather than instead of
+// it — the render is a pure function of the tree and always completes — and it
+// is non-nil only where the document asked for something no decoded tree can
+// answer: today exactly Binding.Computed, which WIRE_FORMAT.md §5 says resolves
+// to an error naming its replacements and never to a value. Classify it with
+// errors.Is against renderer.ErrDecodedComputed. renderer.RenderWithIslands and
+// RenderWithIslandsAndEgress are UNCHANGED in shape — they already answered
+// (string, error) — and now report the same class through it. An unevaluable
+// pipeline (an unbound Transform param, an ambiguous non-1×1 scalar result) is
+// deliberately NOT reported: that is the renderer unable to answer, it renders
+// as the slot's empty state exactly as before, and keeping the error narrow is
+// what makes it worth checking.
+//
+// It advances the version rather than riding 0.0.5-alpha because the class is
+// higher: that entry describes a re-encode difference every caller still
+// compiles against, and this one does not compile.
+//
 // 0.0.5-alpha carries the Phase 1585 WIRE-VISIBLE change to TabsSpec.activeIndex,
 // the second half of the same phase: the member is omit-at-default at the
 // identity Static 0, so this host stops emitting it for a tab strip opening on
@@ -48,4 +68,4 @@ package fuarango
 // dag.Record's bare UserID becomes the typed Actor, and pre-1144 DAG content
 // addresses do not carry forward. Recorded in README.md — this host declares no
 // STABILITY.md.
-const Version = "0.0.5-alpha"
+const Version = "0.0.6-alpha"

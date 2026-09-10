@@ -168,9 +168,9 @@ func TestMarkdownCorpusAmbient(t *testing.T) {
 			var html string
 			if fx.Policy == "denyNonLocal" {
 				// No policy named — the ambient default IS denyNonLocal.
-				html = renderer.RenderHTML(node, nil)
+				html = renderHTML(t, node, nil)
 			} else {
-				html = renderer.RenderHTMLWithEgress(node, nil, egressPolicyFor(t, fx.Policy))
+				html = renderHTMLWithEgress(t, node, nil, egressPolicyFor(t, fx.Policy))
 			}
 			want := `<div class="fuaran-markdown">` + fx.HTML + `</div>`
 			if !strings.Contains(html, want) {
@@ -229,7 +229,7 @@ func TestAmbientEgressAtTheNodeCallSites(t *testing.T) {
 				t.Fatalf("decode: %v", err)
 			}
 			// No policy named anywhere — this is the acceptance criterion.
-			html := renderer.RenderHTML(node, nil)
+			html := renderHTML(t, node, nil)
 			if !strings.Contains(html, renderer.EgressRefusalURL) {
 				t.Errorf("the destination was not refused under the ambient default:\n%s", html)
 			}
@@ -243,7 +243,7 @@ func TestAmbientEgressAtTheNodeCallSites(t *testing.T) {
 			}
 			// And the named opt-out still renders the real destination — the
 			// refusal is a policy answer, not a hard-coded neuter.
-			widened := renderer.RenderHTMLWithEgress(node, nil, renderer.PermissiveEgress())
+			widened := renderHTMLWithEgress(t, node, nil, renderer.PermissiveEgress())
 			if !strings.Contains(widened, exfil) {
 				t.Errorf("the named permissive entry point did not emit the destination:\n%s", widened)
 			}
@@ -531,7 +531,7 @@ func TestClassVocabularyParity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("decode: %v", err)
 			}
-			html := renderer.RenderHTML(node, nil)
+			html := renderHTML(t, node, nil)
 			for cls := range emittedClasses(html) {
 				checked++
 				if !inVocab(cls) {
@@ -627,4 +627,29 @@ func TestReferenceCSSByteParity(t *testing.T) {
 		t.Error("renderer/content/fuaran-reference.css has drifted from the canonical stylesheet — re-copy it byte-for-byte")
 	}
 	t.Logf("reference-CSS byte parity EXECUTED against %s (%d bytes)", canonical, len(raw))
+}
+
+// ── Test helpers for the Phase 1667 error return ────────────────────────────
+//
+// renderer.RenderHTML / RenderHTMLWithEgress answer (string, error) since Phase
+// 1667. These wrap them and FAIL the test on a resolution error rather than
+// each site discarding it: no corpus fixture carries a decoded
+// Binding.Computed, so a non-nil error here is a regression, not an expectation.
+
+func renderHTML(t *testing.T, node wire.Node, sources renderer.BindingSources) string {
+	t.Helper()
+	html, err := renderer.RenderHTML(node, sources)
+	if err != nil {
+		t.Fatalf("RenderHTML: %v", err)
+	}
+	return html
+}
+
+func renderHTMLWithEgress(t *testing.T, node wire.Node, sources renderer.BindingSources, policy renderer.EgressPolicy) string {
+	t.Helper()
+	html, err := renderer.RenderHTMLWithEgress(node, sources, policy)
+	if err != nil {
+		t.Fatalf("RenderHTMLWithEgress: %v", err)
+	}
+	return html
 }

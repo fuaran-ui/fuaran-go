@@ -235,7 +235,7 @@ const refusedURL = "https://collector.example/asset.jpg"
 
 func renderJSON(t *testing.T, canonicalJSON string) string {
 	t.Helper()
-	return RenderHTML(mustDecode(t, canonicalJSON), nil)
+	return renderHTML(t, mustDecode(t, canonicalJSON), nil)
 }
 
 func mustEmit(t *testing.T, html, needle, why string) {
@@ -466,7 +466,7 @@ func checkEmbedRefusedSourceOmitted(t *testing.T) {
 	// every assertion above and this obligation would guard a worse bug than the
 	// one it exists for. "Nothing was declared" and "this was refused" must also
 	// stay different facts, so an ALLOWED source carries no refusal marker.
-	allowed := RenderHTMLWithEgress(
+	allowed := renderHTMLWithEgress(t,
 		mustDecode(t, `{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"https://player.example/embed/harbour"},"title":"T"}}`),
 		nil, PermissiveEgress())
 	mustEmit(t, allowed, ` src="https://player.example/embed/harbour"`, "an allowed https source still renders")

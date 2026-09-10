@@ -63,7 +63,7 @@ func renderCorpusNode(t *testing.T, id string) string {
 	if err != nil {
 		t.Fatalf("decoding %s: %v", id, err)
 	}
-	return RenderHTML(node, nil)
+	return renderHTML(t, node, nil)
 }
 
 func TestDeclaredDirectionEmitsDirAndIsolationClass(t *testing.T) {

@@ -142,5 +142,11 @@ func RenderWithIslandsAndEgress(
 		}
 		scripts.WriteString(script)
 	}
-	return staticHTML + scripts.String(), nil
+	// Phase 1667 — the binding-resolution error rides the SAME return this
+	// surface already had, so an islands host learns about a decoded
+	// Binding.Computed on exactly the terms the static host does. Reported after
+	// the island scripts because an island-encoding failure is the more
+	// fundamental one: it means the payload a client would hydrate from could not
+	// be produced at all.
+	return staticHTML + scripts.String(), r.err
 }

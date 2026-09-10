@@ -36,8 +36,26 @@ tree := wire.Node{
 wireJSON, _ := wire.EncodeNode(tree)   // canonical wire JSON, byte-identical to every host
 ```
 
-Render it server-side with `renderer.RenderHTML(tree, nil)`. Full walkthrough —
-author → encode → render → playground: <https://fuaran-ui.io/get-started/go>.
+Render it server-side with `html, err := renderer.RenderHTML(tree, nil)`. Full
+walkthrough — author → encode → render → playground:
+<https://fuaran-ui.io/get-started/go>.
+
+The error is a **binding-resolution** error, and it is returned ALONGSIDE the
+HTML rather than instead of it: the render is a pure function of the tree and
+always completes, so a caller gets both what could be rendered and the reason
+the rest could not. It is non-nil only where the document asked for something no
+decoded tree can answer — today exactly `Binding.Computed`, whose whole payload
+is a host closure that crosses the wire as `"<closure>"`. `WIRE_FORMAT.md` §5
+says such a binding resolves to an error naming its replacements
+(`Binding.Expr` / `Transform` / `State`) and never to a value, because a slot
+answering `0` / `""` / `false` there would render a wrong answer a reader cannot
+tell from a right one. Classify it with
+`errors.Is(err, renderer.ErrDecodedComputed)`.
+
+What it is **not**: a report that a pipeline could not be evaluated. An unbound
+`Transform` param or an ambiguous non-1×1 scalar result is the renderer unable to
+answer, which renders as the slot's empty state and reports nothing — that
+distinction is the whole reason the error is narrow enough to be worth checking.
 
 ## Why a Go host
 
@@ -143,7 +161,7 @@ policy := renderer.DenyNonLocalEgress().
     AllowOrigin(renderer.HostSuffix("cdn.example"), renderer.EgressMedia).
     AllowOrigin(renderer.ExactHost("docs.example"), renderer.EgressHyperlink)
 
-html := renderer.RenderHTMLWithEgress(tree, sources, policy)
+html, err := renderer.RenderHTMLWithEgress(tree, sources, policy)
 // islands: renderer.RenderWithIslandsAndEgress(tree, sources, islands, policy)
 ```
 

@@ -68,7 +68,7 @@ func seededPairTree(t *testing.T) wire.Node {
 func TestSeededPairRendersTheDeclaredCount(t *testing.T) {
 	node := seededPairTree(t)
 
-	if got := badgeText(t, renderer.RenderHTML(node, nil)); got != "2" {
+	if got := badgeText(t, renderHTML(t, node, nil)); got != "2" {
 		t.Fatalf("seeded derivation = %q, want %q (the grid declares two rows under $state.members)", got, "2")
 	}
 
@@ -93,10 +93,10 @@ func TestSeededPairAssertionIsSensitiveToTheDerivedValue(t *testing.T) {
 	node := seededPairTree(t)
 
 	oneRow := wire.Arr{wire.Obj{Fields: map[string]wire.Value{"team": wire.Str("Solo")}}}
-	if got := badgeText(t, renderer.RenderHTML(node, renderer.BindingSources{"members": oneRow})); got != "1" {
+	if got := badgeText(t, renderHTML(t, node, renderer.BindingSources{"members": oneRow})); got != "1" {
 		t.Fatalf("a one-row host value should derive %q, got %q — the badge is not reading the slot at all", "1", got)
 	}
-	if got := badgeText(t, renderer.RenderHTML(node, renderer.BindingSources{"members": wire.Arr{}})); got == "2" {
+	if got := badgeText(t, renderHTML(t, node, renderer.BindingSources{"members": wire.Arr{}})); got == "2" {
 		t.Fatal("an EMPTY host value still derived 2 — the assertion above would pass on a host that ignores the slot")
 	}
 }
