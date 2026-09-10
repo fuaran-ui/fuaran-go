@@ -2014,6 +2014,30 @@ func decodeBool(w *walkState, raw any, path string) Value {
 	return Bool(expectBool(raw, path))
 }
 
+// decodeSkeletonRows is `Skeleton.rows`, bounded by WIRE_FORMAT.md §21.9
+// (Phase 1666).
+//
+// expectInt decides FIRST, so §7.1's slot rule is untouched: a fractional,
+// non-finite or out-of-32-bit value is still a WRONG_TYPE and never a limit
+// breach. The bound then refuses a value the slot CAN hold but the format will
+// not carry the work of — a renderer emits one placeholder row per count, so
+// {"rows":100000000} names 10^8 rendered rows in a handful of bytes. The two
+// codes answer different questions and the ORDER is what keeps them apart.
+//
+// Upper bound only, deliberately: a negative count is an authoring defect
+// (FUARAN150 in the pre-emit family), not a resource breach.
+func decodeSkeletonRows(w *walkState, raw any, path string) Value {
+	rows := expectInt(raw, path)
+	if rows > MaxSkeletonRows {
+		failExpecting(
+			CodeLimitExceeded,
+			path,
+			fmt.Sprintf("skeleton rows %d exceeds the maximum of %d (WIRE_FORMAT 21.9)", rows, MaxSkeletonRows),
+			fmt.Sprintf("at most %d rows on one Skeleton", MaxSkeletonRows))
+	}
+	return Int(rows)
+}
+
 func enumDecoder(allowed caseSet, name string, aliases map[string]string) fieldDecoder {
 	return func(w *walkState, raw any, path string) Value {
 		return Str(enumStr(raw, path, allowed, name, aliases))
@@ -3670,7 +3694,9 @@ func init() {
 		},
 		"Skeleton": func(w *walkState, obj map[string]any, path string) Obj {
 			s := newSpec(w, obj, path)
-			s.req("rows", decodeInt)
+			// Phase 1666 — the §21.9 row bound rides the field's own decoder, so
+			// the spec table stays the single statement of a Skeleton's shape.
+			s.req("rows", decodeSkeletonRows)
 			return s.build("Skeleton")
 		},
 		// Phase 821 — the standalone icon-only display kind. `size`
