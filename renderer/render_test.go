@@ -20,7 +20,7 @@ func mustDecode(t *testing.T, canonicalJSON string) wire.Node {
 
 func TestHeadingRendersLevelAndClassVocabulary(t *testing.T) {
 	node := mustDecode(t, `{"id":"h1","kind":{"$type":"Heading","level":2,"text":"Revenue & Cost","variant":"Standard"}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 	for _, want := range []string{
 		`<div id="h1" data-fuaran-node-id="h1" class="fuaran-kind-heading fuaran-node fuaran-tone-default fuaran-weight-standard fuaran-emphasis-normal">`,
 		`<h2 class="fuaran-heading">Revenue &amp; Cost</h2>`,
@@ -33,7 +33,7 @@ func TestHeadingRendersLevelAndClassVocabulary(t *testing.T) {
 
 func TestLinkSanitisesScriptScheme(t *testing.T) {
 	node := mustDecode(t, `{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"javascript:alert(1)"},"label":"Click"}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 	// The scheme floor still refuses it; what changed is the SPELLING of the
 	// refusal at a node call site. Before the ambient policy landed this was a
 	// bare about:blank, indistinguishable from an authoring mistake; the call
@@ -53,10 +53,10 @@ func TestLinkSanitisesScriptScheme(t *testing.T) {
 	// the named opt-out — the ambient default denies it (see the ambient legs in
 	// conformance/render_test.go).
 	safe := mustDecode(t, `{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"https://example.org/x"},"label":"Click"}}`)
-	if !strings.Contains(renderHTMLWithEgress(t, safe, nil, PermissiveEgress()), `href="https://example.org/x"`) {
+	if !strings.Contains(renderHTMLWithEgress(t, safe, BindingSources{}, PermissiveEgress()), `href="https://example.org/x"`) {
 		t.Error("https href was not preserved under a permissive policy")
 	}
-	if !strings.Contains(renderHTML(t, safe, nil), `data-fuaran-egress-refused="hyperlink:example.org"`) {
+	if !strings.Contains(renderHTML(t, safe, BindingSources{}), `data-fuaran-egress-refused="hyperlink:example.org"`) {
 		t.Error("the ambient default did not refuse an undeclared remote href")
 	}
 }
@@ -69,7 +69,7 @@ func TestLinkProtectedEmailEmitsNoPlaintextAddress(t *testing.T) {
 	// The narrowest widening — a policy that permits non-network destinations
 	// and nothing else. Under the ambient default the mailto: is refused before
 	// the protected arm is reached (see TestProtectedEmailNeedsANonNetworkPolicy).
-	html := renderHTMLWithEgress(t, node, nil, allowNonNetworkEgress())
+	html := renderHTMLWithEgress(t, node, BindingSources{}, allowNonNetworkEgress())
 	for _, want := range []string{
 		`<span class="fuaran-link-protected-wrap">`,
 		`<a class="fuaran-link fuaran-link-protected" href="&#109;&#97;&#105;&#108;&#116;&#111;&#58;`,
@@ -87,7 +87,7 @@ func TestLinkProtectedEmailEmitsNoPlaintextAddress(t *testing.T) {
 
 func TestButtonRendersInert(t *testing.T) {
 	node := mustDecode(t, `{"id":"b","kind":{"$type":"Button","label":"Go","onClick":{"$type":"Navigate","route":"/x"},"variant":"Primary"}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 	if !strings.Contains(html, `<button class="fuaran-button fuaran-button-primary">Go</button>`) {
 		t.Errorf("button did not render inert:\n%s", html)
 	}
@@ -98,7 +98,7 @@ func TestButtonRendersInert(t *testing.T) {
 
 func TestModalClosedCarriesHiddenAttribute(t *testing.T) {
 	node := mustDecode(t, `{"id":"m","kind":{"$type":"Modal","children":[],"dismissable":true,"open":{"$type":"Static","value":false}}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 	if !strings.Contains(html, `<div class="fuaran-modal-overlay" hidden="">`) {
 		t.Errorf("closed modal must stay in the DOM behind [hidden]:\n%s", html)
 	}
@@ -121,11 +121,11 @@ func TestModalClosedCarriesHiddenAttribute(t *testing.T) {
 // means now, and that is what this pins.
 func TestUnresolvedBindingPlaceholdersAndSourcesResolve(t *testing.T) {
 	tree := `{"id":"m1","kind":{"$type":"Metric","label":"Users","value":{"$type":"State","key":"users"}}}`
-	bare := renderHTML(t, mustDecode(t, tree), nil)
+	bare := renderHTML(t, mustDecode(t, tree), BindingSources{})
 	if !strings.Contains(bare, `<div class="fuaran-metric-value">—</div>`) {
 		t.Errorf("a State with no declared default must placeholder to the em-dash:\n%s", bare)
 	}
-	resolved := renderHTML(t, mustDecode(t, tree), BindingSources{"users": wire.Int(42)})
+	resolved := renderHTML(t, mustDecode(t, tree), Sources(map[string]wire.Value{"users": wire.Int(42)}))
 	if !strings.Contains(resolved, `<div class="fuaran-metric-value">42</div>`) {
 		t.Errorf("host source did not resolve:\n%s", resolved)
 	}
@@ -148,18 +148,18 @@ func TestUnresolvedBindingPlaceholdersAndSourcesResolve(t *testing.T) {
 func TestStateDefaultResolvesAtTheRenderFloor(t *testing.T) {
 	withDefault := `{"id":"m1","kind":{"$type":"Metric","label":"Users","value":{"$type":"State","defaultValue":7,"key":"users"}}}`
 
-	bare := renderHTML(t, mustDecode(t, withDefault), nil)
+	bare := renderHTML(t, mustDecode(t, withDefault), BindingSources{})
 	if !strings.Contains(bare, `<div class="fuaran-metric-value">7</div>`) {
 		t.Errorf("an unwritten State must resolve to its declared default (WIRE_FORMAT §24):\n%s", bare)
 	}
 
-	written := renderHTML(t, mustDecode(t, withDefault), BindingSources{"users": wire.Int(42)})
+	written := renderHTML(t, mustDecode(t, withDefault), Sources(map[string]wire.Value{"users": wire.Int(42)}))
 	if !strings.Contains(written, `<div class="fuaran-metric-value">42</div>`) {
 		t.Errorf("a written State must beat its declared default — hydration re-resolves:\n%s", written)
 	}
 
 	noDefault := `{"id":"m1","kind":{"$type":"Metric","label":"Users","value":{"$type":"State","key":"users"}}}`
-	if html := renderHTML(t, mustDecode(t, noDefault), nil); !strings.Contains(html, `<div class="fuaran-metric-value">—</div>`) {
+	if html := renderHTML(t, mustDecode(t, noDefault), BindingSources{}); !strings.Contains(html, `<div class="fuaran-metric-value">—</div>`) {
 		t.Errorf("a State with neither a default nor a source is still unresolved:\n%s", html)
 	}
 }
@@ -172,7 +172,7 @@ func TestStateDefaultResolvesAtTheRenderFloor(t *testing.T) {
 // the posture is contract, not accident.
 func TestChartRequiresPreLoweredPosture(t *testing.T) {
 	node := mustDecode(t, `{"id":"chart-1","kind":{"$type":"Chart","kind":"Line","source":{"$type":"Static","value":"<opaque>"},"stacked":true,"title":{"$type":"Literal","text":"Channel mix"},"xField":"month","yFields":["revenue","cost"]}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	// The passthrough is a MARKED placeholder — the documented typed outcome.
 	for _, want := range []string{
@@ -219,7 +219,7 @@ func TestChartAnnotationsDoNotMoveTheRequirePreLoweredPosture(t *testing.T) {
 		`"kind":"Bar","source":{"$type":"Static","value":"<opaque>"},"stacked":false,` +
 		`"title":{"$type":"Literal","text":"Revenue by quarter"},"xField":"quarter","yFields":["revenue"]}}`
 	node := mustDecode(t, raw)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	// The typed passthrough is unchanged — a marked, non-empty placeholder.
 	for _, want := range []string{
@@ -269,7 +269,7 @@ func TestChartAnnotationsDoNotMoveTheRequirePreLoweredPosture(t *testing.T) {
 	if err != nil {
 		t.Skipf("annotation golden not found: %v", err)
 	}
-	lowered := renderHTML(t, mustDecode(t, strings.TrimSpace(string(golden))), nil)
+	lowered := renderHTML(t, mustDecode(t, strings.TrimSpace(string(golden))), BindingSources{})
 	for _, want := range []string{
 		`<svg`,
 		`fuaran-drawing`,
@@ -287,7 +287,7 @@ func TestChartAnnotationsDoNotMoveTheRequirePreLoweredPosture(t *testing.T) {
 
 func TestStaticDataGridRendersSemanticTable(t *testing.T) {
 	node := mustDecode(t, `{"id":"t","kind":{"$type":"DataGrid","columns":[],"editable":false,"source":{"$type":"Static","value":"<opaque>"},"staticRows":{"headers":[{"$type":"Literal","text":"Term"}],"rows":[[{"$type":"Literal","text":"MVU"}]]}}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 	for _, want := range []string{
 		`<table class="fuaran-table">`,
 		`<th class="fuaran-table-header">Term</th>`,
@@ -301,11 +301,11 @@ func TestStaticDataGridRendersSemanticTable(t *testing.T) {
 
 func TestSwitchRendersMatchingCaseFromSources(t *testing.T) {
 	tree := `{"id":"sw","kind":{"$type":"Switch","cases":[{"child":{"id":"a","kind":{"$type":"Markdown","text":"case A"}},"match":"a"}],"default":{"id":"d","kind":{"$type":"Markdown","text":"default"}},"stateKey":"view"}}`
-	withDefault := renderHTML(t, mustDecode(t, tree), nil)
+	withDefault := renderHTML(t, mustDecode(t, tree), BindingSources{})
 	if !strings.Contains(withDefault, "default") || strings.Contains(withDefault, "case A") {
 		t.Errorf("unset state must render the default:\n%s", withDefault)
 	}
-	withCase := renderHTML(t, mustDecode(t, tree), BindingSources{"view": wire.Str("a")})
+	withCase := renderHTML(t, mustDecode(t, tree), Sources(map[string]wire.Value{"view": wire.Str("a")}))
 	if !strings.Contains(withCase, "case A") {
 		t.Errorf("matching case did not render:\n%s", withCase)
 	}
@@ -313,7 +313,7 @@ func TestSwitchRendersMatchingCaseFromSources(t *testing.T) {
 
 func TestFragmentRefResolvesDeclaredBody(t *testing.T) {
 	tree := `{"id":"root","kind":{"$type":"Box","children":[{"id":"decl","kind":{"$type":"FragmentDecl","body":{"id":"body-md","kind":{"$type":"Markdown","text":"template body"}},"name":"tpl"}},{"id":"use","kind":{"$type":"FragmentRef","name":"tpl"}}],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}`
-	html := renderHTML(t, mustDecode(t, tree), nil)
+	html := renderHTML(t, mustDecode(t, tree), BindingSources{})
 	if !strings.Contains(html, "template body") {
 		t.Errorf("fragment ref did not resolve the declared body:\n%s", html)
 	}
@@ -335,7 +335,7 @@ func TestDrawingLabelRotation(t *testing.T) {
 		`{"$type":"Label","style":{"rotation":0},"text":"Z","x":150,"y":100},`+
 		`{"$type":"Label","style":{},"text":"U","x":100,"y":20}`+
 		`],"style":{},"viewBox":{"height":120,"minX":0,"minY":0,"width":200}}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	for _, want := range []string{
 		`<text class="fuaran-drawing-label" x="30" y="100" transform="rotate(-30 30 100)"`,
@@ -367,7 +367,7 @@ func TestDrawingRotationInertOffLabel(t *testing.T) {
 		`{"$type":"Rectangle","height":10,"style":{"rotation":45},"width":10,"x":0,"y":0},`+
 		`{"$type":"Circle","cx":5,"cy":5,"r":2,"style":{"rotation":45}}`+
 		`],"style":{},"viewBox":{"height":100,"minX":0,"minY":0,"width":100}}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	if strings.Contains(html, "transform=") {
 		t.Errorf("rotation must be inert on non-Label shapes:\n%s", html)
@@ -388,7 +388,7 @@ func TestDrawingMarkIdEmission(t *testing.T) {
 		`{"$type":"Label","style":{"emphasis":"Loud","markId":"a<b>&\"c\""},"text":"L","x":5,"y":5},`+
 		`{"$type":"Line","style":{"stroke":"currentColor"},"x1":0,"y1":0,"x2":9,"y2":9}`+
 		`],"style":{},"viewBox":{"height":20,"minX":0,"minY":0,"width":20}}}`)
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	for _, want := range []string{
 		// Last in the order: after fill, and after the text-only cluster.
@@ -418,7 +418,7 @@ func TestDrawingMarkIdEmission(t *testing.T) {
 func TestDrawingRootAriaLabel(t *testing.T) {
 	drawingRoot := func(extra string) string {
 		return renderHTML(t, mustDecode(t, `{"id":"d","kind":{"$type":"Drawing","shapes":[],`+
-			`"style":{},"viewBox":{"height":100,"minX":0,"minY":0,"width":200}`+extra+`}}`), nil)
+			`"style":{},"viewBox":{"height":100,"minX":0,"minY":0,"width":200}`+extra+`}}`), BindingSources{})
 	}
 
 	both := drawingRoot(`,"title":"Sales vs target","description":"Bar chart. 2 series: sales, target."`)
