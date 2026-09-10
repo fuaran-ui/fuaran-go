@@ -1,7 +1,7 @@
 # CLAUDE.md — fuaran-go (Go reference implementation)
 
 This repo is the **Go host of the Fuaran UI wire format** — a **co-equal sibling
-to the F# (`Fuaran.UI`), TypeScript (`@fuaran-ui/*`), and Python (`fuaran_py`)
+to the F# (`Fuaran.UI`), TypeScript (`@fuaran-ui/*`), and Python (`fuaran_ui`)
 tiers**. Its identity is a **headless host and driver**: the canonical-JSON codec,
 a tree-op apply engine, a pre-emit validator, and server-side emission
 (static-HTML + partial-hydration + server-driven), all conformant to the shared
