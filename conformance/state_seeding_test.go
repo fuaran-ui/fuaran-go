@@ -68,13 +68,13 @@ func seededPairTree(t *testing.T) wire.Node {
 func TestSeededPairRendersTheDeclaredCount(t *testing.T) {
 	node := seededPairTree(t)
 
-	if got := badgeText(t, renderHTML(t, node, nil)); got != "2" {
+	if got := badgeText(t, renderHTML(t, node, renderer.BindingSources{})); got != "2" {
 		t.Fatalf("seeded derivation = %q, want %q (the grid declares two rows under $state.members)", got, "2")
 	}
 
 	// The islands surface must not differ: one document would otherwise render
 	// two values depending only on whether a region was marked an island.
-	islands, err := renderer.RenderWithIslands(node, nil, map[string]string{})
+	islands, err := renderer.RenderWithIslands(node, renderer.BindingSources{}, map[string]string{})
 	if err != nil {
 		t.Fatalf("islands render: %v", err)
 	}
@@ -93,10 +93,10 @@ func TestSeededPairAssertionIsSensitiveToTheDerivedValue(t *testing.T) {
 	node := seededPairTree(t)
 
 	oneRow := wire.Arr{wire.Obj{Fields: map[string]wire.Value{"team": wire.Str("Solo")}}}
-	if got := badgeText(t, renderHTML(t, node, renderer.BindingSources{"members": oneRow})); got != "1" {
+	if got := badgeText(t, renderHTML(t, node, renderer.Sources(map[string]wire.Value{"members": oneRow}))); got != "1" {
 		t.Fatalf("a one-row host value should derive %q, got %q — the badge is not reading the slot at all", "1", got)
 	}
-	if got := badgeText(t, renderHTML(t, node, renderer.BindingSources{"members": wire.Arr{}})); got == "2" {
+	if got := badgeText(t, renderHTML(t, node, renderer.Sources(map[string]wire.Value{"members": wire.Arr{}}))); got == "2" {
 		t.Fatal("an EMPTY host value still derived 2 — the assertion above would pass on a host that ignores the slot")
 	}
 }
@@ -142,19 +142,28 @@ func TestStateSeedingRules(t *testing.T) {
 	// no written values, so the pair that matters is host vs seed.
 	t.Run("rule2-the-host-value-wins-over-the-seed", func(t *testing.T) {
 		node := decode(t, metric("m", "users", `"defaultValue":7,`))
-		merged := renderer.WithStateSeeds(node, renderer.BindingSources{"users": wire.Int(99)})
-		if merged["users"] != wire.Int(99) {
-			t.Fatalf("the seed overrode the host's own value: %v — a seed is the value before anything else has said anything, never an override", merged["users"])
+		merged := renderer.WithStateSeeds(node, renderer.Sources(map[string]wire.Value{"users": wire.Int(99)}))
+		if merged.Values["users"] != wire.Int(99) {
+			t.Fatalf("the seed overrode the host's own value: %v — a seed is the value before anything else has said anything, never an override", merged.Values["users"])
 		}
-		if renderer.WithStateSeeds(node, nil)["users"] != wire.Int(7) {
+		if renderer.WithStateSeeds(node, renderer.BindingSources{}).Values["users"] != wire.Int(7) {
 			t.Fatal("the seed did not reach a caller that named nothing")
+		}
+		// Phase 1663 — the two HOST members ride through the seeding pass
+		// untouched. Seeding lays tree-declared values under the caller's; it has
+		// no business with the caller's clock or locale, and a merge written as a
+		// bare map splat would have dropped both silently.
+		withClock := renderer.BindingSources{Now: "2026-08-02T06:59:24Z", Locale: "en-GB"}
+		seeded := renderer.WithStateSeeds(node, withClock)
+		if seeded.Now != withClock.Now || seeded.Locale != withClock.Locale {
+			t.Fatalf("seeding dropped a host member: now=%q locale=%q", seeded.Now, seeded.Locale)
 		}
 		// The caller's own map is never mutated: a host may reuse one across
 		// renders, and a seeding pass that wrote into it would leak the first
 		// tree's declarations into the second's render.
-		callers := renderer.BindingSources{}
+		callers := renderer.Sources(map[string]wire.Value{})
 		renderer.WithStateSeeds(node, callers)
-		if len(callers) != 0 {
+		if len(callers.Values) != 0 {
 			t.Fatalf("the caller's sources map was mutated: %v", callers)
 		}
 	})

@@ -74,14 +74,19 @@ func WithStateSeeds(node wire.Node, sources BindingSources) BindingSources {
 	if len(seeds) == 0 {
 		return sources
 	}
-	merged := make(BindingSources, len(seeds)+len(sources))
+	// Phase 1663 — the identity-keyed map is Values on the widened record, and
+	// MergedWith carries the host instant and the ambient locale along with it.
+	// A caller merging maps by hand would silently drop both.
+	merged := make(map[string]wire.Value, len(seeds)+len(sources.Values))
 	for k, v := range seeds {
 		merged[k] = v
 	}
-	for k, v := range sources {
+	for k, v := range sources.Values {
 		merged[k] = v
 	}
-	return merged
+	out := sources
+	out.Values = merged
+	return out
 }
 
 // seedWalkValue descends one decoded value, recording the first declaration of

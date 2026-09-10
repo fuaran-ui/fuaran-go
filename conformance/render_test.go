@@ -168,9 +168,9 @@ func TestMarkdownCorpusAmbient(t *testing.T) {
 			var html string
 			if fx.Policy == "denyNonLocal" {
 				// No policy named — the ambient default IS denyNonLocal.
-				html = renderHTML(t, node, nil)
+				html = renderHTML(t, node, renderer.BindingSources{})
 			} else {
-				html = renderHTMLWithEgress(t, node, nil, egressPolicyFor(t, fx.Policy))
+				html = renderHTMLWithEgress(t, node, renderer.BindingSources{}, egressPolicyFor(t, fx.Policy))
 			}
 			want := `<div class="fuaran-markdown">` + fx.HTML + `</div>`
 			if !strings.Contains(html, want) {
@@ -229,7 +229,7 @@ func TestAmbientEgressAtTheNodeCallSites(t *testing.T) {
 				t.Fatalf("decode: %v", err)
 			}
 			// No policy named anywhere — this is the acceptance criterion.
-			html := renderHTML(t, node, nil)
+			html := renderHTML(t, node, renderer.BindingSources{})
 			if !strings.Contains(html, renderer.EgressRefusalURL) {
 				t.Errorf("the destination was not refused under the ambient default:\n%s", html)
 			}
@@ -243,7 +243,7 @@ func TestAmbientEgressAtTheNodeCallSites(t *testing.T) {
 			}
 			// And the named opt-out still renders the real destination — the
 			// refusal is a policy answer, not a hard-coded neuter.
-			widened := renderHTMLWithEgress(t, node, nil, renderer.PermissiveEgress())
+			widened := renderHTMLWithEgress(t, node, renderer.BindingSources{}, renderer.PermissiveEgress())
 			if !strings.Contains(widened, exfil) {
 				t.Errorf("the named permissive entry point did not emit the destination:\n%s", widened)
 			}
@@ -531,7 +531,7 @@ func TestClassVocabularyParity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("decode: %v", err)
 			}
-			html := renderHTML(t, node, nil)
+			html := renderHTML(t, node, renderer.BindingSources{})
 			for cls := range emittedClasses(html) {
 				checked++
 				if !inVocab(cls) {
