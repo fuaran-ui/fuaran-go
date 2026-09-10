@@ -363,6 +363,21 @@ func (r *renderer) renderNode(node wire.Node) string {
 		{"data-fuaran-node-id", node.ID},
 		{"class", className},
 	}
+	// WIRE_FORMAT.md §3.1 — the DECLARED direction rides the wrapper, first
+	// among the attributes that follow `class`. Two obligations, one emission:
+	// the `dir` attribute states which way the run reads, and the
+	// `fuaran-dir-*` class nodeClassName appends carries the isolation
+	// (`unicode-bidi: isolate`) that keeps it from reordering its neighbours.
+	// A DECLARATION WINS over any inherited or heuristic direction, which is
+	// what emitting `dir` on the node itself achieves.
+	//
+	// `auto` emits nothing — see declaredDirection. Before Phase 1653 this host
+	// emitted nothing for ANY direction: the slot decoded, round-tripped and
+	// changed no markup, so an RTL document rendered left-to-right on a host
+	// that reported full codec conformance for it.
+	if d := declaredDirection(styleOf(node)); d != "" {
+		attrs = append(attrs, attr{"dir", d})
+	}
 	// Route the projection: a kind whose body IS the node's semantic element
 	// takes the a11y attributes onto that element; every other kind carries
 	// them on the wrapper, as before. The wrapper keeps the node's address
@@ -518,9 +533,41 @@ func (r *renderer) childrenHTML(fields map[string]wire.Value) string {
 
 // box is the unified container: role + layout mode drive the emitted element
 // + classes so each retired kind's HTML/a11y is byte-identical.
+// printBreakClasses is the paged-medium class pair for a container's two
+// declarations, WIRE_FORMAT.md §21 (`keepTogether` / `breakBefore`).
+//
+// The declarations are CSS in an `@media print` block and need no script, so a
+// server-rendered page with no hydration carries the same paged behaviour as a
+// fully interactive one — this is the whole of the floor, not a tier a static
+// host may defer. The scoping to the paged medium, and the rule that nothing
+// else may be derived from these flags, both live in the stylesheet these
+// classes hook, so a continuous (screen) rendering is unchanged.
+//
+// This host decoded both booleans and emitted neither until Phase 1653: the
+// byte-copied reference stylesheet already carried the rules, so the CSS was
+// shipped and nothing ever selected it.
+func printBreakClasses(fields map[string]wire.Value) string {
+	flag := func(name string) bool {
+		v, ok := fields[name].(wire.Bool)
+		return ok && bool(v)
+	}
+	out := ""
+	if flag("keepTogether") {
+		out += " fuaran-break-inside-avoid"
+	}
+	if flag("breakBefore") {
+		out += " fuaran-break-before-page"
+	}
+	return out
+}
+
 func (r *renderer) box(_ wire.Node, fields map[string]wire.Value) string {
 	role, _ := fields["role"].(wire.Str)
 	layout, _ := fields["layout"].(wire.Obj)
+	// Appended to whichever element this box becomes, on EVERY branch: the
+	// declaration is about THIS container, and a branch that dropped it would
+	// honour the document on some layouts and not on others.
+	brk := printBreakClasses(fields)
 
 	switch {
 	case role == "Card":
@@ -529,11 +576,11 @@ func (r *renderer) box(_ wire.Node, fields map[string]wire.Value) string {
 			header = textElement("header", []attr{{"class", "fuaran-card-heading"}}, r.text(heading))
 		}
 		body := element("div", []attr{{"class", "fuaran-card-body"}}, r.childrenHTML(fields))
-		return element("section", []attr{{"class", "fuaran-layout-card"}}, header+body)
+		return element("section", []attr{{"class", "fuaran-layout-card" + brk}}, header+body)
 	case role == "Dashboard" || (role == "Group" && layout.Tag == "Auto"):
-		return element("div", []attr{{"class", "fuaran-layout-dashboard"}}, r.childrenHTML(fields))
+		return element("div", []attr{{"class", "fuaran-layout-dashboard" + brk}}, r.childrenHTML(fields))
 	case role == "Separator":
-		return element("hr", []attr{{"class", "fuaran-layout-separator"}}, "")
+		return element("hr", []attr{{"class", "fuaran-layout-separator" + brk}}, "")
 	case role == "Group" && layout.Tag == "Grid":
 		template := ""
 		if t, ok := layout.Fields["templateColumns"].(wire.Str); ok {
@@ -559,7 +606,7 @@ func (r *renderer) box(_ wire.Node, fields map[string]wire.Value) string {
 		if gap, ok := layout.Fields["gap"].(wire.Int); ok {
 			style += ";gap:" + strconv.FormatInt(int64(gap), 10) + "px"
 		}
-		gridAttrs := append([]attr{{"class", "fuaran-layout-grid"}, {"style", style}}, cssRefusalAttrs...)
+		gridAttrs := append([]attr{{"class", "fuaran-layout-grid" + brk}, {"style", style}}, cssRefusalAttrs...)
 		return element("div", gridAttrs, r.childrenHTML(fields))
 	case role == "Group" && layout.Tag == "Masonry":
 		// WIRE_FORMAT §3.6.7 — column-fill, realised with the CSS multi-column
@@ -575,7 +622,7 @@ func (r *renderer) box(_ wire.Node, fields map[string]wire.Value) string {
 		if gap, ok := layout.Fields["gap"].(wire.Int); ok {
 			style += ";gap:" + strconv.FormatInt(int64(gap), 10) + "px"
 		}
-		return element("div", []attr{{"class", "fuaran-layout-masonry"}, {"style", style}}, r.childrenHTML(fields))
+		return element("div", []attr{{"class", "fuaran-layout-masonry" + brk}, {"style", style}}, r.childrenHTML(fields))
 	default:
 		// Group + Flex (the default / fallthrough).
 		dirClass := "fuaran-stack-vertical"
@@ -586,7 +633,7 @@ func (r *renderer) box(_ wire.Node, fields map[string]wire.Value) string {
 		if w, ok := layout.Fields["wrap"].(wire.Bool); ok && bool(w) {
 			wrap = " fuaran-stack-wrap"
 		}
-		attrs := []attr{{"class", "fuaran-layout-stack " + dirClass + wrap}}
+		attrs := []attr{{"class", "fuaran-layout-stack " + dirClass + wrap + brk}}
 		if gap, ok := layout.Fields["gap"].(wire.Int); ok {
 			attrs = append(attrs, attr{"style", "gap:" + strconv.FormatInt(int64(gap), 10) + "px"})
 		}

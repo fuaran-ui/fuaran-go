@@ -57,6 +57,34 @@ type mergeManifest struct {
 		EnvelopeFile string `json:"envelopeFile"`
 		EnvelopeHash string `json:"envelopeHash"`
 	} `json:"refusalFixtures"`
+	// The merge-TOTALITY family, a THIRD top-level key. Each entry is half of
+	// a PAIR: a triad that must refuse (`merge-refusal`, carrying an
+	// envelopeFile + envelopeHash) immediately followed by a corrected twin
+	// that must auto-merge (`merge-3way`, carrying an expectedFile +
+	// outcomeHash), cross-referenced by `twin` / `refusal`.
+	//
+	// The pair is the whole point, and it is why the key had to be separate
+	// from both families above: a host passes a refusal suite by refusing
+	// every structural merge, and passes an auto-merge suite by never growing
+	// the arm at all, and only the pair pins the boundary between the two.
+	//
+	// It was invisible to this host until Phase 1653 — the manifest struct
+	// simply did not name the key, so `encoding/json` dropped six fixtures and
+	// both legs above stayed green while asserting nothing about the two
+	// refusals the reference host raises.
+	TotalityFixtures []struct {
+		ID           string `json:"id"`
+		Kind         string `json:"kind"`
+		BaseFile     string `json:"baseFile"`
+		AFile        string `json:"aFile"`
+		BFile        string `json:"bFile"`
+		EnvelopeFile string `json:"envelopeFile"`
+		EnvelopeHash string `json:"envelopeHash"`
+		ExpectedFile string `json:"expectedFile"`
+		OutcomeHash  string `json:"outcomeHash"`
+		Twin         string `json:"twin"`
+		Refusal      string `json:"refusal"`
+	} `json:"totalityFixtures"`
 }
 
 func TestMergeCorpus(t *testing.T) {
@@ -306,4 +334,119 @@ func encodeVerdict(defects []mergeDefect) string {
 			`,"nodeId":` + canonical.EscapeString(d.nodeID) + "}"
 	}
 	return out + "]"
+}
+
+// TestMergeTotalityCorpus is the merge-totality leg — the pairs.
+//
+// Adopted by Phase 1653. Before it, this host did not read `totalityFixtures`
+// at all, which is the quietest way a conformance leg can fail: the manifest
+// grew a family, `encoding/json` discarded it because no field named it, and
+// the suite reported the same green it had reported the day before. Nothing
+// in either existing leg could have noticed — they iterate the keys they know.
+//
+// Each PAIR is checked as a pair, and both halves are required to be present:
+// the refusal half exactly as `TestMergeRefusalCorpus` checks a refusal
+// (refuses, envelope byte-identical, hash matches), the twin exactly as
+// `TestMergeCorpus` checks a `merge-3way` (merges, tree byte-identical, hash
+// matches). A host that refused both, or merged both, fails one half of every
+// pair — which is the property the separate key exists to buy.
+func TestMergeTotalityCorpus(t *testing.T) {
+	corpus := findCorpus()
+	if corpus == "" {
+		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
+	}
+	root := filepath.Join(corpus, "merge-conformance")
+	raw, err := os.ReadFile(filepath.Join(root, "manifest.json"))
+	if err != nil {
+		t.Skipf("merge corpus not found: %v", err)
+	}
+	var m mergeManifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("parsing merge manifest: %v", err)
+	}
+	// NOT a skip, for the reason the refusal leg gives: this host has adopted
+	// the family, so an empty list means the corpus moved out from under it.
+	if len(m.TotalityFixtures) == 0 {
+		t.Fatal("merge corpus declares no totalityFixtures — the family this leg certifies is gone")
+	}
+
+	decode := func(rel string) wire.Node {
+		node, err := wire.DecodeNode(readRel(t, root, rel))
+		if err != nil {
+			t.Fatalf("decode %s: %v", rel, err)
+		}
+		return node
+	}
+
+	// Index by id so each entry can assert its counterpart is really here. A
+	// pair with one half missing is a corpus this host must not certify
+	// against silently: the remaining half is exactly the suite a partial host
+	// already passes.
+	byID := map[string]bool{}
+	for _, fx := range m.TotalityFixtures {
+		byID[fx.ID] = true
+	}
+
+	refusals, twins := 0, 0
+	for _, fx := range m.TotalityFixtures {
+		t.Run(fx.ID, func(t *testing.T) {
+			base, a, b := decode(fx.BaseFile), decode(fx.AFile), decode(fx.BFile)
+			result := merge.Merge3Way(base, a, b)
+
+			switch fx.Kind {
+			case "merge-refusal":
+				if fx.Twin == "" || !byID[fx.Twin] {
+					t.Fatalf("refusal half names twin %q, which the corpus does not declare — "+
+						"half a pair pins nothing this host does not already pass", fx.Twin)
+				}
+				if result.OK {
+					t.Fatalf("totality refusal auto-merged — this host silently OMITS the merge " +
+						"behaviour this pair exists to pin, and would look conformant without it")
+				}
+				envelope := merge.EncodeEnvelope(result.Conflicts)
+				if want := readRel(t, root, fx.EnvelopeFile); envelope != want {
+					t.Errorf("envelope not byte-identical: %s", firstDiff(envelope, want))
+				}
+				if got := sha256Hex(envelope); got != fx.EnvelopeHash {
+					t.Errorf("envelopeHash = %s, want %s", got, fx.EnvelopeHash)
+				}
+			case "merge-3way":
+				if fx.Refusal == "" || !byID[fx.Refusal] {
+					t.Fatalf("twin names refusal %q, which the corpus does not declare", fx.Refusal)
+				}
+				if !result.OK {
+					t.Fatalf("totality twin REFUSED — a host cannot pass this family by refusing "+
+						"everything, which is what the twin is for: %+v", result.Conflicts)
+				}
+				merged, err := wire.EncodeNode(result.Tree)
+				if err != nil {
+					t.Fatalf("encode merged: %v", err)
+				}
+				if want := readRel(t, root, fx.ExpectedFile); merged != want {
+					t.Errorf("merged tree not byte-identical: %s", firstDiff(merged, want))
+				}
+				if got := sha256Hex(merged); got != fx.OutcomeHash {
+					t.Errorf("outcomeHash = %s, want %s", got, fx.OutcomeHash)
+				}
+			default:
+				t.Fatalf("unknown totality fixture kind %q — refused rather than skipped, because "+
+					"an unrecognised kind that this leg passed over would be a fixture asserting nothing", fx.Kind)
+			}
+		})
+		switch fx.Kind {
+		case "merge-refusal":
+			refusals++
+		case "merge-3way":
+			twins++
+		}
+	}
+
+	// The family is only meaningful if BOTH halves ran. A corpus of refusals
+	// alone, or twins alone, is one of the two suites the pair was invented to
+	// replace.
+	if refusals == 0 || twins == 0 {
+		t.Fatalf("the totality family ran %d refusals and %d twins — a family with only one half "+
+			"is exactly the shape a partial host passes", refusals, twins)
+	}
+	t.Logf("merge-totality EXECUTED: %d refusal(s) + %d twin(s)", refusals, twins)
 }

@@ -18,6 +18,7 @@ func (Node) isValue() {}
 // a structured, recoverable result, never a panic (WIRE_FORMAT.md §6).
 func DecodeNode(canonicalJSON string) (node Node, err error) {
 	defer recoverDecode(&err)
+	checkDocumentBytes(canonicalJSON) // §21.7, before the parse allocates
 	raw := parseJSON(canonicalJSON)
 	checkShape(raw)
 	return decodeNodeValue(newWalkState(), raw, "$"), nil

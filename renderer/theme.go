@@ -144,10 +144,39 @@ func styleClass(style wire.Obj) string {
 	return strings.Join(parts, " ")
 }
 
-// nodeClassName is the full wrapper className: kind class + style class.
+// nodeClassName is the full wrapper className: kind class + style class +
+// the declared direction's isolation class.
 func nodeClassName(node wire.Node) string {
 	style, _ := node.Extras["style"].(wire.Obj)
-	return kindClass(node.Kind) + " " + styleClass(style)
+	base := kindClass(node.Kind) + " " + styleClass(style)
+	if d := declaredDirection(style); d != "" {
+		// Appended LAST, matching the reference's composition order. `auto`
+		// contributes nothing: it is the INHERITED direction, and putting
+		// `unicode-bidi: isolate` on a node that declared no direction would
+		// change the rendering of every document that predates the slot.
+		base += " fuaran-dir-" + d
+	}
+	return base
+}
+
+// declaredDirection reads `style.direction`, returning "" for the absent or
+// `auto` case.
+//
+// This host emits the DECLARED direction only. It has not adopted the reference
+// tier's `dir="auto"` isolation HEURISTIC over bound display leaves, and
+// inventing one under a declaration slot would conflate two different
+// statements — the same boundary the Rust host draws, in the same words.
+func styleOf(node wire.Node) wire.Obj {
+	style, _ := node.Extras["style"].(wire.Obj)
+	return style
+}
+
+func declaredDirection(style wire.Obj) string {
+	d, ok := style.Fields["direction"].(wire.Str)
+	if !ok || d == "auto" {
+		return ""
+	}
+	return string(d)
 }
 
 // trendSentiment computes a Metric trend's SENTIMENT class fragment and its

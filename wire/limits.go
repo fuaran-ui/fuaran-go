@@ -108,6 +108,33 @@ const (
 	// it either — stated rather than left to be inferred, because a limit whose
 	// scope is guessed at is worse than no limit.
 	MaxExprNodes = 512
+
+	// MaxDocumentBytes bounds the UTF-8 byte length of one whole input
+	// document (WIRE_FORMAT.md §21.7, adopted here in Phase 1653 — the
+	// comment above already named it as the bound that catches what
+	// MaxExprNodes does not, which it could not, because until now the
+	// constant did not exist).
+	//
+	// It is the only §21 limit that bounds a document's TOTAL rather than the
+	// shape of its walk, and it is needed because the five structural limits
+	// compose MULTIPLICATIVELY: 100 000 array elements each holding a
+	// 1 048 576-code-point string satisfies every one of them and is a hundred
+	// gigabytes. Each individual check refuses nothing, because each
+	// individual check is satisfied.
+	//
+	// BYTES, not code points — the one place a §21 unit differs from §21.6's,
+	// deliberately. §21.6 bounds a VALUE the author wrote, so it is measured
+	// in units of text; this bounds the CARRIAGE, which is what an attacker
+	// sends and what a host allocates. A Go string is already UTF-8 bytes, so
+	// len() IS the unit here and there is nothing to convert.
+	//
+	// Constrained from BELOW by MaxNodes: a document at exactly 100 000 nodes
+	// is about 8 MB of small nodes, so an 8 MiB ceiling — which looks generous
+	// beside a 1 MiB string bound — would refuse a document rule 1 requires
+	// every host to ACCEPT, quietly lowering the node ceiling while leaving
+	// its stated value in the table. 32 MiB leaves about 335 bytes per node
+	// there.
+	MaxDocumentBytes = 33554432
 )
 
 // walkState carries one decode call's §21 counters. Created per call, threaded
@@ -420,5 +447,28 @@ func failUnpairedSurrogate(half string, code rune, why string) {
 		"an unpaired "+half+" surrogate U+"+strings.ToUpper(strconv.FormatInt(int64(code), 16))+
 			" (WIRE_FORMAT.md §20.2 row 6): "+why,
 		"every surrogate half paired, so the document names Unicode scalar values only",
+	)
+}
+
+// checkDocumentBytes enforces §21.7, BEFORE parsing.
+//
+// One comparison on the input's length: a host that defers it has chosen to
+// allocate the document twice for no benefit. The path is "$" — the breach is
+// a property of the document, not of a position inside it, and there is no
+// position to name because nothing has been parsed.
+//
+// The vector is HOST-LOCAL and deliberately not a corpus fixture: committing
+// 32 MiB of padding to a shared repository to assert one integer comparison is
+// a poor trade, and unlike the depth bounds this is not a recursion hazard. So
+// wire/limits_document_test.go IS this host's conformance evidence for §21.7.
+func checkDocumentBytes(canonicalJSON string) {
+	if len(canonicalJSON) <= MaxDocumentBytes {
+		return
+	}
+	failExpecting(
+		CodeLimitExceeded,
+		"$",
+		"document is "+itoa(len(canonicalJSON))+" UTF-8 bytes, over the wire limit MaxDocumentBytes = "+itoa(MaxDocumentBytes),
+		"a document of at most "+itoa(MaxDocumentBytes)+" UTF-8 bytes",
 	)
 }

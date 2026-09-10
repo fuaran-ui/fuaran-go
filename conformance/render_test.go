@@ -2,9 +2,11 @@ package conformance
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -291,25 +293,151 @@ func referenceHostRoot(t *testing.T, corpus string) string {
 	return ""
 }
 
+// referenceRendererProjectPrefix names the reference host's renderer projects.
+// Every .fs file inside one is a place the reference may spell an emitted class.
+const referenceRendererProjectPrefix = "Fuaran.UI.Renderer"
+
+// referenceRendererSourceFloor is the list this extraction used to BE, kept as
+// a floor rather than as the list. A glob that silently stops matching — a
+// project renamed, an src/ layout change — otherwise reports an empty
+// vocabulary as a clean run, which is the same "stale but valid-looking" shape
+// the derivation replaces.
+var referenceRendererSourceFloor = []string{
+	"Fuaran.UI.Renderer.Server/Render.fs",
+	"Fuaran.UI.Renderer/Render.fs",
+	"Fuaran.UI.Renderer.Core/Theme.fs",
+	"Fuaran.UI.Renderer.Core/DrawingSvg.fs",
+	"Fuaran.UI.Renderer.Core/Css.fs",
+	// Named by the 2026-09-02 diagnosis as two the literal list never had:
+	// "fuaran-custom-%s-%s" is composed across these, which is the prefix the
+	// Python host's guard asserts.
+	"Fuaran.UI.Renderer/Runtime.fs",
+	"Fuaran.UI.Renderer.Server/Registry.fs",
+}
+
+// fsSourcesUnder collects every .fs file under dir, recursively, skipping build
+// output. Sorted, so the derived vocabulary does not depend on walk order.
+func fsSourcesUnder(dir string) []string {
+	var out []string
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if info.Name() == "obj" || info.Name() == "bin" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(info.Name(), ".fs") {
+			out = append(out, path)
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
 // referenceRendererFiles are the canonical renderer sources the class
-// vocabulary is extracted from (the parity oracle).
+// vocabulary is extracted from (the parity oracle) — DERIVED, not listed.
+//
+// This was a hand-maintained five-file literal, and the same literal in three
+// translations (this host, the Rust host, the Python host). The reference then
+// factored its class spellings into helper modules the literal did not name,
+// and all three hosts went red at once for one reason: not a host defect, and
+// not the reference having dropped a spelling, but the oracle having stopped
+// looking where the classes live. Css.fs's own header says it exists so an
+// inline spelling can no longer drift — so the anti-drift refactor is what
+// broke the drift detector.
+//
+// Appending the missing filenames would have fixed the instance and reset the
+// clock. Deriving removes the class: a new helper module inside a renderer
+// project is in the set the moment it exists.
+//
+// Where the derivation can still be wrong is that it scopes to the renderer
+// PROJECTS; explainAbsentClass below searches the whole reference src/ tree for
+// an offending class and names the file that spells it, so a failure says which
+// of the two defects it is.
 func referenceRendererFiles(t *testing.T, corpus string) []string {
+	t.Helper()
 	root := referenceHostRoot(t, corpus)
-	return []string{
-		filepath.Join(root, "src", "Fuaran.UI.Renderer.Server", "Render.fs"),
-		filepath.Join(root, "src", "Fuaran.UI.Renderer", "Render.fs"),
-		filepath.Join(root, "src", "Fuaran.UI.Renderer.Core", "Theme.fs"),
-		// The canonical inline-SVG builder — the source of the fuaran-drawing*
-		// class vocabulary (both F# renderers call into it).
-		filepath.Join(root, "src", "Fuaran.UI.Renderer.Core", "DrawingSvg.fs"),
-		// The shared class-composition module: the reference host builds its
-		// tone/variant classes here (fuaran-metric- + tone, fuaran-badge- +
-		// tone, the layout and toast families), and BOTH renderers call into
-		// it rather than spelling those literals out. Omitting it makes the
-		// oracle report 31 correct classes as absent — the vocabulary is
-		// genuinely in the reference, just not in the two Render.fs files.
-		filepath.Join(root, "src", "Fuaran.UI.Renderer.Core", "Css.fs"),
+	src := filepath.Join(root, "src")
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		t.Fatalf("the reference host was located at %s but its src/ could not be read: %v", root, err)
 	}
+	var projects []string
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), referenceRendererProjectPrefix) {
+			projects = append(projects, filepath.Join(src, e.Name()))
+		}
+	}
+	sort.Strings(projects)
+
+	var files []string
+	for _, project := range projects {
+		files = append(files, fsSourcesUnder(project)...)
+	}
+
+	present := make(map[string]bool, len(files))
+	for _, f := range files {
+		if rel, err := filepath.Rel(src, f); err == nil {
+			present[filepath.ToSlash(rel)] = true
+		}
+	}
+	var missing []string
+	for _, f := range referenceRendererSourceFloor {
+		if !present[f] {
+			missing = append(missing, f)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("the derived renderer-source set is missing files the hand-maintained list named: %v. "+
+			"Either the reference host's layout moved (update referenceRendererProjectPrefix and the floor "+
+			"together, deliberately) or this glob matched the wrong tree — it scanned %d project(s) under %s. "+
+			"A silently-empty derivation reports a clean run, which is the failure this floor exists to make loud.",
+			missing, len(projects), src)
+	}
+	return files
+}
+
+// explainAbsentClass answers, for a class this host emits that the derived
+// vocabulary lacks: does the reference spell it ANYWHERE under src/, and where?
+//
+// A non-empty answer means the derivation did not reach that file — fix the
+// derivation. An empty one means the reference genuinely does not spell the
+// class — fix this host, and do NOT relax the assertion, which is the branch
+// the 2026-09-02 first reading took wrongly.
+func explainAbsentClass(corpus string, root string, class string) string {
+	src := filepath.Join(root, "src")
+	for _, path := range fsSourcesUnder(src) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, tok := range classTokenRe.FindAllString(string(raw), -1) {
+			if tok == class {
+				rel, err := filepath.Rel(src, path)
+				if err != nil {
+					rel = path
+				}
+				return filepath.ToSlash(rel)
+			}
+		}
+	}
+	return ""
+}
+
+// describeOffender renders one offending class with the completeness verdict
+// attached, so the failure says which of the two defects it is.
+func describeOffender(corpus string, root string, class string) string {
+	if file := explainAbsentClass(corpus, root, class); file != "" {
+		return fmt.Sprintf("emitted class %q is absent from the derived reference vocabulary, but the reference DOES "+
+			"spell it in src/%s — the derived renderer-source set does not reach that file, so fix the DERIVATION", class, file)
+	}
+	return fmt.Sprintf("emitted class %q is absent from the reference renderer vocabulary and the reference spells it "+
+		"nowhere under src/ — fix THIS HOST's spelling (do not relax the assertion)", class)
 }
 
 var classTokenRe = regexp.MustCompile(`fuaran-[a-zA-Z0-9-]*`)
@@ -407,7 +535,7 @@ func TestClassVocabularyParity(t *testing.T) {
 			for cls := range emittedClasses(html) {
 				checked++
 				if !inVocab(cls) {
-					t.Errorf("emitted class %q is not in the reference renderer vocabulary", cls)
+					t.Error(describeOffender(corpus, referenceHostRoot(t, corpus), cls))
 				}
 			}
 		})
@@ -419,6 +547,67 @@ func TestClassVocabularyParity(t *testing.T) {
 		t.Fatalf("class-vocabulary oracle checked nothing (%d fixtures, %d class occurrences) — it is not exercising the renderer", ran, checked)
 	}
 	t.Logf("class-vocabulary parity EXECUTED: %d fixtures, %d emitted-class occurrences, %d reference classes", ran, checked, len(exact))
+}
+
+// TestReferenceSourceSetIsDerivedRatherThanListed is the completeness property
+// the 2026-09-02 diagnosis asked for: not "is every listed file present" (which
+// passed while the list was two files short) but "does the derivation reach past
+// the list at all, and does it reach the files the drift was hiding in".
+func TestReferenceSourceSetIsDerivedRatherThanListed(t *testing.T) {
+	corpus, _ := loadCorpus(t)
+	root := referenceHostRoot(t, corpus)
+	src := filepath.Join(root, "src")
+	files := referenceRendererFiles(t, corpus)
+
+	var relative []string
+	for _, f := range files {
+		if rel, err := filepath.Rel(src, f); err == nil {
+			relative = append(relative, filepath.ToSlash(rel))
+		}
+	}
+
+	// The floor is asserted inside the derivation; what this adds is that the
+	// derivation is not merely REPRODUCING the floor. A glob narrowed until it
+	// matched exactly the hand-listed files would satisfy the floor and have
+	// re-created the defect.
+	if len(relative) <= len(referenceRendererSourceFloor) {
+		t.Fatalf("the derived set (%d) is no larger than the hand-maintained floor (%d) — the derivation is not "+
+			"reaching past the list it replaced:\n  %s", len(relative), len(referenceRendererSourceFloor),
+			strings.Join(relative, "\n  "))
+	}
+
+	present := make(map[string]bool, len(relative))
+	for _, r := range relative {
+		present[r] = true
+	}
+	// The two the 2026-09-02 diagnosis named as never having been in the list.
+	for _, f := range []string{"Fuaran.UI.Renderer/Runtime.fs", "Fuaran.UI.Renderer.Server/Registry.fs"} {
+		if !present[f] {
+			t.Errorf("the derivation does not reach %s, the file that composes `fuaran-custom-`", f)
+		}
+	}
+	t.Logf("reference renderer sources DERIVED: %d files under %s", len(relative), src)
+}
+
+// TestOffenderExplanationDistinguishesItsTwoBranches verifies the probe rather
+// than the verdict: describeOffender is only useful if it can tell its two
+// branches apart, and both are unreachable in a green run.
+func TestOffenderExplanationDistinguishesItsTwoBranches(t *testing.T) {
+	corpus, _ := loadCorpus(t)
+	root := referenceHostRoot(t, corpus)
+
+	// A class the reference spells OUTSIDE the renderer projects
+	// (Fuaran.UI/Defaults.fs): the derivation-gap branch.
+	gap := describeOffender(corpus, root, "fuaran-error-boundary-placeholder")
+	if !strings.Contains(gap, "fix the DERIVATION") {
+		t.Errorf("a class the reference spells outside the renderer projects must be reported as a derivation gap: %s", gap)
+	}
+
+	// A class nothing spells anywhere: the host-defect branch.
+	defect := describeOffender(corpus, root, "fuaran-not-a-real-class-1653")
+	if !strings.Contains(defect, "fix THIS HOST") {
+		t.Errorf("a class the reference spells nowhere must be reported as a host defect: %s", defect)
+	}
 }
 
 // TestReferenceCSSByteParity asserts the shipped reference stylesheet is a

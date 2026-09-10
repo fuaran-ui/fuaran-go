@@ -37,13 +37,33 @@ import (
 // styleDefaults — an absent style ⟺ all of these (WIRE_FORMAT §3.1).
 var styleDefaults = map[string]string{"emphasis": "Normal", "tone": "Default", "weight": "Standard"}
 
-var facetExtras = map[string]bool{"style": true, "state": true, "accessibility": true}
+// The node-envelope members this merge CONTROLS — each merged on its own axis
+// and rebuilt deliberately by mkNode, rather than carried over wholesale.
+//
+// `tooltip` joined them in Phase 1653. Before that it was a NON-facet extra, so
+// two branches setting different hints on one node auto-merged: the hint rode
+// through `nonFacetExtras` from whichever node mkNode was handed, silently. It
+// is a node-level TRAIT (WIRE_FORMAT.md §3.6) exactly as `accessibility` is,
+// and it merges on the same axis, with the same facet-isolation probe.
+var facetExtras = map[string]bool{"style": true, "state": true, "accessibility": true, "tooltip": true}
 
 // ── Conflict + result vocabulary ────────────────────────────────────────────
 
 const (
 	classConcurrentEdit      = "ConcurrentEdit"
 	classReorderVsStructural = "ReorderVsStructural"
+	// classDeleteModify — one side EDITED a node the other REMOVED. Neither
+	// answer is derivable: keeping the deletion discards an edit nobody
+	// retracted, keeping the edit resurrects a node somebody deleted. Until
+	// Phase 1653 this host took the deleting side's child list and dropped the
+	// edit with the node, silently, on a merge it reported as clean.
+	classDeleteModify = "DeleteModify"
+	// classConcurrentMove — a node RELOCATED on one side and relocated
+	// elsewhere, or edited in place, on the other. Same shape: the merge has
+	// two incompatible answers about where the node lives, and the recursive
+	// per-parent walk cannot see it, because each parent's own children list
+	// merges cleanly in isolation.
+	classConcurrentMove = "ConcurrentMove"
 	// classUnencodableFacet — a facet whose canonical bytes could not be
 	// produced, so the branches cannot be compared at all. Always blocking:
 	// primacy resolves a DISAGREEMENT, and this is a failure to establish
@@ -238,7 +258,7 @@ func withKindChildren(kind wire.Obj, children []wire.Node) wire.Obj {
 // mkNode rebuilds a node with controlled facets, omitting an absent
 // style/state/accessibility (the wire's absent ⟺ default). Non-facet extras
 // (motion, extraAttributes) carry over from src.
-func mkNode(src wire.Node, kind wire.Obj, style, state, acc wire.Value) wire.Node {
+func mkNode(src wire.Node, kind wire.Obj, style, state, acc, tip wire.Value) wire.Node {
 	extras := nonFacetExtras(src)
 	if style != nil {
 		extras["style"] = style
@@ -248,6 +268,9 @@ func mkNode(src wire.Node, kind wire.Obj, style, state, acc wire.Value) wire.Nod
 	}
 	if acc != nil {
 		extras["accessibility"] = acc
+	}
+	if tip != nil {
+		extras["tooltip"] = tip
 	}
 	return wire.Node{ID: src.ID, Kind: kind, Extras: extras}
 }
@@ -266,15 +289,19 @@ func encodeFacet(v wire.Value) (string, error) {
 // ── facet-isolation canonical probes (closure-safe bytes) ───────────────────
 
 func kindCanonical(n wire.Node) (string, error) {
-	return encodeFacet(mkNode(n, childlessKind(n.Kind), nil, nil, nil))
+	return encodeFacet(mkNode(n, childlessKind(n.Kind), nil, nil, nil, nil))
 }
 
 func stateCanonical(shell wire.Obj, n wire.Node) (string, error) {
-	return encodeFacet(mkNode(n, shell, nil, n.Extras["state"], nil))
+	return encodeFacet(mkNode(n, shell, nil, n.Extras["state"], nil, nil))
 }
 
 func accessibilityCanonical(shell wire.Obj, n wire.Node) (string, error) {
-	return encodeFacet(mkNode(n, shell, nil, nil, n.Extras["accessibility"]))
+	return encodeFacet(mkNode(n, shell, nil, nil, n.Extras["accessibility"], nil))
+}
+
+func tooltipCanonical(shell wire.Obj, n wire.Node) (string, error) {
+	return encodeFacet(mkNode(n, shell, nil, nil, nil, n.Extras["tooltip"]))
 }
 
 // facetTriple encodes one facet across base / a / b, returning the first error.
@@ -314,6 +341,21 @@ func styleField(n wire.Node, name string) *string {
 	return nil
 }
 
+// styleFieldOr reads a style sub-field, MATERIALISING the wire's
+// absent-⟺-default rule as the supplied default rather than returning nil.
+//
+// The five sub-fields above deliberately do not use it: nothing pins what an
+// absent base spells in their envelopes, and inventing a spelling for a case no
+// fixture reaches would be a guess wearing a fix's clothes. Widen this when a
+// fixture says what those five should say.
+func styleFieldOr(node wire.Node, name, def string) *string {
+	if v := styleField(node, name); v != nil {
+		return v
+	}
+	d := def
+	return &d
+}
+
 // ── facet pickers ───────────────────────────────────────────────────────────
 
 func strEq(a, b *string) bool {
@@ -324,6 +366,17 @@ func strEq(a, b *string) bool {
 }
 
 func recordConflict(conflicts *[]Conflict, res resolution, nodeID, facet string, baseV, aV, bV *string) int {
+	conflictClass := classConcurrentEdit
+	if facet == "children" {
+		conflictClass = classReorderVsStructural
+	}
+	return recordClassed(conflicts, res, nodeID, facet, conflictClass, baseV, aV, bV)
+}
+
+// recordClassed is recordConflict with the class named rather than derived from
+// the facet. The structural classes need it: `node` is the facet of both a
+// DeleteModify and a ConcurrentMove, so the facet alone cannot say which.
+func recordClassed(conflicts *[]Conflict, res resolution, nodeID, facet, conflictClass string, baseV, aV, bV *string) int {
 	// The PRECEDENCE view is populated exactly when a pin is held. Before the
 	// two-sided envelope, Secondary carried the A-side value in the no-pin case
 	// — a precedence claim no pin supported, and one that changed when the
@@ -335,10 +388,6 @@ func recordConflict(conflicts *[]Conflict, res resolution, nodeID, facet string,
 		} else {
 			primaryV, secondaryV = bV, aV
 		}
-	}
-	conflictClass := classConcurrentEdit
-	if facet == "children" {
-		conflictClass = classReorderVsStructural
 	}
 	*conflicts = append(*conflicts, Conflict{
 		NodeID: nodeID, Facet: facet, ConflictClass: conflictClass,
@@ -400,6 +449,25 @@ func mergeStyle(conflicts *[]Conflict, res resolution, nodeID string, base, a, b
 	emphasis := pickField(conflicts, res, nodeID, "style.emphasis", styleField(base, "emphasis"), styleField(a, "emphasis"), styleField(b, "emphasis"))
 	role := pickField(conflicts, res, nodeID, "style.role", styleField(base, "role"), styleField(a, "role"), styleField(b, "role"))
 	voice := pickField(conflicts, res, nodeID, "style.voice", styleField(base, "voice"), styleField(a, "voice"), styleField(b, "voice"))
+	// `style.direction` is a merge facet like the five above, and it was missing
+	// here: two branches declaring opposing directions on one node AUTO-MERGED,
+	// silently taking whichever side the field-absence rule happened to favour,
+	// where every other style sub-field refuses. A direction states which way a
+	// run reads, so silently picking one is the sub-field where a wrong quiet
+	// answer is most visible to a reader and least visible to an author.
+	//
+	// Its values are already the WIRE spellings here (`styleField` reads the
+	// decoded style object), so the refusal envelope carries `ltr`/`rtl`/`auto`
+	// with nothing to translate — which is what the corpus now pins
+	// (`merge-conformance/merge-refusal-concurrent-direction`).
+	// Absent ⟺ default on this sub-field, MATERIALISED rather than left nil: a
+	// refusal envelope reports the LCA's value, and a node that never declared
+	// a direction reads `auto`, not "nothing". The corpus fixture's base pins
+	// exactly that (`"base":"auto"` over a node with no style at all).
+	direction := pickField(conflicts, res, nodeID, "style.direction",
+		styleFieldOr(base, "direction", "auto"),
+		styleFieldOr(a, "direction", "auto"),
+		styleFieldOr(b, "direction", "auto"))
 
 	// §3.6 omit-when-default on the merged facet too: every field is emitted
 	// only when non-default, and an all-default style omits the whole facet —
@@ -419,6 +487,13 @@ func mergeStyle(conflicts *[]Conflict, res resolution, nodeID string, base, a, b
 	}
 	if voice != nil && *voice != "Default" {
 		fields["voice"] = wire.Str(*voice)
+	}
+	// Omit-when-default, and the default is the WIRE spelling `auto` — not a
+	// case name, unlike every neighbour above. The decoder drops `"auto"` on
+	// the way in (wire/decode.go), so re-emitting it here would make the merged
+	// tree's canonical bytes differ from the codec's for the same tree.
+	if direction != nil && *direction != "auto" {
+		fields["direction"] = wire.Str(*direction)
 	}
 	if len(fields) == 0 {
 		return nil
@@ -488,8 +563,144 @@ func nodeMap(nodes []wire.Node) map[string]wire.Node {
 	return m
 }
 
+// ── whole-tree placement (Phase 1653) ───────────────────────────────────────
+//
+// Everything else in this file merges one node against its two variants and
+// recurses. A MOVE is the one shape that arrangement structurally cannot see:
+// the node leaves one parent's children list and joins another's, and BOTH
+// lists merge cleanly in isolation — one lost a child, one gained one, each an
+// ordinary structural edit on its own. The disagreement only exists when the
+// two parents are looked at together, so it is detected once, over the whole
+// tree, before the recursion starts.
+//
+// It also has to run before the delete/modify check inside the recursion,
+// because a node that left a parent looks exactly like a node that was
+// deleted from it. The index is what tells them apart: gone from this parent
+// and present under another is a MOVE; gone from the tree entirely is a
+// DELETE.
+
+// placement maps every node id in a tree to its parent's id (the root maps to
+// the empty string).
+type placement map[string]string
+
+func indexPlacement(n wire.Node) placement {
+	out := placement{}
+	var walk func(node wire.Node, parent string)
+	walk = func(node wire.Node, parent string) {
+		out[node.ID] = parent
+		for _, child := range childrenOf(node) {
+			walk(child, node.ID)
+		}
+	}
+	walk(n, "")
+	return out
+}
+
+func nodeIndex(n wire.Node) map[string]wire.Node {
+	out := map[string]wire.Node{}
+	var walk func(node wire.Node)
+	walk = func(node wire.Node) {
+		out[node.ID] = node
+		for _, child := range childrenOf(node) {
+			walk(child)
+		}
+	}
+	walk(n)
+	return out
+}
+
+// moveCtx carries the three placements through the recursion so the
+// delete/modify check can ask "did this node move, or did it go?".
+type moveCtx struct {
+	base, a, b placement
+}
+
+func newMoveCtx(base, a, b wire.Node) *moveCtx {
+	return &moveCtx{base: indexPlacement(base), a: indexPlacement(a), b: indexPlacement(b)}
+}
+
+// movedNotDeleted reports whether a node absent from a parent it had in base is
+// still SOMEWHERE in that side's tree.
+func (m *moveCtx) movedNotDeleted(side placement, id string) bool {
+	if m == nil {
+		return false
+	}
+	_, ok := side[id]
+	return ok
+}
+
+// detectConcurrentMoves emits the refusals for every node the two branches
+// place differently. It runs ONCE over the whole tree, before merge3.
+//
+// Two cells, and both are needed. The `move` cell names the disagreement about
+// WHERE — the base parent and each side's — which is the whole of the class.
+// The `node` cell follows only when the two sides also disagree about the
+// node's CONTENT, which is the case where accepting either placement would
+// additionally discard an edit; a node moved by one side and untouched by the
+// other yields the move cell alone.
+func detectConcurrentMoves(conflicts *[]Conflict, res resolution, mc *moveCtx, base, a, b wire.Node) {
+	aNodes, bNodes, baseNodes := nodeIndex(a), nodeIndex(b), nodeIndex(base)
+
+	ids := make([]string, 0, len(mc.base))
+	for id := range mc.base {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids) // deterministic emission; SortCanonical orders the envelope anyway
+
+	for _, id := range ids {
+		basePar := mc.base[id]
+		aPar, inA := mc.a[id]
+		bPar, inB := mc.b[id]
+		if !inA || !inB {
+			continue // removed on a side — the delete/modify class, not this one
+		}
+		if aPar == bPar {
+			continue // the two branches agree about where it lives
+		}
+
+		aC, aErr := encodeFacet(aNodes[id])
+		bC, bErr := encodeFacet(bNodes[id])
+		baseC, baseErr := encodeFacet(baseNodes[id])
+		if aErr != nil || bErr != nil || baseErr != nil {
+			err := aErr
+			if err == nil {
+				err = bErr
+			}
+			if err == nil {
+				err = baseErr
+			}
+			recordUnencodableFacet(conflicts, res, id, "node", err)
+			continue
+		}
+
+		// A ONE-SIDED move is an ordinary structural edit and must auto-merge:
+		// the side that did not move it did not say anything about where it
+		// goes, so taking the move discards nothing. What makes the pair
+		// irreconcilable is the OTHER side having something to say about the
+		// same node — either it moved it somewhere else, or it edited it where
+		// it stood, in which case honouring the move would carry the node away
+		// and honouring the edit would leave it behind.
+		//
+		// This is exactly the distinction the corpus's totality PAIR exists to
+		// pin: the refusal has one side moving and the other restyling THE
+		// MOVED NODE; the twin has one side moving and the other restyling THE
+		// PARENT IT LEFT, which is not a contest. A host refusing whenever the
+		// placements differ passes the refusal and fails the twin.
+		aMoved, bMoved := aPar != basePar, bPar != basePar
+		contested := (aMoved && bMoved) || aC != bC
+		if !contested {
+			continue
+		}
+
+		recordClassed(conflicts, res, id, "move", classConcurrentMove, &basePar, &aPar, &bPar)
+		if aC != bC {
+			recordClassed(conflicts, res, id, "node", classConcurrentMove, &baseC, &aC, &bC)
+		}
+	}
+}
+
 // merge3 recursively merges a base node against optional a / b variants.
-func merge3(conflicts *[]Conflict, res resolution, base wire.Node, aOpt, bOpt *wire.Node) wire.Node {
+func merge3(conflicts *[]Conflict, res resolution, mc *moveCtx, base wire.Node, aOpt, bOpt *wire.Node) wire.Node {
 	a := base
 	if aOpt != nil {
 		a = *aOpt
@@ -545,12 +756,74 @@ func merge3(conflicts *[]Conflict, res resolution, base wire.Node, aOpt, bOpt *w
 	}
 	mergedAcc := pickExtra(base, a, b, accPick, "accessibility")
 
+	// tooltip facet — the node-level hint TRAIT, on its own axis (Phase 1653)
+	tipBaseC, tipBaseErr := tooltipCanonical(shell, base)
+	tipAC, tipAErr := tooltipCanonical(shell, a)
+	tipBC, tipBErr := tooltipCanonical(shell, b)
+	tipPick := 0
+	if bC, aC, cC, err := facetTriple(tipBaseC, tipAC, tipBC, tipBaseErr, tipAErr, tipBErr); err != nil {
+		recordUnencodableFacet(conflicts, res, nodeID, "tooltip", err)
+	} else {
+		tipPick = pickCanonical(conflicts, res, nodeID, "tooltip", bC, aC, cC)
+	}
+	mergedTip := pickExtra(base, a, b, tipPick, "tooltip")
+
 	// children facet (structural)
 	baseKids, aKids, bKids := childrenOf(base), childrenOf(a), childrenOf(b)
 	baseIDs, aIDs, bIDs := ids(baseKids), ids(aKids), ids(bKids)
 	aStruct := !sliceEq(aIDs, baseIDs)
 	bStruct := !sliceEq(bIDs, baseIDs)
 	baseM, aM, bM := nodeMap(baseKids), nodeMap(aKids), nodeMap(bKids)
+
+	// DELETE/MODIFY, before the structural branch below picks a side.
+	//
+	// The branch that follows takes whichever side changed the child LIST and
+	// recurses into its ids, so a child one side edited and the other removed
+	// simply is not visited: the edit disappears with the node and the merge
+	// reports clean. Neither answer is derivable from the pair, so the merge
+	// must refuse — naming the node, its base content, the surviving side's
+	// edit, and the deleting side as the EMPTY value that says "gone".
+	for _, cid := range baseIDs {
+		bc := baseM[cid]
+		ac, inA := aM[cid]
+		bb, inB := bM[cid]
+		if inA == inB {
+			continue // present on both sides, or removed by both — not this class
+		}
+		// Gone from THIS parent but still in that side's tree is a MOVE, and
+		// the whole-tree pre-pass owns it. Without this the same node is
+		// reported twice under two classes, and the one a reader would act on
+		// is the wrong one.
+		if !inA && mc.movedNotDeleted(mc.a, cid) {
+			continue
+		}
+		if !inB && mc.movedNotDeleted(mc.b, cid) {
+			continue
+		}
+		baseC, baseErr := encodeFacet(bc)
+		survivor, survivorErr := ac, error(nil)
+		if !inA {
+			survivor = bb
+		}
+		survivorC, survivorErr := encodeFacet(survivor)
+		if baseErr != nil || survivorErr != nil {
+			err := baseErr
+			if err == nil {
+				err = survivorErr
+			}
+			recordUnencodableFacet(conflicts, res, cid, "node", err)
+			continue
+		}
+		if survivorC == baseC {
+			continue // removed on one side, UNTOUCHED on the other — an ordinary delete
+		}
+		gone := ""
+		aV, bV := &survivorC, &gone
+		if !inA {
+			aV, bV = &gone, &survivorC
+		}
+		recordClassed(conflicts, res, cid, "node", classDeleteModify, &baseC, aV, bV)
+	}
 
 	recurseChild := func(cid string) wire.Node {
 		if bc, ok := baseM[cid]; ok {
@@ -561,7 +834,7 @@ func merge3(conflicts *[]Conflict, res resolution, base wire.Node, aOpt, bOpt *w
 			if v, ok := bM[cid]; ok {
 				bb = &v
 			}
-			return merge3(conflicts, res, bc, ac, bb)
+			return merge3(conflicts, res, mc, bc, ac, bb)
 		}
 		ac, inA := aM[cid]
 		bc, inB := bM[cid]
@@ -683,7 +956,7 @@ func merge3(conflicts *[]Conflict, res resolution, base wire.Node, aOpt, bOpt *w
 	}
 
 	mergedKind := withKindChildren(childlessKind(kindSource.Kind), mergedChildren)
-	return mkNode(base, mergedKind, mergedStyle, mergedState, mergedAcc)
+	return mkNode(base, mergedKind, mergedStyle, mergedState, mergedAcc, mergedTip)
 }
 
 func pickExtra(base, a, b wire.Node, pick int, key string) wire.Value {
@@ -776,7 +1049,9 @@ func EncodeEnvelope(conflicts []Conflict) string {
 // the sibling hosts.
 func Merge3Way(base, a, b wire.Node) Result {
 	var conflicts []Conflict
-	merged := merge3(&conflicts, agnostic, base, &a, &b)
+	mc := newMoveCtx(base, a, b)
+	detectConcurrentMoves(&conflicts, agnostic, mc, base, a, b)
+	merged := merge3(&conflicts, agnostic, mc, base, &a, &b)
 	if len(conflicts) == 0 {
 		return Result{OK: true, Tree: merged}
 	}
@@ -791,7 +1066,9 @@ func Merge3Way(base, a, b wire.Node) Result {
 func Merge3WayWithAuthor(authorA, authorB Author, base, a, b wire.Node) Result {
 	res := resolveAuthor(authorA, authorB)
 	var conflicts []Conflict
-	merged := merge3(&conflicts, res, base, &a, &b)
+	mc := newMoveCtx(base, a, b)
+	detectConcurrentMoves(&conflicts, res, mc, base, a, b)
+	merged := merge3(&conflicts, res, mc, base, &a, &b)
 	var blocking []Conflict
 	for _, c := range conflicts {
 		if !c.PrimacyHeld {

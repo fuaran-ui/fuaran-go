@@ -191,6 +191,7 @@ func decodeOpValue(w *walkState, raw any, path string) Obj {
 // a *DecodeError with one of the six canonical codes and a "$"-rooted path.
 func DecodeOp(canonicalJSON string) (op Obj, err error) {
 	defer recoverDecode(&err)
+	checkDocumentBytes(canonicalJSON) // §21.7, before the parse allocates
 	raw := parseJSON(canonicalJSON)
 	checkShape(raw)
 	return decodeOpValue(newWalkState(), raw, "$"), nil

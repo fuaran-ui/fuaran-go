@@ -129,3 +129,30 @@ jobs:
       # back empty would leave this job green forever.
       - name: Gate self-test (it must go red in both directions)
         run: go run ./cmd/conformance-residue -selftest
+
+      # THE RACE DETECTOR.
+      #
+      # `serverdriven`'s connection-guarding tests were WRITTEN for `-race` and
+      # no gate anywhere ran it, so the property they exist to hold — that two
+      # goroutines cannot both be inside a channel's connection state — was
+      # being asserted by tests that cannot observe it. The detector needs cgo
+      # and a C toolchain, which the machine those tests were written on did not
+      # have (they were verified by falsification instead: remove the mutex and
+      # the assertions fail on their own arithmetic). An `ubuntu-latest` runner
+      # has gcc, so the leg belongs here rather than in `run.ps1`, where it
+      # would fail for want of a compiler on a stock Windows dev box.
+      #
+      # Scoped to the concurrent packages, not `./...`: `-race` costs several
+      # times the wall clock of a plain run, and every other package in this
+      # module is single-goroutine by construction, so a whole-module run would
+      # buy nothing for the time. Widen it when a second package grows a
+      # goroutine.
+      #
+      # Not folded into the residue gate above: that gate compares a failure SET
+      # against a named residue list, and a race report is not a test failure it
+      # can name — the detector fails the process. Separate step, separate
+      # signal.
+      - name: Test (race detector — the concurrent packages)
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race -count=1 ./serverdriven/ ./opstream/
