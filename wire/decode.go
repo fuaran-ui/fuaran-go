@@ -1251,7 +1251,16 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		switch {
 		case liveTag != "":
 			b := decodeBinding(w, srcRawOrig, path+".source")
-			carried, hasCarried := srcRawOrig.(map[string]any)["defaultValue"]
+			carried, carriedPresent := srcRawOrig.(map[string]any)["defaultValue"]
+			// Phase 1656 — a `null` member is a SPELLING OF ABSENCE (§5), so it
+			// carries nothing. It did not read that way before: a JSON null
+			// decodes to a present `nil`, which is neither missing nor an empty
+			// array, so it fell to the snapshot branch and was decoded as carried
+			// data. The reference host never had the defect because it reads the
+			// DECODED binding's default, where every spelling of absence has
+			// already collapsed to one value; this reads the raw member, so it has
+			// to name them.
+			hasCarried := carriedPresent && carried != nil
 			emptyCarried := false
 			if rows, ok := carried.([]any); ok && len(rows) == 0 {
 				emptyCarried = true
