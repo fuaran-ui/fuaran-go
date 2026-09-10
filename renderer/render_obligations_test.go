@@ -235,7 +235,7 @@ const refusedURL = "https://collector.example/asset.jpg"
 
 func renderJSON(t *testing.T, canonicalJSON string) string {
 	t.Helper()
-	return renderHTML(t, mustDecode(t, canonicalJSON), nil)
+	return renderHTML(t, mustDecode(t, canonicalJSON), BindingSources{})
 }
 
 func mustEmit(t *testing.T, html, needle, why string) {
@@ -468,7 +468,7 @@ func checkEmbedRefusedSourceOmitted(t *testing.T) {
 	// stay different facts, so an ALLOWED source carries no refusal marker.
 	allowed := renderHTMLWithEgress(t,
 		mustDecode(t, `{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"https://player.example/embed/harbour"},"title":"T"}}`),
-		nil, PermissiveEgress())
+		BindingSources{}, PermissiveEgress())
 	mustEmit(t, allowed, ` src="https://player.example/embed/harbour"`, "an allowed https source still renders")
 	mustNotEmit(t, allowed, EgressRefusalAttribute, "…and carries no refusal marker")
 }

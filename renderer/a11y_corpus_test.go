@@ -104,7 +104,7 @@ func TestA11yCorpusProjectionLandsOnTheRightElement(t *testing.T) {
 	for _, c := range a11yCorpusCases() {
 		t.Run(c.fixture, func(t *testing.T) {
 			node := loadFixtureNode(t, c.fixture)
-			html := renderHTML(t, node, nil)
+			html := renderHTML(t, node, BindingSources{})
 
 			wrapper := wrapperTag(html)
 			carrier := wrapper
@@ -167,7 +167,7 @@ func TestA11yCorpusProjectionLandsOnTheRightElement(t *testing.T) {
 // have different repairs, which is why they are not one assertion.
 func TestA11yStateBoundNameResolvesLikeEveryOtherTier(t *testing.T) {
 	node := loadFixtureNode(t, "a11y-wrapper-state-bound")
-	wrapper := wrapperTag(renderHTML(t, node, nil))
+	wrapper := wrapperTag(renderHTML(t, node, BindingSources{}))
 
 	if !strings.Contains(wrapper, `aria-label="Site footer"`) {
 		t.Errorf("an unwritten State-bound accessible name must resolve to its declared "+

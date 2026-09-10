@@ -21,6 +21,43 @@ package fuarango
 
 // Version is the pre-release version of the fuaran-go host.
 //
+// 0.0.6-alpha also carries the Phase 1663 COMPILE-BREAKING change to
+// renderer.BindingSources: the bare map[string]wire.Value becomes a STRUCT whose
+// Values member is that map, beside two host members the type had nowhere to
+// carry — Now (the host instant, an ISO-8601 UTC string) and Locale (the ambient
+// BCP-47 tag). Every exported entry point keeps its signature textually
+// (RenderHTML, RenderHTMLWithEgress, RenderWithIslands, RenderWithIslandsAndEgress,
+// WithStateSeeds all still take a BindingSources); what does not compile is a
+// call site that CONSTRUCTED one as a map literal or INDEXED one directly —
+// renderer.Sources(map[string]wire.Value{…}) lifts a bare map, and
+// sources.Values[k] replaces sources[k]. The zero value behaves exactly as the
+// old nil map did.
+//
+// What it buys: Binding.Now and Format.Since RENDER on this host for the first
+// time. Both were decoded faithfully and resolved to nothing — Now fell through
+// the identity-key lookup, and Format was unrendered entirely, with the Since arm
+// in formatNumber returning the empty string and a comment saying there was
+// nowhere for the instant to live. Now resolves the host instant, grain-truncated
+// (Second / Minute / Hour / Day) BEFORE anything projects it; Format renders the
+// three locale-INDEPENDENT cases (Since, RelativeTime, Duration) and resolves the
+// four locale-database ones (Number, Currency, Percent, Date) to absence exactly
+// as before. ResolveLocaleTag is the new exported seam for the Explicit-wins
+// LocaleSource precedence, for a host that wants to render those four itself.
+//
+// An unset or unreadable instant resolves the slot to ABSENCE, never to a value:
+// a relative time computed against an invented "now" is a confidently wrong
+// answer, and a raw epoch integer where a reader expects "3 hours ago" is worse.
+// It is not the Phase 1667 error channel either — the document is answerable,
+// the host simply furnished no clock, which is the same fact as an unwritten
+// Query. Conformance is the corpus's render-text family (render-text.json, named
+// by the manifest's renderText pointer): every vector pins a fixture, the host
+// sources and the exact text this host must produce.
+//
+// It rides 0.0.6-alpha rather than advancing because that draft is untagged and
+// already carries a compile-breaking class; the number is what tells a consumer
+// what adopting it costs, and this change costs exactly what that entry already
+// says.
+//
 // 0.0.6-alpha carries the Phase 1667 COMPILE-BREAKING change to the renderer's
 // exported entry points: renderer.RenderHTML and renderer.RenderHTMLWithEgress
 // answer (string, error) where they answered a bare string. The error is a

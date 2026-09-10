@@ -1699,7 +1699,7 @@ func (r *renderer) treeState(fields map[string]wire.Value) (expandedKeyNamed boo
 		expandedKeyNamed = true
 		// An array of ROW IDS — set membership, and a set has one spelling
 		// where a map of booleans has two for "closed".
-		if rows, ok := r.sources[string(key)].(wire.Arr); ok {
+		if rows, ok := r.sources.Values[string(key)].(wire.Arr); ok {
 			for _, row := range rows {
 				if id, ok := row.(wire.Str); ok {
 					expanded[string(id)] = true
@@ -1709,7 +1709,7 @@ func (r *renderer) treeState(fields map[string]wire.Value) (expandedKeyNamed boo
 	}
 	if key, ok := fields["selectionStateKey"].(wire.Str); ok {
 		selects = true
-		if id, ok := r.sources[string(key)].(wire.Str); ok {
+		if id, ok := r.sources.Values[string(key)].(wire.Str); ok {
 			selected = string(id)
 		}
 	}
@@ -2329,7 +2329,7 @@ func (r *renderer) switchKind(fields map[string]wire.Value) string {
 	valueStr := ""
 	selectorResolved := false
 	if key, ok := fields["stateKey"].(wire.Str); ok {
-		if current, found := r.sources[string(key)]; found {
+		if current, found := r.sources.Values[string(key)]; found {
 			valueStr = displayString(current)
 			selectorResolved = true
 		}

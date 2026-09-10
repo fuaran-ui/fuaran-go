@@ -68,7 +68,7 @@ func mustContain(t *testing.T, html string, wants ...string) {
 
 func TestScalarTransformCompositionResolvesStatically(t *testing.T) {
 	node := loadFixtureNode(t, "scalar-transform-composition")
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	mustContain(t, html,
 		// Badge scalar slot: filter severity==critical + groupBy count → 2.
@@ -92,7 +92,7 @@ func TestScalarTransformCompositionResolvesStatically(t *testing.T) {
 
 func TestMasterDetailPreselectedResolvesStatically(t *testing.T) {
 	node := loadFixtureNode(t, "master-detail-preselected")
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	mustContain(t, html,
 		// Fact scalar slot: an unwritten Selection resolves to its defaultValue
@@ -110,7 +110,7 @@ func TestMasterDetailPreselectedResolvesStatically(t *testing.T) {
 
 func TestFilterableStaticDashboardResolvesStatically(t *testing.T) {
 	node := loadFixtureNode(t, "filterable-static-dashboard")
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	// Both filter params are unset (Filter bindings, no default, no host value),
 	// so each filter step is pruned (unset choice ⇒ no constraint) and the full
@@ -130,7 +130,7 @@ func TestFilterableStaticDashboardResolvesStatically(t *testing.T) {
 // hydration): the boundary wrapper's static children are the resolved subtree.
 func TestIslandsSkeletonCarriesResolvedValues(t *testing.T) {
 	node := loadFixtureNode(t, "scalar-transform-composition")
-	html, err := RenderWithIslands(node, nil, map[string]string{"critical-count-badge": "badge-island"})
+	html, err := RenderWithIslands(node, BindingSources{}, map[string]string{"critical-count-badge": "badge-island"})
 	if err != nil {
 		t.Fatalf("RenderWithIslands: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestScalarTransform1x1Law(t *testing.T) {
 	// Two source rows, no aggregation → a >1-row result in a scalar slot is
 	// ambiguous → the badge renders absence (empty), never the first row.
 	ambiguous := `{"id":"b","kind":{"$type":"Badge","label":{"$type":"Bound","binding":{"$type":"Transform","pipeline":[{"$type":"project","cols":[{"a":"v","b":"v"}]}],"source":{"columns":{"v":{"validity":[true,true],"values":["a","b"]}},"schema":[{"name":"v","type":"string"}]}}},"variant":"Neutral"}}`
-	html := renderHTML(t, mustDecode(t, ambiguous), nil)
+	html := renderHTML(t, mustDecode(t, ambiguous), BindingSources{})
 	mustContain(t, html, `class="fuaran-badge fuaran-badge-neutral"></span>`)
 	if strings.Contains(html, `>a<`) {
 		t.Errorf("ambiguous >1×1 slot must not resolve to a silent first cell:\n%s", html)
@@ -157,13 +157,13 @@ func TestScalarTransform1x1Law(t *testing.T) {
 	// A filter matching nothing, then a trailing global count → the count of
 	// nothing is 0 (not absence).
 	countZero := `{"id":"b","kind":{"$type":"Badge","label":{"$type":"Bound","binding":{"$type":"Transform","pipeline":[{"$type":"filter","pred":{"$type":"binary","left":{"$type":"col","name":"v"},"op":"eq","right":{"$type":"lit","cell":{"$type":"Str","value":"zzz"}}}},{"$type":"groupBy","aggs":[{"fn":"count","name":"n","of":"v"}],"keys":[]}],"source":{"columns":{"v":{"validity":[true,true],"values":["a","b"]}},"schema":[{"name":"v","type":"string"}]}}},"variant":"Neutral"}}`
-	if h := renderHTML(t, mustDecode(t, countZero), nil); !strings.Contains(h, `fuaran-badge-neutral">0</span>`) {
+	if h := renderHTML(t, mustDecode(t, countZero), BindingSources{}); !strings.Contains(h, `fuaran-badge-neutral">0</span>`) {
 		t.Errorf("trailing global count over an empty frame must complete to 0:\n%s", h)
 	}
 
 	// A filter matching nothing WITHOUT a trailing count → empty → absence.
 	empty := `{"id":"b","kind":{"$type":"Badge","label":{"$type":"Bound","binding":{"$type":"Transform","pipeline":[{"$type":"filter","pred":{"$type":"binary","left":{"$type":"col","name":"v"},"op":"eq","right":{"$type":"lit","cell":{"$type":"Str","value":"zzz"}}}}],"source":{"columns":{"v":{"validity":[true,true],"values":["a","b"]}},"schema":[{"name":"v","type":"string"}]}}},"variant":"Neutral"}}`
-	if h := renderHTML(t, mustDecode(t, empty), nil); !strings.Contains(h, `fuaran-badge-neutral"></span>`) {
+	if h := renderHTML(t, mustDecode(t, empty), BindingSources{}); !strings.Contains(h, `fuaran-badge-neutral"></span>`) {
 		t.Errorf("an empty non-count result must render absence:\n%s", h)
 	}
 }
@@ -178,7 +178,7 @@ func TestScalarTransform1x1Law(t *testing.T) {
 
 func TestBoundGridRendersItsTransformRows(t *testing.T) {
 	node := loadFixtureNode(t, "grid-field-named")
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	mustContain(t, html,
 		`<table class="fuaran-grid">`,
@@ -202,7 +202,7 @@ func TestBoundGridWithoutDeclaredColumnsKeepsThePlaceholder(t *testing.T) {
 	// RESOLVED one (filter → groupBy sum → sort leaves one row): the boundary is
 	// declared, and even at the boundary the compute ran.
 	node := loadFixtureNode(t, "grid-transform")
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	mustContain(t, html,
 		`data-fuaran-ssr-placeholder="DataGrid"`,
@@ -216,7 +216,7 @@ func TestClosureOnlyColumnsKeepThePlaceholder(t *testing.T) {
 	// through a closure (`value`, no `field`). No column declares a field, so the
 	// grid stays at the declared boundary rather than emitting blank cells.
 	node := loadFixtureNode(t, "grid-1")
-	html := renderHTML(t, node, nil)
+	html := renderHTML(t, node, BindingSources{})
 
 	mustContain(t, html,
 		`data-fuaran-ssr-placeholder="DataGrid"`,
@@ -230,8 +230,8 @@ func TestClosureOnlyColumnsKeepThePlaceholder(t *testing.T) {
 // hydrating client attaches rather than replacing a placeholder.
 func TestIslandsBoundGridMatchesTheStaticRender(t *testing.T) {
 	node := loadFixtureNode(t, "grid-field-named")
-	static := renderHTML(t, node, nil)
-	islands, err := RenderWithIslands(node, nil, map[string]string{"grid-field-named": "grid-island"})
+	static := renderHTML(t, node, BindingSources{})
+	islands, err := RenderWithIslands(node, BindingSources{}, map[string]string{"grid-field-named": "grid-island"})
 	if err != nil {
 		t.Fatalf("RenderWithIslands: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestMetricTrendIsAResolvedScalarSlot(t *testing.T) {
 	resolved := `{"id":"m","kind":{"$type":"Metric","label":"Signups","value":{"$type":"Static","value":42},"trend":{"$type":"Transform","pipeline":[{"$type":"groupBy","aggs":[{"fn":"count","name":"n","of":"v"}],"keys":[]}],"source":{"columns":{"v":{"validity":[true,true],"values":["a","b"]}},"schema":[{"name":"v","type":"string"}]}},"trendFormat":{"$type":"Number","decimals":1}}}`
 	// Phase 867 — a RESOLVED trend now carries its sentiment. `+2.0` under the
 	// default (omitted) polarity is an improvement.
-	mustContain(t, renderHTML(t, mustDecode(t, resolved), nil),
+	mustContain(t, renderHTML(t, mustDecode(t, resolved), BindingSources{}),
 		`<div class="fuaran-metric-value">42</div>`,
 		`<div class="fuaran-metric-trend fuaran-metric-trend-improving">`+
 			`<span class="fuaran-metric-trend-glyph" role="img" aria-label="improving">▲</span>2.0</div>`,
@@ -280,11 +280,11 @@ func TestMetricTrendIsAResolvedScalarSlot(t *testing.T) {
 	// An unresolvable trend still emits the div, empty — never an em-dash, and
 	// never a silently absent element.
 	unresolved := `{"id":"m","kind":{"$type":"Metric","label":"Signups","value":{"$type":"Static","value":42},"trend":{"$type":"Query","name":"nothing-here"}}}`
-	mustContain(t, renderHTML(t, mustDecode(t, unresolved), nil), `<div class="fuaran-metric-trend"></div>`)
+	mustContain(t, renderHTML(t, mustDecode(t, unresolved), BindingSources{}), `<div class="fuaran-metric-trend"></div>`)
 
 	// A Metric that declares no trend emits no trend div (bytes unchanged).
 	none := `{"id":"m","kind":{"$type":"Metric","label":"Signups","value":{"$type":"Static","value":42}}}`
-	if html := renderHTML(t, mustDecode(t, none), nil); strings.Contains(html, "fuaran-metric-trend") {
+	if html := renderHTML(t, mustDecode(t, none), BindingSources{}); strings.Contains(html, "fuaran-metric-trend") {
 		t.Errorf("a Metric with no declared trend must emit no trend div:\n%s", html)
 	}
 }
@@ -321,30 +321,30 @@ func TestMetricTrendSentiment(t *testing.T) {
 
 	// The corpus fixture's own case: a FALLING wait time under LowerIsBetter is
 	// an improvement. This one node is the whole argument for the slot.
-	mustContain(t, renderHTML(t, mustDecode(t, metric("LowerIsBetter", "-0.0734")), nil),
+	mustContain(t, renderHTML(t, mustDecode(t, metric("LowerIsBetter", "-0.0734")), BindingSources{}),
 		trendDiv("improving", "▲", "-7.34%"))
 
 	// The same number without the declaration is a regression — the pair below is
 	// what proves the slot is READ rather than decoded and ignored.
-	mustContain(t, renderHTML(t, mustDecode(t, metric("", "-0.0734")), nil),
+	mustContain(t, renderHTML(t, mustDecode(t, metric("", "-0.0734")), BindingSources{}),
 		trendDiv("regressing", "▼", "-7.34%"))
 
 	// Rising, both ways round.
-	mustContain(t, renderHTML(t, mustDecode(t, metric("", "0.0734")), nil),
+	mustContain(t, renderHTML(t, mustDecode(t, metric("", "0.0734")), BindingSources{}),
 		trendDiv("improving", "▲", "7.34%"))
-	mustContain(t, renderHTML(t, mustDecode(t, metric("LowerIsBetter", "0.0734")), nil),
+	mustContain(t, renderHTML(t, mustDecode(t, metric("LowerIsBetter", "0.0734")), BindingSources{}),
 		trendDiv("regressing", "▼", "7.34%"))
 
 	// Zero is neither, under either declaration (clause 2: a zero trend).
 	for _, polarity := range []string{"", "LowerIsBetter"} {
-		mustContain(t, renderHTML(t, mustDecode(t, metric(polarity, "0")), nil),
+		mustContain(t, renderHTML(t, mustDecode(t, metric(polarity, "0")), BindingSources{}),
 			trendDiv("unchanged", "→", "0.00%"))
 	}
 
 	// Clause 3 — the numeric text, ITS SIGN INCLUDED, is unchanged by polarity.
 	// The cheap trick this rules out is an emitter flipping the sign so up is
 	// always good, which would be a false statement about the world.
-	inverted := renderHTML(t, mustDecode(t, metric("LowerIsBetter", "-0.0734")), nil)
+	inverted := renderHTML(t, mustDecode(t, metric("LowerIsBetter", "-0.0734")), BindingSources{})
 	if strings.Contains(inverted, ">7.34%<") || !strings.Contains(inverted, "-7.34%") {
 		t.Errorf("polarity changed the number's sign — it may change how a number READS, never what it SAYS:\n%s", inverted)
 	}
