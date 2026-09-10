@@ -2072,7 +2072,7 @@ func decodeBool(w *walkState, raw any, path string) Value {
 // codes answer different questions and the ORDER is what keeps them apart.
 //
 // Upper bound only, deliberately: a negative count is an authoring defect
-// (FUARAN150 in the pre-emit family), not a resource breach.
+// (FUARAN152 in the pre-emit family), not a resource breach.
 func decodeSkeletonRows(w *walkState, raw any, path string) Value {
 	rows := expectInt(raw, path)
 	if rows > MaxSkeletonRows {
