@@ -176,7 +176,7 @@ func sparklineEmpty() string {
 // wrapping the lowered Drawing's SVG as a DIRECT child (the stylesheet's
 // `.fuaran-sparkline > .fuaran-drawing` rule sizes it), or the em-dash fallback.
 func (r *renderer) sparkline(fields map[string]wire.Value) string {
-	resolved := resolveBinding(fields["source"], r.sources)
+	resolved := r.resolve(fields["source"])
 	series, ok := sparklineSeries(resolved)
 	if !ok {
 		return sparklineEmpty()

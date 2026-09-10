@@ -102,7 +102,7 @@ func drawPathD(commands wire.Value) string {
 func (r *renderer) drawStrokeJoinAttrs(style wire.Value) string {
 	obj, _ := style.(wire.Obj)
 	if v, ok := obj.Fields["stroke"]; ok {
-		if resolved := resolveBinding(v, r.sources); resolved != nil {
+		if resolved := r.resolve(v); resolved != nil {
 			return ` stroke-linejoin="round" stroke-linecap="round"`
 		}
 	}
@@ -120,7 +120,7 @@ func (r *renderer) drawStyleAttrs(style wire.Value, defaultFillNone bool) string
 	var b strings.Builder
 
 	if v, ok := f["fill"]; ok {
-		if resolved := resolveBinding(v, r.sources); resolved != nil {
+		if resolved := r.resolve(v); resolved != nil {
 			// A paint is a CLOSED colour grammar, not a free string. drawEscape
 			// makes a value safe as MARKUP and says nothing about what it MEANS,
 			// and url(https://collector/x) in an SVG fill names a paint server the
@@ -134,17 +134,17 @@ func (r *renderer) drawStyleAttrs(style wire.Value, defaultFillNone bool) string
 		b.WriteString(` fill="none"`)
 	}
 	if v, ok := f["opacity"]; ok {
-		if resolved := resolveBinding(v, r.sources); resolved != nil {
+		if resolved := r.resolve(v); resolved != nil {
 			b.WriteString(` opacity="` + drawNum(resolved) + `"`)
 		}
 	}
 	if v, ok := f["stroke"]; ok {
-		if resolved := resolveBinding(v, r.sources); resolved != nil {
+		if resolved := r.resolve(v); resolved != nil {
 			b.WriteString(` stroke="` + drawEscape(SanitizePaintValue(displayString(resolved))) + `"`)
 		}
 	}
 	if v, ok := f["strokeWidth"]; ok {
-		if resolved := resolveBinding(v, r.sources); resolved != nil {
+		if resolved := r.resolve(v); resolved != nil {
 			b.WriteString(` stroke-width="` + drawNum(resolved) + `"`)
 		}
 	}

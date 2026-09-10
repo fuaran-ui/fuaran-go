@@ -21,7 +21,7 @@ import (
 
 func renderFixture(t *testing.T, fixture string, sources BindingSources) string {
 	t.Helper()
-	return RenderHTML(loadFixtureNode(t, fixture), sources)
+	return renderHTML(t, loadFixtureNode(t, fixture), sources)
 }
 
 func assertContains(t *testing.T, html, needle, why string) {

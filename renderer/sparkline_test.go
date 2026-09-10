@@ -116,7 +116,7 @@ func readGoldenBytes(t *testing.T, path string) string {
 // every byte-level assertion still passed.
 func TestSparklineRendersLoweredDrawing(t *testing.T) {
 	node := mustDecode(t, `{"id":"spark-1","kind":{"$type":"Sparkline","source":{"$type":"Static","value":[1,2,3,2,4]}}}`)
-	html := RenderHTML(node, nil)
+	html := renderHTML(t, node, nil)
 
 	for _, want := range []string{
 		`<div class="fuaran-sparkline"><svg class="fuaran-drawing"`,
@@ -146,7 +146,7 @@ func TestSparklineEmptyKeepsEmDashFallback(t *testing.T) {
 	}
 	for name, doc := range cases {
 		t.Run(name, func(t *testing.T) {
-			html := RenderHTML(mustDecode(t, doc), nil)
+			html := renderHTML(t, mustDecode(t, doc), nil)
 			if want := `<div class="fuaran-sparkline fuaran-sparkline-empty">` + emDash + `</div>`; !strings.Contains(html, want) {
 				t.Errorf("missing the em-dash fallback %q:\n%s", want, html)
 			}

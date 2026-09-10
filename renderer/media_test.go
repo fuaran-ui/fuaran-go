@@ -27,13 +27,13 @@ func TestMediaControlsDefaultOnAndSwitchableOff(t *testing.T) {
 		`{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Studio walkthrough","src":{"$type":"Static","value":"/walkthrough.mp4"}}}`,
 		`{"id":"m","kind":{"$type":"Media","kind":{"$type":"Audio"},"label":"Studio walkthrough","src":{"$type":"Static","value":"/walkthrough.mp3"}}}`,
 	} {
-		html := RenderHTML(mustDecode(t, src), nil)
+		html := renderHTML(t, mustDecode(t, src), nil)
 		if !strings.Contains(html, ` controls=""`) {
 			t.Errorf("controls is omitted at TRUE on the wire, so its absence is the affirmative:\n%s", html)
 		}
 	}
 
-	off := RenderHTML(mustDecode(t,
+	off := renderHTML(t, mustDecode(t,
 		`{"id":"m","kind":{"$type":"Media","controls":false,"kind":{"$type":"Video"},"label":"Ambient loop","src":{"$type":"Static","value":"/ambient.mp4"}}}`), nil)
 	if strings.Contains(off, ` controls=""`) {
 		t.Errorf("controls:false must switch the transport off:\n%s", off)
@@ -41,12 +41,12 @@ func TestMediaControlsDefaultOnAndSwitchableOff(t *testing.T) {
 }
 
 func TestMediaVariantSelectsTheElement(t *testing.T) {
-	video := RenderHTML(mustDecode(t,
+	video := renderHTML(t, mustDecode(t,
 		`{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Walkthrough","src":{"$type":"Static","value":"/w.mp4"}}}`), nil)
 	if !strings.Contains(video, `<video class="fuaran-media fuaran-media-video" src="/w.mp4"`) {
 		t.Errorf("Video did not emit a real <video>:\n%s", video)
 	}
-	audio := RenderHTML(mustDecode(t,
+	audio := renderHTML(t, mustDecode(t,
 		`{"id":"m","kind":{"$type":"Media","kind":{"$type":"Audio"},"label":"Commentary","src":{"$type":"Static","value":"/c.mp3"}}}`), nil)
 	if !strings.Contains(audio, `<audio class="fuaran-media fuaran-media-audio" src="/c.mp3"`) {
 		t.Errorf("Audio did not emit a real <audio>:\n%s", audio)
@@ -55,13 +55,13 @@ func TestMediaVariantSelectsTheElement(t *testing.T) {
 
 // §3.6.6 — `loop` emits only when declared.
 func TestMediaLoopEmitsOnlyWhenDeclared(t *testing.T) {
-	on := RenderHTML(mustDecode(t,
+	on := renderHTML(t, mustDecode(t,
 		`{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Ambient loop","loop":true,"src":{"$type":"Static","value":"/ambient.mp4"}}}`), nil)
 	if !strings.Contains(on, ` loop=""`) {
 		t.Errorf("declared loop was not emitted:\n%s", on)
 	}
 
-	off := RenderHTML(mustDecode(t,
+	off := renderHTML(t, mustDecode(t,
 		`{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Walkthrough","src":{"$type":"Static","value":"/w.mp4"}}}`), nil)
 	if strings.Contains(off, ` loop=""`) {
 		t.Errorf("loop is not the default:\n%s", off)
@@ -73,7 +73,7 @@ func TestMediaLoopEmitsOnlyWhenDeclared(t *testing.T) {
 // refused poster simply leaves (that half is the `refused-source-dropped`
 // obligation, checked in render_obligations_test.go).
 func TestMediaRefusedSrcCollapsesAndCarriesItsMarker(t *testing.T) {
-	refusedSrc := RenderHTML(mustDecode(t,
+	refusedSrc := renderHTML(t, mustDecode(t,
 		`{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Walkthrough","src":{"$type":"Static","value":"javascript:alert(1)"}}}`), nil)
 	if !strings.Contains(refusedSrc, `src="`+EgressRefusalURL+`"`) ||
 		!strings.Contains(refusedSrc, `data-fuaran-egress-refused="unsafe-url"`) {
@@ -84,7 +84,7 @@ func TestMediaRefusedSrcCollapsesAndCarriesItsMarker(t *testing.T) {
 // §3.6.2 — the presentation tokens map to CLASSES and nothing else, and
 // `Natural` / `Eager` emit nothing at all, so a pre-phase image is untouched.
 func TestImagePresentationTokensMapToClassesOnly(t *testing.T) {
-	html := RenderHTML(mustDecode(t,
+	html := renderHTML(t, mustDecode(t,
 		`{"id":"i","kind":{"$type":"Image","alt":"The harbour at dawn","aspectRatio":"SixteenNine","fit":"Cover","loading":"Lazy","src":{"$type":"Static","value":"/hero.jpg"},"variant":"Default"}}`), nil)
 	if !strings.Contains(html, `class="fuaran-image fuaran-image-fit-cover fuaran-image-aspect-sixteen-nine"`) {
 		t.Errorf("presentation tokens did not map to their classes:\n%s", html)
@@ -96,7 +96,7 @@ func TestImagePresentationTokensMapToClassesOnly(t *testing.T) {
 		t.Errorf("no value from the tree may reach a style attribute:\n%s", html)
 	}
 
-	bare := RenderHTML(mustDecode(t,
+	bare := renderHTML(t, mustDecode(t,
 		`{"id":"i","kind":{"$type":"Image","alt":"User avatar","src":{"$type":"Static","value":"/avatar.png"},"variant":"Avatar"}}`), nil)
 	if !strings.Contains(bare, `class="fuaran-image fuaran-image-avatar" src="/avatar.png"`) {
 		t.Errorf("the pre-phase class attribute must be byte-identical to what it was:\n%s", bare)
@@ -110,14 +110,14 @@ func TestImagePresentationTokensMapToClassesOnly(t *testing.T) {
 // no wrapper at all (not an empty one). The EXPANDABLE composition — figure
 // wraps anchor wraps img — is the `figure-caption-outside-link` obligation.
 func TestImageCaptionEmitsTheFigureBinding(t *testing.T) {
-	html := RenderHTML(mustDecode(t,
+	html := renderHTML(t, mustDecode(t,
 		`{"id":"i","kind":{"$type":"Image","alt":"Fishing boats","caption":"The harbour at dawn, 1908.","src":{"$type":"Static","value":"/harbour.jpg"},"variant":"Default"}}`), nil)
 	if !strings.Contains(html, `<figure class="fuaran-image-figure"><img `) ||
 		!strings.Contains(html, `<figcaption class="fuaran-image-figure-caption">The harbour at dawn, 1908.</figcaption></figure>`) {
 		t.Errorf("caption did not emit the figure binding:\n%s", html)
 	}
 
-	bare := RenderHTML(mustDecode(t,
+	bare := renderHTML(t, mustDecode(t,
 		`{"id":"i","kind":{"$type":"Image","alt":"Fishing boats","src":{"$type":"Static","value":"/harbour.jpg"},"variant":"Default"}}`), nil)
 	if strings.Contains(bare, "figure") {
 		t.Errorf("absent, there is no wrapper at all:\n%s", bare)
@@ -128,13 +128,13 @@ func TestImageCaptionEmitsTheFigureBinding(t *testing.T) {
 // candidate refused neither attribute is emitted (the ordering and the
 // per-candidate drop are the `srcset-ascending-by-width` obligation).
 func TestImageSrcSetSizesAndTotalRefusal(t *testing.T) {
-	html := RenderHTML(mustDecode(t,
+	html := renderHTML(t, mustDecode(t,
 		`{"id":"i","kind":{"$type":"Image","alt":"Fishing boats","src":{"$type":"Static","value":"/harbour.jpg"},"srcSet":[{"src":{"$type":"Static","value":"/harbour-400.jpg"},"width":400}],"variant":"Default"}}`), nil)
 	if !strings.Contains(html, `sizes="100vw"`) {
 		t.Errorf("the bounded sizes attribute was not emitted:\n%s", html)
 	}
 
-	none := RenderHTML(mustDecode(t,
+	none := renderHTML(t, mustDecode(t,
 		`{"id":"i","kind":{"$type":"Image","alt":"Fishing boats","src":{"$type":"Static","value":"/harbour.jpg"},"srcSet":[{"src":{"$type":"Static","value":"https://tracker.example/h-800.jpg"},"width":800}],"variant":"Default"}}`), nil)
 	if strings.Contains(none, "srcset=") || strings.Contains(none, "sizes=") {
 		t.Errorf("with every candidate refused, neither attribute is emitted:\n%s", none)
@@ -145,7 +145,7 @@ func TestImageSrcSetSizesAndTotalRefusal(t *testing.T) {
 // the <img>, while the anchor targets the full asset (the anchor's own
 // emission, its refusal, and the figure nesting are obligations).
 func TestImageExpandableKeepsCandidatesOnTheImg(t *testing.T) {
-	composed := RenderHTML(mustDecode(t,
+	composed := renderHTML(t, mustDecode(t,
 		`{"id":"i","kind":{"$type":"Image","alt":"Fishing boats","caption":"The harbour at dawn.","expandable":true,"src":{"$type":"Static","value":"/harbour.jpg"},"srcSet":[{"src":{"$type":"Static","value":"/harbour-400.jpg"},"width":400}],"variant":"Default"}}`), nil)
 	if !strings.Contains(composed, `srcset="/harbour-400.jpg 400w"`) {
 		t.Errorf("the candidates are renditions of the THUMBNAIL and stay on the <img>:\n%s", composed)

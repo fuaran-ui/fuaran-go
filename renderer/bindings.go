@@ -1,6 +1,7 @@
 package renderer
 
 import (
+	"errors"
 	"math"
 	"strconv"
 	"strings"
@@ -15,38 +16,95 @@ import (
 // placeholders the reference SSR renderer uses (an em-dash for an unresolved
 // value). A host can supply a BindingSources map (binding key → value) to
 // resolve Query / State bindings.
+//
+// Resolution answers three things, not two (Phase 1667): a value, ABSENCE (nil —
+// the slot's empty state, which is what an unwritten Query or an unseeded State
+// means), or an ERROR — the document asked for something no decoded tree can
+// answer, and there is no value that could stand in without being read as an
+// answer. The error is a returned value threaded to the exported entry points,
+// which is Go's channel for the distinction; the render still completes a whole
+// document, so a caller gets both what could be rendered and what could not.
 
 // BindingSources maps a binding key (a Query name, a State key, …) to a
 // host-resolved value. Nil is the headless baseline: Static bindings resolve,
 // the rest placeholder.
 type BindingSources map[string]wire.Value
 
+// decodedComputedMessage is the one message a decoded Binding.Computed carries —
+// byte-identical to the reference host's, so every host reports the same sentence
+// and a test can pin it. A constant rather than a literal at the construction
+// site for exactly that reason.
+const decodedComputedMessage = "Binding.Computed has no wire projection (decoded from a '<closure>' sentinel) — use Binding.Expr / Transform / State"
+
+// ErrDecodedComputed is the resolution error a decoded Binding.Computed answers
+// (WIRE_FORMAT.md §5). A package-level value rather than a fresh error per call
+// so a caller can classify it with errors.Is without matching on the message.
+var ErrDecodedComputed = errors.New(decodedComputedMessage)
+
+// resolutionFailure marks an error that came from BINDING RESOLUTION rather than
+// from the compute evaluator, and the distinction decides whether a seam reports
+// it or renders absence.
+//
+// The two are different facts. A pipeline that could not be EVALUATED — an
+// unbound param whose filter step was pruned, an ambiguous non-1x1 result — is
+// the RENDERER unable to answer, and every scalar and row seam here has always
+// rendered that as the slot's empty state; making those reach a caller would
+// change what this host reports for documents this phase is not about (measured:
+// three corpus legs render trees with a deliberately unbound param). A
+// RESOLUTION error is the DOCUMENT asking for something no decoded tree can
+// answer, which is the fact Phase 1667 reports.
+//
+// A wrapper type rather than a list of sentinels to check, so a second
+// resolution error needs no edit anywhere but its own construction site. It
+// unwraps to the cause, so errors.Is(err, ErrDecodedComputed) reads through it.
+type resolutionFailure struct{ err error }
+
+func (r resolutionFailure) Error() string { return r.err.Error() }
+
+func (r resolutionFailure) Unwrap() error { return r.err }
+
+// asResolutionFailure returns err when it carries a resolution failure and nil
+// when it is an evaluation failure — so a seam that renders an evaluation
+// failure as absence still reports a resolution one.
+func asResolutionFailure(err error) error {
+	var rf resolutionFailure
+	if errors.As(err, &rf) {
+		return rf.err
+	}
+	return nil
+}
+
 // renderText resolves a decoded text source to a plain (un-escaped) string:
 // Literal → its text; Bound → the resolved source or ""; I18n → "[i18n:key]".
 // The caller escapes the result on the way into HTML.
-func renderText(text wire.Value, sources BindingSources) string {
+//
+// The error is the resolution error (Phase 1667), reported alongside the string
+// rather than instead of it: the slot still renders whatever it can, and the
+// caller records why the rest is missing.
+func renderText(text wire.Value, sources BindingSources) (string, error) {
 	switch t := text.(type) {
 	case wire.Str:
-		return string(t)
+		return string(t), nil
 	case wire.Obj:
 		switch t.Tag {
 		case "Literal":
-			return strValue(t.Fields["text"])
+			return strValue(t.Fields["text"]), nil
 		case "Bound":
 			// Phase 632/651 — a text slot resolves through the scalar path, so a
 			// `Bound` `Transform` yields its 1×1 result cell (never the rows
 			// list) and a `Selection.defaultValue` renders resolved (Phase 629);
 			// any other binding resolves exactly as before. Both the static and
 			// islands surfaces share this dispatch.
-			if s, ok := resolveScalarText(t.Fields["binding"], sources); ok {
-				return s
+			s, ok, err := resolveScalarText(t.Fields["binding"], sources)
+			if ok {
+				return s, err
 			}
-			return ""
+			return "", err
 		case "I18n":
-			return "[i18n:" + strValue(t.Fields["key"]) + "]"
+			return "[i18n:" + strValue(t.Fields["key"]) + "]", nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // resolveBinding resolves a decoded binding to its value, or nil when not
@@ -54,43 +112,43 @@ func renderText(text wire.Value, sources BindingSources) string {
 // map when the identity key is present; an unwritten Selection / Filter / State
 // → its declared defaultValue (Phase 629; State added by fuaran#1064);
 // otherwise nil (the "NotResolved" branch).
-func resolveBinding(binding wire.Value, sources BindingSources) wire.Value {
+func resolveBinding(binding wire.Value, sources BindingSources) (wire.Value, error) {
 	obj, ok := binding.(wire.Obj)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if obj.Tag == "Static" {
-		return obj.Fields["value"]
+		return obj.Fields["value"], nil
 	}
 	// Phase 1534 — the scalar expression in a slot with no coercion. A null
 	// result, and a failed evaluation, are both nil here: this seam has no error
 	// channel, and a text or numeric slot goes through resolveScalar* above,
 	// which distinguishes them.
 	if e, ok := exprBinding(obj); ok {
-		if cell, outcome := evalScalarTransform(e, sources); outcome == scalarResolved {
-			return cell
+		cell, outcome, err := evalScalarTransform(e, sources)
+		if outcome == scalarResolved {
+			return cell, err
 		}
-		return nil
+		return nil, err
 	}
 	// A decoded `Computed` has nothing to compute WITH: the case's whole payload
-	// is a host closure and it crosses the wire as the closure sentinel. It
-	// resolves to nothing, and this arm is EXPLICIT rather than a fall-through so
-	// it stays that way — the case carries no key / name / nodeId today, so the
-	// lookup below misses and the answer is the same, but a future member named
-	// like one of those would silently turn a host-only computation into a
-	// resolved value.
+	// is a host closure and it crosses the wire as the closure sentinel. So
+	// WIRE_FORMAT §5 says it resolves to an ERROR naming its replacements, never
+	// to a value — and Phase 1667 gave this seam the channel to say so. Returning
+	// nil held the negative half of the rule (no 0 / "" / false, ever) and not the
+	// positive one: a reader cannot tell an em-dash here from a query that has not
+	// answered yet.
 	//
-	// KNOWN LIMIT, stated rather than implied: this seam has no error channel, so
-	// this host renders the slot's empty state where the F# and TypeScript hosts
-	// render an error naming Binding.Expr / Transform / State as the replacement.
-	// That is strictly better than the silent DEFAULT those hosts used to produce
-	// and strictly worse than the error they now do.
+	// The arm is EXPLICIT rather than a fall-through so it stays that way — the
+	// case carries no key / name / nodeId today, so the lookup below would miss,
+	// but a future member named like one of those would otherwise silently turn a
+	// host-only computation into a resolved value.
 	if obj.Tag == "Computed" {
-		return nil
+		return nil, ErrDecodedComputed
 	}
 	if key, ok := bindingKey(obj); ok {
 		if v, found := sources[key]; found {
-			return v
+			return v, nil
 		}
 	}
 	// Phase 629 — an unwritten Selection / Filter resolves to its declared
@@ -121,10 +179,10 @@ func resolveBinding(binding wire.Value, sources BindingSources) wire.Value {
 	// first-fill.
 	if obj.Tag == "Selection" || obj.Tag == "Filter" || obj.Tag == "State" {
 		if dv, ok := obj.Fields["defaultValue"]; ok {
-			return dv
+			return dv, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // bindingKey returns the host-sources lookup key for a decoded binding: State

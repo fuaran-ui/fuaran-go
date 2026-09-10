@@ -25,7 +25,7 @@ import (
 func a11yWrapper(t *testing.T, section string, sources BindingSources) string {
 	t.Helper()
 	node := mustDecode(t, `{"id":"md","kind":{"$type":"Markdown","text":"x"},"accessibility":{`+section+`}}`)
-	return wrapperTag(RenderHTML(node, sources))
+	return wrapperTag(renderHTML(t, node, sources))
 }
 
 func TestHiddenStaticTrueEmitsAriaHidden(t *testing.T) {

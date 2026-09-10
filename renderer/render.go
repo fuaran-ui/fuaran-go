@@ -127,6 +127,36 @@ type renderer struct {
 	// zero EgressPolicy allows nothing at all, not even local), so a
 	// construction site that forgets to name a policy fails closed.
 	egress EgressPolicy
+	// err is the FIRST binding-resolution error this render met (Phase 1667),
+	// held rather than returned at the point of failure so the render still
+	// produces a whole document: the exported entry point hands the caller both
+	// what could be rendered and the reason the rest could not.
+	//
+	// First and not last, and never a list: the sentence is about the DOCUMENT
+	// (a decoded Computed has no wire projection, wherever it appears), so the
+	// second occurrence adds nothing a reader needs, and a growing slice on the
+	// per-node hot path would cost every render for a case almost no document
+	// has. Sticky like a bufio.Writer's error, for the same reason — a check at
+	// every one of ~90 render functions would be a check somebody forgets.
+	err error
+}
+
+// note records a resolution error, first one wins. Nil is the ordinary case and
+// costs one comparison.
+func (r *renderer) note(err error) {
+	if err != nil && r.err == nil {
+		r.err = err
+	}
+}
+
+// resolve is the renderer's own view of the binding seam: resolve against this
+// render's sources and RECORD any error on the render. Every render function
+// reaches the seam through this rather than through resolveBinding directly, so
+// no call site can drop an error by forgetting to look at it.
+func (r *renderer) resolve(binding wire.Value) wire.Value {
+	v, err := resolveBinding(binding, r.sources)
+	r.note(err)
+	return v
 }
 
 // egressAttrPairs adapts the exported seam's (name, value) pairs to this
@@ -145,7 +175,50 @@ func egressAttrPairs(pairs [][2]string) []attr {
 }
 
 func (r *renderer) text(ts wire.Value) string {
-	return renderText(ts, r.sources)
+	s, err := renderText(ts, r.sources)
+	r.note(err)
+	return s
+}
+
+// scalarNumber / scalarText / scalarBool / source are the renderer's views of
+// the four derived seams, on `resolve`'s pattern: resolve, record, hand back the
+// value the ~40 markup-splicing call sites already expect. The seams themselves
+// return the error so a NON-renderer caller (the islands emission, a host
+// embedding this package) still sees it.
+func (r *renderer) scalarNumber(binding wire.Value) wire.Value {
+	v, err := resolveScalarNumber(binding, r.sources)
+	r.note(err)
+	return v
+}
+
+func (r *renderer) scalarText(binding wire.Value) (string, bool) {
+	v, ok, err := resolveScalarText(binding, r.sources)
+	r.note(err)
+	return v, ok
+}
+
+func (r *renderer) scalarBool(binding wire.Value) (bool, bool) {
+	v, ok, err := resolveScalarBool(binding, r.sources)
+	r.note(err)
+	return v, ok
+}
+
+func (r *renderer) source(binding wire.Value) wire.Value {
+	v, err := resolveSource(binding, r.sources)
+	r.note(err)
+	return v
+}
+
+func (r *renderer) nodeVisible(node wire.Node) bool {
+	visible, err := isNodeVisible(node, r.sources)
+	r.note(err)
+	return visible
+}
+
+func (r *renderer) switchCase(cases wire.Value, selector string, selectorResolved bool) (wire.Node, bool) {
+	child, ok, err := selectSwitchCase(cases, selector, selectorResolved, r.sources)
+	r.note(err)
+	return child, ok
 }
 
 func (r *renderer) stateLoading(node wire.Node) (wire.Node, bool) {
@@ -172,7 +245,9 @@ func (r *renderer) a11yAttrs(node wire.Node) []attr {
 	// sources exactly as the reference tiers do. The non-empty filter is
 	// theirs too: an empty accessible name is worse than none, because it
 	// silences the content that would otherwise have named the node.
-	if label, ok := a11yName(a11y.Fields["label"], r.sources); ok && label != "" {
+	label, hasLabel, labelErr := a11yName(a11y.Fields["label"], r.sources)
+	r.note(labelErr)
+	if hasLabel && label != "" {
 		out = append(out, attr{"aria-label", label})
 	}
 	if labelledBy, ok := a11y.Fields["labelledBy"].(wire.Str); ok {
@@ -207,7 +282,7 @@ func (r *renderer) a11yAttrs(node wire.Node) []attr {
 	// meant here ("hide it when the grid is empty") could never resolve.
 	// resolveScalarBool reads the lone cell through the same seam every other
 	// scalar slot uses; every other binding case resolves exactly as before.
-	if hidden, ok := resolveScalarBool(a11y.Fields["hidden"], r.sources); ok && hidden {
+	if hidden, ok := r.scalarBool(a11y.Fields["hidden"]); ok && hidden {
 		out = append(out, attr{"aria-hidden", "true"})
 	}
 	return out
@@ -228,14 +303,15 @@ func (r *renderer) a11yAttrs(node wire.Node) []attr {
 // it would break them without moving a single byte of anything an encoder
 // produces. Stated here rather than left ambiguous — the decision is "lenient
 // on the way in, canonical on the way out", the least breaking of the two.
-func a11yName(value wire.Value, sources BindingSources) (string, bool) {
+func a11yName(value wire.Value, sources BindingSources) (string, bool, error) {
 	if bare, ok := value.(wire.Str); ok {
-		return string(bare), true
+		return string(bare), true, nil
 	}
-	if resolved := resolveBinding(value, sources); resolved != nil {
-		return displayString(resolved), true
+	resolved, err := resolveBinding(value, sources)
+	if resolved != nil {
+		return displayString(resolved), true, err
 	}
-	return "", false
+	return "", false, err
 }
 
 // forwardsToSemanticElement reports whether this kind renders a body that IS
@@ -338,7 +414,7 @@ func (r *renderer) renderNode(node wire.Node) string {
 	// The guard sits on this one function rather than at every call site that
 	// produces a child, so a kind added tomorrow inherits it without anyone
 	// remembering to.
-	if !isNodeVisible(node, r.sources) {
+	if !r.nodeVisible(node) {
 		return ""
 	}
 
@@ -696,7 +772,7 @@ func (r *renderer) tabs(node wire.Node, fields map[string]wire.Value) string {
 		ariaOrientation = "vertical"
 	}
 	activeIndex := 0
-	if v, ok := resolveBinding(fields["activeIndex"], r.sources).(wire.Int); ok {
+	if v, ok := r.resolve(fields["activeIndex"]).(wire.Int); ok {
 		activeIndex = int(v)
 	}
 	activeIndex = max(0, min(activeIndex, max(0, len(children)-1)))
@@ -748,7 +824,7 @@ func (r *renderer) summaryList(fields map[string]wire.Value) string {
 
 func (r *renderer) disclosure(fields map[string]wire.Value) string {
 	isOpen := false
-	if resolved, ok := resolveBinding(fields["open"], r.sources).(wire.Bool); ok {
+	if resolved, ok := r.resolve(fields["open"]).(wire.Bool); ok {
 		isOpen = bool(resolved)
 	} else if d, ok := fields["defaultOpen"].(wire.Bool); ok && bool(d) {
 		isOpen = true
@@ -765,7 +841,7 @@ func (r *renderer) disclosure(fields map[string]wire.Value) string {
 func (r *renderer) stepper(fields map[string]wire.Value) string {
 	children := childNodesOf(fields)
 	activeIndex := 0
-	if v, ok := resolveBinding(fields["activeStep"], r.sources).(wire.Int); ok {
+	if v, ok := r.resolve(fields["activeStep"]).(wire.Int); ok {
 		activeIndex = int(v)
 	}
 	var steps strings.Builder
@@ -794,7 +870,7 @@ func (r *renderer) stepper(fields map[string]wire.Value) string {
 // the client renderer so hydration finds the DOM it expects.
 func (r *renderer) modal(fields map[string]wire.Value) string {
 	isOpen := false
-	if v, ok := resolveBinding(fields["open"], r.sources).(wire.Bool); ok {
+	if v, ok := r.resolve(fields["open"]).(wire.Bool); ok {
 		isOpen = bool(v)
 	}
 	// Every emitted class name is a LITERAL at its call site, never composed
@@ -908,7 +984,7 @@ func (r *renderer) markdown(fields map[string]wire.Value) string {
 }
 
 func (r *renderer) metric(node wire.Node, fields map[string]wire.Value) string {
-	value := resolveScalarNumber(fields["value"], r.sources)
+	value := r.scalarNumber(fields["value"])
 	if value == nil {
 		if loading, ok := r.stateLoading(node); ok {
 			return r.renderNode(loading)
@@ -943,7 +1019,7 @@ func (r *renderer) metric(node wire.Node, fields map[string]wire.Value) string {
 		// the bare div byte-for-byte — there is no sentiment to state about a
 		// number the host does not have, and emitting "unchanged" would assert
 		// one.
-		trend := resolveScalarNumber(trendBinding, r.sources)
+		trend := r.scalarNumber(trendBinding)
 		num, numeric := numericValue(trend)
 		switch {
 		case trend != nil && numeric:
@@ -1018,7 +1094,7 @@ func (r *renderer) callout(fields map[string]wire.Value) string {
 }
 
 func (r *renderer) progress(node wire.Node, fields map[string]wire.Value) string {
-	resolved := resolveBinding(fields["fraction"], r.sources)
+	resolved := r.resolve(fields["fraction"])
 	if resolved == nil {
 		if loading, ok := r.stateLoading(node); ok {
 			return r.renderNode(loading)
@@ -1082,7 +1158,7 @@ func (r *renderer) labelValueRow(fields map[string]wire.Value) string {
 	if v, ok := fields["emphasis"].(wire.Bool); ok && bool(v) {
 		emphasis = " fuaran-label-value-row-emphasis"
 	}
-	value := resolveScalarNumber(fields["value"], r.sources)
+	value := r.scalarNumber(fields["value"])
 	valueText := emDash
 	if value != nil {
 		valueText = formatNumber(fields["format"], value)
@@ -1094,7 +1170,7 @@ func (r *renderer) labelValueRow(fields map[string]wire.Value) string {
 
 func (r *renderer) link(fields map[string]wire.Value, semanticAttrs []attr) string {
 	href := ""
-	if h, ok := resolveBinding(fields["href"], r.sources).(wire.Str); ok {
+	if h, ok := r.resolve(fields["href"]).(wire.Str); ok {
 		href = string(h)
 	}
 	// The href passes through the ambient destination policy: the scheme floor
@@ -1164,7 +1240,7 @@ func (r *renderer) link(fields map[string]wire.Value, semanticAttrs []attr) stri
 
 func (r *renderer) image(fields map[string]wire.Value, semanticAttrs []attr) string {
 	src := ""
-	if s, ok := resolveBinding(fields["src"], r.sources).(wire.Str); ok {
+	if s, ok := r.resolve(fields["src"]).(wire.Str); ok {
 		src = string(s)
 	}
 	cls := "fuaran-image"
@@ -1301,7 +1377,7 @@ func (r *renderer) imageSrcSetAttrs(v wire.Value) []attr {
 			continue
 		}
 		url := ""
-		if s, ok := resolveBinding(obj.Fields["src"], r.sources).(wire.Str); ok {
+		if s, ok := r.resolve(obj.Fields["src"]).(wire.Str); ok {
 			url = string(s)
 		}
 		safe, refusal := r.egress.SanitizeURLForEgress(EgressMedia, url)
@@ -1358,7 +1434,7 @@ func srcSetWidth(v wire.Value) int64 {
 //     poster at the refusal URL is a broken image painted over the player.
 func (r *renderer) media(fields map[string]wire.Value, semanticAttrs []attr) string {
 	src := ""
-	if s, ok := resolveBinding(fields["src"], r.sources).(wire.Str); ok {
+	if s, ok := r.resolve(fields["src"]).(wire.Str); ok {
 		src = string(s)
 	}
 	safeSrc, egressPairs := r.egress.SanitizeURLForEgress(EgressMedia, src)
@@ -1386,7 +1462,7 @@ func (r *renderer) media(fields map[string]wire.Value, semanticAttrs []attr) str
 	if tag == "video" {
 		if poster, ok := kind.Fields["poster"]; ok {
 			url := ""
-			if s, ok := resolveBinding(poster, r.sources).(wire.Str); ok {
+			if s, ok := r.resolve(poster).(wire.Str); ok {
 				url = string(s)
 			}
 			safe, refusal := r.egress.SanitizeURLForEgress(EgressMedia, url)
@@ -1467,7 +1543,7 @@ func (r *renderer) trackChildren(fields map[string]wire.Value) string {
 			continue
 		}
 		url := ""
-		if s, ok := resolveBinding(entry.Fields["src"], r.sources).(wire.Str); ok {
+		if s, ok := r.resolve(entry.Fields["src"]).(wire.Str); ok {
 			url = string(s)
 		}
 		safe, refusal := r.egress.SanitizeURLForEgress(EgressMedia, url)
@@ -1561,7 +1637,7 @@ func embedAspectClass(v wire.Value) string {
 //     SanitizeEmbedSrcForEgress for why this one refusal does not substitute.
 func (r *renderer) embed(fields map[string]wire.Value, semanticAttrs []attr) string {
 	src := ""
-	if s, ok := resolveBinding(fields["src"], r.sources).(wire.Str); ok {
+	if s, ok := r.resolve(fields["src"]).(wire.Str); ok {
 		src = string(s)
 	}
 	safeSrc, srcOK, egressPairs := r.egress.SanitizeEmbedSrcForEgress(src)
@@ -1783,7 +1859,7 @@ func (r *renderer) list(fields map[string]wire.Value) string {
 // closed = the hidden attribute; role="status" + aria-live="polite".
 func (r *renderer) toast(fields map[string]wire.Value) string {
 	isOpen := false
-	if v, ok := resolveBinding(fields["open"], r.sources).(wire.Bool); ok {
+	if v, ok := r.resolve(fields["open"]).(wire.Bool); ok {
 		isOpen = bool(v)
 	}
 	tone := lowerEnum(fields["tone"], "Default")
@@ -1859,7 +1935,7 @@ func (r *renderer) button(fields map[string]wire.Value, semanticAttrs []attr) st
 	}
 	// Before disabled, matching the reference server renderer's order.
 	attrs = append(attrs, semanticAttrs...)
-	if v, ok := resolveBinding(fields["disabled"], r.sources).(wire.Bool); ok && bool(v) {
+	if v, ok := r.resolve(fields["disabled"]).(wire.Bool); ok && bool(v) {
 		attrs = append(attrs, attr{"disabled", ""})
 	}
 	return textElement("button", attrs, r.text(fields["label"]))
@@ -1874,7 +1950,7 @@ func (r *renderer) selectControl(fields map[string]wire.Value) string {
 	if v, ok := fields["multiple"].(wire.Bool); ok && bool(v) {
 		selectAttrs = append(selectAttrs, attr{"multiple", ""})
 	}
-	if v, ok := resolveBinding(fields["disabled"], r.sources).(wire.Bool); ok && bool(v) {
+	if v, ok := r.resolve(fields["disabled"]).(wire.Bool); ok && bool(v) {
 		selectAttrs = append(selectAttrs, attr{"disabled", ""})
 	}
 	control := element("select", selectAttrs, options)
@@ -1886,7 +1962,7 @@ func (r *renderer) renderOptions(source, placeholder wire.Value) string {
 	if placeholder != nil {
 		items.WriteString(textElement("option", []attr{{"value", ""}}, r.text(placeholder)))
 	}
-	if resolved, ok := resolveBinding(source, r.sources).(wire.Arr); ok {
+	if resolved, ok := r.resolve(source).(wire.Arr); ok {
 		for _, opt := range resolved {
 			optObj, ok := opt.(wire.Obj)
 			if !ok {
@@ -1961,7 +2037,7 @@ func (r *renderer) combobox(field wire.Obj, fieldID string, kind wire.Obj) strin
 		constrained = "false"
 	}
 	value := ""
-	if v, ok := resolveBinding(kind.Fields["value"], r.sources).(wire.Str); ok {
+	if v, ok := r.resolve(kind.Fields["value"]).(wire.Str); ok {
 		value = string(v)
 	}
 	inputAttrs := []attr{
@@ -1980,7 +2056,7 @@ func (r *renderer) combobox(field wire.Obj, fieldID string, kind wire.Obj) strin
 	inputAttrs = append(inputAttrs, attr{"value", value})
 
 	var options strings.Builder
-	if resolved, ok := resolveBinding(kind.Fields["options"], r.sources).(wire.Arr); ok {
+	if resolved, ok := r.resolve(kind.Fields["options"]).(wire.Arr); ok {
 		for _, opt := range resolved {
 			optObj, ok := opt.(wire.Obj)
 			if !ok {
@@ -2188,7 +2264,7 @@ func (r *renderer) dataGrid(fields map[string]wire.Value) string {
 	if staticRows, ok := fields["staticRows"].(wire.Obj); ok {
 		return r.staticTable(staticRows.Fields)
 	}
-	resolved := resolveSource(fields["source"], r.sources)
+	resolved := r.source(fields["source"])
 	columns := gridColumns(fields["columns"])
 	if rows, ok := resolved.(wire.Arr); ok && anyFieldProjected(columns) {
 		return boundGrid(columns, rows)
@@ -2217,7 +2293,7 @@ func (r *renderer) dataGrid(fields map[string]wire.Value) string {
 // phase: revisit if a go SSR consumer needs in-host lowering. Pinned by
 // TestChartRequiresPreLoweredPosture in render_test.go.
 func (r *renderer) chart(fields map[string]wire.Value) string {
-	count := seqLen(resolveSource(fields["source"], r.sources))
+	count := seqLen(r.source(fields["source"]))
 	titleHTML := ""
 	if title, ok := fields["title"]; ok {
 		titleHTML = textElement("div", []attr{{"class", "fuaran-chart-title"}}, r.text(title))
@@ -2232,7 +2308,7 @@ func (r *renderer) chart(fields map[string]wire.Value) string {
 }
 
 func (r *renderer) mapVis(fields map[string]wire.Value) string {
-	count := seqLen(resolveSource(fields["source"], r.sources))
+	count := seqLen(r.source(fields["source"]))
 	return textElement("div", []attr{
 		{"class", "fuaran-map fuaran-map-ssr-placeholder"},
 		{"data-fuaran-ssr-placeholder", "Map"},
@@ -2262,7 +2338,7 @@ func (r *renderer) switchKind(fields map[string]wire.Value) string {
 		// row-shaped and cannot serve a string slot, so a computed selector fell
 		// through to `default` with nothing saying why. Every other binding case
 		// resolves exactly as before.
-		if resolved, ok := resolveScalarText(on, r.sources); ok {
+		if resolved, ok := r.scalarText(on); ok {
 			valueStr = resolved
 			selectorResolved = true
 		}
@@ -2270,7 +2346,7 @@ func (r *renderer) switchKind(fields map[string]wire.Value) string {
 	// Phase 1535 — first-match-wins over both kinds of case, through the one
 	// shared definition, so this renderer cannot drift from the others on the
 	// order or on what a predicate that fails to resolve means.
-	if child, ok := selectSwitchCase(fields["cases"], valueStr, selectorResolved, r.sources); ok {
+	if child, ok := r.switchCase(fields["cases"], valueStr, selectorResolved); ok {
 		return r.renderNode(child)
 	}
 	if def, ok := asNode(fields["default"]); ok {
@@ -2312,7 +2388,15 @@ func (r *renderer) custom(fields map[string]wire.Value) string {
 // §14.1): a decoded tree may point at its own origin and nowhere else, with
 // no caller opt-in required. A host that needs a wider posture reaches for
 // RenderHTMLWithEgress BY NAME.
-func RenderHTML(node wire.Node, sources BindingSources) string {
+//
+// The error is the FIRST binding-resolution error the render met (Phase 1667) —
+// a decoded Binding.Computed, whose whole payload is a host closure that erases
+// on the wire, so WIRE_FORMAT.md §5 says it resolves to an error naming its
+// replacements and never to a value. It is returned ALONGSIDE the HTML rather
+// than instead of it: the render is a pure function of the tree and completes,
+// and a caller gets both what could be rendered and the reason the rest could
+// not. Classify it with errors.Is against ErrDecodedComputed.
+func RenderHTML(node wire.Node, sources BindingSources) (string, error) {
 	return RenderHTMLWithEgress(node, sources, DenyNonLocalEgress())
 }
 
@@ -2336,7 +2420,7 @@ func RenderHTML(node wire.Node, sources BindingSources) string {
 //   - PermissiveEgress() — every destination, for a HAND-AUTHORED tree where
 //     the author is the trust boundary. Correct for a catalog or a sample;
 //     wrong for anything that renders a decoded tree.
-func RenderHTMLWithEgress(node wire.Node, sources BindingSources, policy EgressPolicy) string {
+func RenderHTMLWithEgress(node wire.Node, sources BindingSources, policy EgressPolicy) (string, error) {
 	fragments := make(map[string]wire.Node)
 	collectFragments(node, fragments)
 	// WIRE_FORMAT.md §24.4 — the whole tree's `Binding.State` declarations seed
@@ -2344,5 +2428,6 @@ func RenderHTMLWithEgress(node wire.Node, sources BindingSources, policy EgressP
 	// of its own reads what a sibling declared. Laid UNDER the caller's own
 	// sources: a seed is never an override. See seeds.go.
 	r := &renderer{sources: WithStateSeeds(node, sources), fragments: fragments, egress: policy}
-	return r.renderNode(node)
+	html := r.renderNode(node)
+	return html, r.err
 }

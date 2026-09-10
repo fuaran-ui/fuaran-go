@@ -19,7 +19,7 @@ func islandPage() string {
 
 func TestZeroIslandsIsByteIdenticalToPlainRender(t *testing.T) {
 	node := mustDecode(t, islandPage())
-	plain := RenderHTML(node, nil)
+	plain := renderHTML(t, node, nil)
 	withIslands, err := RenderWithIslands(node, nil, nil)
 	if err != nil {
 		t.Fatalf("RenderWithIslands: %v", err)
@@ -31,7 +31,7 @@ func TestZeroIslandsIsByteIdenticalToPlainRender(t *testing.T) {
 
 func TestIslandsEmitBoundariesAndScopedPayloads(t *testing.T) {
 	node := mustDecode(t, islandPage())
-	plain := RenderHTML(node, nil)
+	plain := renderHTML(t, node, nil)
 	withIslands, err := RenderWithIslands(node, nil, map[string]string{"spark-b": "viz"})
 	if err != nil {
 		t.Fatalf("RenderWithIslands: %v", err)
@@ -40,7 +40,7 @@ func TestIslandsEmitBoundariesAndScopedPayloads(t *testing.T) {
 	// The boundary wrapper's children are exactly the island node's plain
 	// static render — the mismatch-freedom contract the client hydrates
 	// against.
-	childPlain := RenderHTML(mustDecode(t, islandChildB), nil)
+	childPlain := renderHTML(t, mustDecode(t, islandChildB), nil)
 	wrapped := `<div class="fuaran-island" data-fuaran-island="viz">` + childPlain + `</div>`
 	if !strings.Contains(withIslands, wrapped) {
 		t.Errorf("boundary wrapper (with the plain child render inside) missing:\n%s", withIslands)
