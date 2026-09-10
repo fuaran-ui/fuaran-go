@@ -303,15 +303,23 @@ func (r *renderer) a11yAttrs(node wire.Node) []attr {
 // it would break them without moving a single byte of anything an encoder
 // produces. Stated here rather than left ambiguous — the decision is "lenient
 // on the way in, canonical on the way out", the least breaking of the two.
+// Phase 1665 — the SCALAR path. This read resolveBinding + displayString
+// directly, which is what resolveScalarText does for every binding case EXCEPT
+// Transform and Expr — so a pipeline yielding the one cell an author obviously
+// meant ("name this region after what is in it") resolved to the rows list,
+// which has no display form, and this host emitted no aria-label at all. The
+// reference host and the erased host each got it wrong differently (a caught
+// cast error; the rows array in the attribute), and on the one trait with no
+// visible output none of the three was reported. Delegating here rather than
+// adding a Transform arm keeps the trio (text / number / bool) the one place
+// the 1x1 law lives. WIRE_FORMAT's accessibility-trait render obligations state
+// the rule; nodes/a11y-wrapper-transform-label and a11y-contract.json's
+// behaviour vectors pin it.
 func a11yName(value wire.Value, sources BindingSources) (string, bool, error) {
 	if bare, ok := value.(wire.Str); ok {
 		return string(bare), true, nil
 	}
-	resolved, err := resolveBinding(value, sources)
-	if resolved != nil {
-		return displayString(resolved), true, err
-	}
-	return "", false, err
+	return resolveScalarText(value, sources)
 }
 
 // forwardsToSemanticElement reports whether this kind renders a body that IS

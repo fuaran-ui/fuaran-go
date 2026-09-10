@@ -16,6 +16,9 @@ package renderer
 // the whole markup cannot tell the two apart.
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -37,71 +40,120 @@ type a11yCorpusCase struct {
 	absentFromWrapper []string
 }
 
-func a11yCorpusCases() []a11yCorpusCase {
-	return []a11yCorpusCase{
-		{
-			// All six slots at once on an ordinary wrapper kind. `hidden` is an
-			// explicit Static FALSE, which is distinct on the wire from omitted
-			// and must emit nothing.
-			fixture: "a11y-wrapper-all-slots",
-			want: []string{
-				`aria-label="Channel performance summary"`,
-				`aria-labelledby="a11y-wrapper-heading"`,
-				`aria-describedby="a11y-wrapper-note"`,
-				`role="region"`,
-				`aria-live="polite"`,
-			},
-			absentFromCarrier: []string{`aria-hidden`},
-		},
-		{
-			// The custom role's case is carried VERBATIM — this is the exact
-			// spelling a fold bug once rewrote. `off` is a real liveRegion
-			// token, not an absence.
-			//
-			// `aria-label` is here because the name is a `Binding.State` whose
-			// declared default now RESOLVES at the render floor (WIRE_FORMAT
-			// §24, operator ruling 2026-08-26 / fuaran#1064). It was absent
-			// from this list until then, as a measured cross-tier divergence;
-			// TestA11yStateBoundNameResolvesLikeEveryOtherTier below carries the
-			// account of why it flipped.
-			fixture: "a11y-wrapper-state-bound",
-			want: []string{
-				`role="doc-pageFooter"`,
-				`aria-live="off"`,
-				`aria-label="Site footer"`,
-			},
-			absentFromCarrier: []string{`aria-hidden`},
-		},
-		{
-			fixture: "a11y-alert-assertive",
-			want:    []string{`role="alert"`, `aria-live="assertive"`},
-		},
-		{
-			// D4 forwarding: the body IS the semantic element.
-			fixture:           "a11y-link-labelled",
-			element:           "a",
-			want:              []string{`aria-label="Read the 2026 annual report (PDF)"`},
-			absentFromWrapper: []string{`aria-label`, `role=`},
-		},
-		{
-			fixture:           "a11y-button-named",
-			element:           "button",
-			want:              []string{`aria-label="Refresh revenue figures"`, `role="button"`},
-			absentFromWrapper: []string{`aria-label`, `role=`},
-		},
-		{
-			// The decorative shape: empty alt + hidden Static TRUE — the slot
-			// this host dropped entirely before Phase 951's port.
-			fixture:           "a11y-image-decorative",
-			element:           "img",
-			want:              []string{`aria-hidden="true"`},
-			absentFromWrapper: []string{`aria-hidden`},
-		},
+// projectionAttributes are the six attribute names the accessibility projection
+// can emit, in the wire's slot order. The complement of a vector's own list is
+// what that vector forbids: the contract declares its attribute list EXHAUSTIVE
+// for the projection.
+var projectionAttributes = []string{
+	"aria-label",
+	"aria-labelledby",
+	"aria-describedby",
+	"role",
+	"aria-live",
+	"aria-hidden",
+}
+
+// forwardingTag is the element THIS host's body renders for each forwarding
+// fixture's kind — the host-local half of a contract vector. A forwarding vector
+// with no entry here fails loudly rather than falling back to the wrapper: a
+// silent fallback would assert the projection landed where the contract says it
+// must not.
+var forwardingTag = map[string]string{
+	"a11y-link-labelled":    "a",
+	"a11y-button-named":     "button",
+	"a11y-image-decorative": "img",
+}
+
+// a11yContractVector is one behaviour vector out of the corpus's a11y contract.
+type a11yContractVector struct {
+	Fixture    string      `json:"fixture"`
+	Forwards   bool        `json:"forwards"`
+	Attributes [][2]string `json:"attributes"`
+}
+
+// a11yCorpusCases reads the cases out of the corpus's own a11y contract.
+//
+// Phase 1665 — this table used to be hand-written here, and the same table was
+// hand-written again in four sibling hosts. Five copies of one cross-host claim
+// is exactly the arrangement that let accessibility.label resolve five different
+// ways with every conformance gate green: each host measured itself against its
+// own idea of the trait, and no copy could contradict another. The claim now
+// lives once, in a11y-contract.json's `behaviour` section, and every host reads
+// it. What stays host-local is the one thing the contract deliberately does not
+// state: which element this host renders for a forwarding kind.
+//
+// Returns nil with no corpus present; the caller skips rather than passing
+// vacuously.
+func a11yCorpusCases(t *testing.T) []a11yCorpusCase {
+	t.Helper()
+	corpus := findFixtureCorpus()
+	if corpus == "" {
+		return nil
 	}
+	raw, err := os.ReadFile(filepath.Join(corpus, "a11y-contract.json"))
+	if err != nil {
+		return nil
+	}
+	var contract struct {
+		Behaviour struct {
+			Vectors []a11yContractVector `json:"vectors"`
+		} `json:"behaviour"`
+	}
+	if err := json.Unmarshal(raw, &contract); err != nil {
+		t.Fatalf("parsing a11y-contract.json: %v", err)
+	}
+	cases := make([]a11yCorpusCase, 0, len(contract.Behaviour.Vectors))
+	for _, v := range contract.Behaviour.Vectors {
+		names := map[string]bool{}
+		want := make([]string, 0, len(v.Attributes))
+		for _, pair := range v.Attributes {
+			names[pair[0]] = true
+			want = append(want, pair[0]+`="`+pair[1]+`"`)
+		}
+		var absentFromCarrier []string
+		for _, name := range projectionAttributes {
+			if !names[name] {
+				absentFromCarrier = append(absentFromCarrier, name)
+			}
+		}
+		element := ""
+		var absentFromWrapper []string
+		if v.Forwards {
+			tag, ok := forwardingTag[v.Fixture]
+			if !ok {
+				t.Fatalf("%s: the contract says the projection forwards, and this host has not said "+
+					"which element it renders for that kind - add it to forwardingTag", v.Fixture)
+			}
+			element = tag
+			for _, name := range names2sorted(names) {
+				absentFromWrapper = append(absentFromWrapper, name)
+			}
+		}
+		cases = append(cases, a11yCorpusCase{
+			fixture:           v.Fixture,
+			element:           element,
+			want:              want,
+			absentFromCarrier: absentFromCarrier,
+			absentFromWrapper: absentFromWrapper,
+		})
+	}
+	return cases
+}
+
+// names2sorted keeps the emitted order stable for a deterministic failure
+// message; the set itself is what the assertion needs.
+func names2sorted(names map[string]bool) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range projectionAttributes {
+		if names[name] {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 func TestA11yCorpusProjectionLandsOnTheRightElement(t *testing.T) {
-	for _, c := range a11yCorpusCases() {
+	for _, c := range a11yCorpusCases(t) {
 		t.Run(c.fixture, func(t *testing.T) {
 			node := loadFixtureNode(t, c.fixture)
 			html := renderHTML(t, node, nil)
@@ -184,8 +236,19 @@ func TestA11yStateBoundNameResolvesLikeEveryOtherTier(t *testing.T) {
 // The corpus family must actually be present. A table-driven leg that silently
 // enumerated nothing would be a gate that checked nothing — the failure mode the
 // conformance runner guards against one level up.
-func TestA11yCorpusFamilyIsNonEmpty(t *testing.T) {
-	if len(a11yCorpusCases()) < 6 {
-		t.Fatalf("the a11y corpus family covers %d fixtures; the Phase 955 family is six", len(a11yCorpusCases()))
+func TestA11yContractVectorsCoverTheTransformBoundName(t *testing.T) {
+	if findFixtureCorpus() == "" {
+		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
 	}
+	cases := a11yCorpusCases(t)
+	if len(cases) == 0 {
+		t.Fatal("a11y-contract.json's behaviour.vectors must enumerate the a11y fixture family")
+	}
+	for _, c := range cases {
+		if c.fixture == "a11y-wrapper-transform-label" {
+			return
+		}
+	}
+	t.Fatal("the contract must carry the Phase 1665 vector - the Transform-bound accessible name is " +
+		"the one every host resolved through its row-shaped generic path")
 }
