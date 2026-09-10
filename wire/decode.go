@@ -1326,6 +1326,10 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		}
 		pipeRaw := require(obj, "pipeline", path)
 		pipeline := atComputePath(path+".pipeline", func() Value { return decodeComputePipeline(pipeRaw) })
+		// Phase 1662 — §21.8's expression-node bound over the pipeline's own
+		// embedded expressions, at DECODE and not at validation: a document that
+		// decodes must not be able to name an unbounded evaluation.
+		checkPipelineExprBound(pipeline, path)
 		fields := map[string]Value{"pipeline": pipeline, "source": source}
 		if raw, ok := obj["params"]; ok {
 			params := decodeTransformParams(w, raw, path+".params")

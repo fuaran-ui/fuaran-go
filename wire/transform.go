@@ -854,6 +854,58 @@ func decodeComputePipeline(raw any) Value {
 	return out
 }
 
+// checkPipelineExprBound applies §21.8's expression-node bound to the
+// expressions a Binding.Transform PIPELINE embeds (Phase 1662).
+//
+// MaxExprNodes bounded Binding.Expr alone until now, which made it bypassable
+// by wrapping the expression in a Transform: a `derive`'s expression and a
+// `filter`'s predicate reach the same evaluator and carried no ceiling on any
+// host.
+//
+// `filter` and `derive` are the whole surface — the only pipeline steps carrying
+// an expression; a `join` / `union` / `intersect` / `except` operand is a data
+// source (embedded table or named ref), never another pipeline — so there is no
+// recursive axis to descend.
+//
+// Same budget, counted per EMBEDDED EXPRESSION, refused with LIMIT_EXCEEDED at
+// the path of the offending `pred` / `expr` member so an author is told which
+// STEP to come back under. The first breach wins. exprWalk is reused rather than
+// re-derived: its `col` verdict is ignored here (a `col` is perfectly ordinary
+// in a pipeline expression) and its count is exactly what this bound wants.
+func checkPipelineExprBound(pipeline Value, path string) {
+	arr, ok := pipeline.(Arr)
+	if !ok {
+		return
+	}
+	for i, step := range arr {
+		o, ok := step.(Obj)
+		if !ok {
+			continue
+		}
+		var slot string
+		switch o.Tag {
+		case "filter":
+			slot = "pred"
+		case "derive":
+			slot = "expr"
+		default:
+			continue
+		}
+		expr, ok := o.Fields[slot]
+		if !ok {
+			continue
+		}
+		var names []string
+		count := 0
+		exprWalk(expr, &names, &count)
+		if count > MaxExprNodes {
+			failExpecting(CodeLimitExceeded, fmt.Sprintf("%s.pipeline[%d].%s", path, i, slot),
+				fmt.Sprintf("expression exceeds the maximum of %d expression nodes (WIRE_FORMAT 21.8)", MaxExprNodes),
+				fmt.Sprintf("at most %d ColExpr nodes in one pipeline expression", MaxExprNodes))
+		}
+	}
+}
+
 // exprWalk walks one decoded ColExpr, collecting its `param` names into names
 // and counting its nodes into count; it returns true when a `col` reference is
 // present (Phase 1534).
