@@ -369,7 +369,17 @@ func referenceRendererFiles(t *testing.T, corpus string) []string {
 	}
 	var projects []string
 	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), referenceRendererProjectPrefix) {
+		// `*.Tests` projects are EXCLUDED (Phase 1677, aligning with the Python
+		// host, which excluded them from the start). A test's expectation string
+		// is not the reference's own spelling, so admitting one lets this oracle
+		// be satisfied by an assertion about the very drift it is checking for.
+		// It was not hypothetical: the reference's renderer test projects spell
+		// `fuaran-image-aspect-` as a bare trailing-dash token, which admitted it
+		// as a composition PREFIX here — so this host could have emitted an
+		// invented `fuaran-image-aspect-cinemascope` and passed, while the
+		// production renderer spells only four closed variants.
+		if e.IsDir() && strings.HasPrefix(e.Name(), referenceRendererProjectPrefix) &&
+			!strings.HasSuffix(e.Name(), ".Tests") {
 			projects = append(projects, filepath.Join(src, e.Name()))
 		}
 	}
@@ -440,6 +450,26 @@ func describeOffender(corpus string, root string, class string) string {
 		"nowhere under src/ — fix THIS HOST's spelling (do not relax the assertion)", class)
 }
 
+var (
+	fsBlockCommentRe = regexp.MustCompile(`(?s)\(\*.*?\*\)`)
+	fsLineCommentRe  = regexp.MustCompile(`(?m)//.*$`)
+)
+
+// stripFSharpComments drops F# comments before class tokens are extracted
+// (Phase 1677, aligning with the Python host).
+//
+// This is not tidiness. The reference's doc comments legitimately contain PROSE
+// about the vocabulary — a markup example spelling `class="fuaran-icon
+// fuaran-{kind}-icon"`, a sentence about "every `fuaran-`-shaped token" — and
+// four such comments yielded composition prefixes (`fuaran-drawing-`,
+// `fuaran-heading-`, `fuaran-math-`, `fuaran-modal-`) that the production
+// renderer does not spell. A prefix admitted from prose widens what this host
+// may emit without any reference code having said so, which is the same class
+// of vacuity the bare-namespace guard below refuses one step further along.
+func stripFSharpComments(text string) string {
+	return fsLineCommentRe.ReplaceAllString(fsBlockCommentRe.ReplaceAllString(text, ""), "")
+}
+
 var classTokenRe = regexp.MustCompile(`fuaran-[a-zA-Z0-9-]*`)
 
 // classPrefixNamespace is the bare class namespace — admissible as an exact
@@ -461,7 +491,7 @@ func referenceVocabulary(t *testing.T, corpus string) (map[string]bool, []string
 			// would silently empty the vocabulary. Fail naming it.
 			t.Fatalf("reference renderer source missing inside the located reference host: %v", err)
 		}
-		for _, token := range classTokenRe.FindAllString(string(raw), -1) {
+		for _, token := range classTokenRe.FindAllString(stripFSharpComments(string(raw)), -1) {
 			if strings.HasSuffix(token, "-") {
 				// The bare namespace is NOT a vocabulary entry. It occurs in the
 				// reference sources as a fragment of string concatenation, and

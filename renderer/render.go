@@ -2007,9 +2007,21 @@ func (r *renderer) formField(field wire.Obj) string {
 	label := element("span", []attr{{"class", "fuaran-form-field-label"}}, escapeText(r.text(field.Fields["label"])))
 	kind, _ := field.Fields["kind"].(wire.Obj)
 	var control string
-	if kind.Tag == "Combobox" {
+	// Phase 1677 — three kinds that used to fall through to the bare-input floor
+	// now render real controls (see renderer/form_controls.go). Every remaining
+	// kind still floors on the untyped input: the roster's fallback asks for more
+	// than that from all of them, and closing the rest is further work rather
+	// than something this switch is pretending to have done.
+	switch kind.Tag {
+	case "Combobox":
 		control = r.combobox(field, fieldID, kind)
-	} else {
+	case "Rating":
+		control = r.ratingField(field, fieldID, kind)
+	case "Color":
+		control = r.colorField(field, fieldID, kind)
+	case "Tokens":
+		control = r.tokensField(field, fieldID, kind)
+	default:
 		control = voidElement("input", []attr{
 			{"class", "fuaran-form-field-control"}, {"data-fuaran-field", fieldID},
 		})

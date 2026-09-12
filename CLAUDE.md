@@ -263,7 +263,7 @@ client-mask unmask path).
 No upstream dependency on any other sibling. At test time it reads the
 workspace-relative corpus at `../wire-format-fixtures/` (skipped when absent, so
 the repo is standalone-testable). It produces a Go module, not a NuGet pack — the
-workspace `pack-all.ps1` treats it as a no-op.
+consumer-side package build treats it as a no-op.
 
 ## Public vocabulary discipline
 

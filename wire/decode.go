@@ -2091,11 +2091,21 @@ func enumDecoder(allowed caseSet, name string, aliases map[string]string) fieldD
 	}
 }
 
+// decodeChildren decodes a node list, naming the offending element by INDEX.
+//
+// Phase 1677 — the separator was `.` (`$.kind.children.0.kind.text`) where the
+// corpus, the reference host and every other indexed slot in this file spell it
+// `[0]`. No corpus reject vector discriminated the two, because the reject rule
+// is a PREFIX match and every such vector stops at `$.kind.children`; it
+// surfaced only when `Tabs`/`Stepper` started routing their children here and a
+// host-local test named a path inside one. A §6 path is read by an author
+// repairing a document and matched by a host's own tooling, so two spellings of
+// the same position is a divergence whichever one is shorter to write.
 func decodeChildren(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeNodeValue(w, item, path+"."+strconv.Itoa(i))
+		out[i] = decodeNodeValue(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
@@ -3400,6 +3410,28 @@ func isStaticIntZero(v Value) bool {
 // Phase 867 — §3.6.1 clause 4: an absent `trendPolarity` IS `HigherIsBetter`.
 func isHigherIsBetter(v Value) bool { return isStr(v, "HigherIsBetter") }
 
+// Phase 1677 — §3.6: an absent `Tabs.orientation` IS `Horizontal`.
+func isHorizontal(v Value) bool { return isStr(v, "Horizontal") }
+
+// decodeStructural is the identity field decoder: it accepts whatever the input
+// carries, exactly as an unconsumed key would be accepted by `build`. It exists
+// so that a slot can be NORMALISED without being TYPED — see `FragmentDecl`'s
+// `effect` / `holes`, which are dropped at their defaults and otherwise carried
+// through unexamined. Deliberately not `decodeJSONValue`, which is null-strict
+// under rule 12: routing a previously-structural slot through it would refuse
+// documents this host accepts today, under cover of a normalisation.
+func decodeStructural(_ *walkState, raw any, _ string) Value { return fromJSON(raw) }
+
+// Phase 1670 / WIRE_FORMAT.md §15.4 — a `FragmentDecl.effect` naming the
+// pure-deterministic class is the redundant spelling of an omitted one.
+func isPureDeterministicEffect(v Value) bool {
+	o, ok := v.(Obj)
+	if !ok || o.Tag != "" || len(o.Fields) != 2 {
+		return false
+	}
+	return isStr(o.Fields["determinism"], "Deterministic") && isStr(o.Fields["hostEffect"], "Pure")
+}
+
 // Phase 1077 — §3.6.2. `Natural` is the identity on BOTH the fit and the
 // aspect axis, so one predicate serves both slots.
 func isNaturalImageToken(v Value) bool { return isStr(v, "Natural") }
@@ -3467,6 +3499,40 @@ func decodeTracks(w *walkState, raw any, path string) Value {
 		// truthiness would disagree about which caption track opens, which is a
 		// difference the reader meets on the first frame.
 		s.optDrop("default", decodeBool, isFalseValue)
+		out[i] = s.buildStrict("")
+	}
+	return out
+}
+
+// decodeTabHeaders — §3.6's `TabHeader` records (Phase 1677).
+//
+// A record nested one level inside an ARRAY, which is exactly the position a
+// host walking elements with a looser walker than its records gets wrong: before
+// this, every member of every header decoded structurally, so a header with no
+// `label` at all, or a non-string `icon`, round-tripped byte-perfectly and
+// rendered an unnamed tab.
+//
+// `label` is a `TextSource` and REQUIRED; `icon` is a BARE string, matching the
+// reference host (whose icon read is a plain string) and every other icon slot
+// here; `disabled` is a `Binding<bool>`, so a tab may be disabled by state
+// rather than only by a literal.
+//
+// The path carries the ARRAY INDEX (`$.kind.tabHeaders[1].label`), so a document
+// with four headers names the one at fault — the `decodeTracks` convention.
+//
+// `buildStrict` closes the record, dropping an unconsumed key rather than
+// carrying it: a `TabHeader` is a closed record in the IDL, and the reference and
+// Python hosts both build it closed. Tolerance for a later spec version's
+// additions lives on the KIND, one level out.
+func decodeTabHeaders(w *walkState, raw any, path string) Value {
+	arr := expectArray(raw, path)
+	out := make(Arr, len(arr))
+	for i, item := range arr {
+		p := path + "[" + strconv.Itoa(i) + "]"
+		s := newSpec(w, expectObject(item, p), p)
+		s.req("label", decodeTextSource)
+		s.opt("icon", decodeString)
+		s.opt("disabled", decodeBindingBool)
 		out[i] = s.buildStrict("")
 	}
 	return out
@@ -4088,6 +4154,35 @@ func init() {
 			s.sentinel("onPointClick")
 			return s.build("Chart")
 		},
+		// FragmentDecl — NORMALISED, not typed (Phase 1677, adopting §15.4 as
+		// Phase 1670 restated it).
+		//
+		// The redundant `"holes":[]` and the pure-deterministic `"effect"` are not
+		// a second canonical spelling: a conformant emitter MUST omit both, both
+		// stay decode-accepted, and a decoder that meets either re-encodes without
+		// it. This host's model is structural, so DROPPING the member on decode is
+		// what stops it being emitted — the same `optDrop` seam every other
+		// omit-at-default slot uses.
+		//
+		// Nothing here is typed, and that is the boundary rather than an omission:
+		// `holes`' `HoleDecl` cases and `effect`'s two closed vocabularies have
+		// their own refusal paths and no fixtures behind them, and inventing
+		// refusals under cover of a normalisation would refuse documents the
+		// corpus accepts. `body` likewise stays structural, as it was before this
+		// phase — routing it through the node decoder is a real improvement and a
+		// separate one, with its own reject behaviour to answer for.
+		//
+		// `FragmentRef.args` is the third member of this class and is deliberately
+		// untouched: §15.4 records it as a SHOULD rather than a MUST, because the
+		// reference host cannot yet express a map's identity default. A host that
+		// normalised it anyway would be the one emitting bytes the reference does
+		// not.
+		"FragmentDecl": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
+			s.optDrop("effect", decodeStructural, isPureDeterministicEffect)
+			s.optDrop("holes", decodeStructural, isEmptyArr)
+			return s.build("FragmentDecl")
+		},
 		"Custom": func(w *walkState, obj map[string]any, path string) Obj {
 			s := newSpec(w, obj, path)
 			s.req("moduleId", decodeString)
@@ -4097,32 +4192,76 @@ func init() {
 			s.opt("exposedNodeIds", decodeJSONValue)
 			return s.build("Custom")
 		},
-		// Tabs / Stepper — typed for ONE slot each, and structural for the
-		// rest (`build` preserves every unconsumed key, so the round-trip
-		// bytes are unchanged). Both were wholly structural before Phase 1064,
+		// Tabs / Stepper — BOTH SPECS ARE NOW COMPLETE against the corpus IDL's
+		// `kinds` entry for each, every member typed to the reference host's own
+		// reading (Phase 1677; the Python host took the same step at the same
+		// scope in Phase 1654, and this is the Go half of that pair).
+		//
+		// The history is worth keeping, because it is what the completion is
+		// measured against. Both kinds were WHOLLY structural before Phase 1064,
 		// which is why this host answered `reject-binding-int-bool` and
-		// `reject-binding-int-sentinel-string` by ACCEPTING them while it
-		// refused every float vector: the typed float parsers existed and were
-		// routed, and these two kinds had no typed decoder to route anything
-		// through. The Binding<int> slot is the whole of what is typed here —
-		// making `activeStep` REQUIRED (as the reference host does) is a
-		// MISSING_FIELD parity question with no fixture behind it, and is
-		// deliberately not smuggled in alongside.
-		// Phase 1585 — `activeIndex` is OMITTED at the identity `Static 0` on
-		// both boundaries, the `stacked` treatment applied to a binding slot.
-		// This host's model is structural, so dropping the member on decode is
-		// what stops it being emitted; `optDrop` is the same seam every other
-		// omitted-when-default slot uses. `Stepper.activeStep` deliberately does
-		// NOT follow — it is IDL-`required`, not omit-at-default, and this
-		// decoder must not invent a rule the artefact does not state.
+		// `reject-binding-int-sentinel-string` by ACCEPTING them while it refused
+		// every float vector: the typed float parsers existed and were routed,
+		// and these two kinds had no typed decoder to route anything through.
+		// Phase 1064 typed the one `Binding<int>` slot and nothing else,
+		// deliberately — the blast radius was the slot that phase was about — and
+		// recorded the rest as residue. This is that residue.
+		//
+		// What each member's treatment comes from, and nothing invented on top:
+		//   * `activeIndex` — omit-at-default `Static 0` (Phase 1585). This
+		//     host's model is structural, so DROPPING the member on decode is
+		//     what stops it being emitted; an explicit `{"$type":"Static",
+		//     "value":0}` carried through would make the pre-1585 spelling a
+		//     SECOND canonical form.
+		//   * `orientation` — omit-at-default `Horizontal`, the ordinary §3.6
+		//     enum treatment, with the `Row`/`Column` aliases every other
+		//     orientation slot in this host accepts.
+		//   * `children` — REQUIRED on both, and a list of nodes. Leaving a
+		//     node-valued position structural is the one omission that costs more
+		//     than it saves: the nodes inside it never reach the node decoder at
+		//     all, so nothing in them is counted, bounded or typed.
+		//   * `tabHeaders` — an array of `TabHeader` records whose `label` is
+		//     REQUIRED, so a header with no label is a MISSING_FIELD rather than a
+		//     document that round-trips perfectly and renders an unnamed tab.
+		//   * `tabTags` — an array of plain strings, refused by index.
+		//   * `activeTag` — the tag-side selection, a `Binding<string>`; the
+		//     second way a `Tabs` is live, which the validator already reads.
+		//   * `onSelect` / `onSelectTag` — `fn` slots, presence-only and
+		//     normalised to the closure sentinel.
+		//
+		// `Stepper.activeStep` IS REQUIRED — the decision Phase 1064 declined to
+		// smuggle in, taken here explicitly. The corpus IDL declares it
+		// `{"$type":"required"}` where `Tabs.activeIndex` is `omitDefault`, and a
+		// stepper carries no default step to fall back to: `Tabs` has one because
+		// "the first tab" is a meaningful resting state, while a stepper with no
+		// declared step has no position at all, so a host inventing 0 would be
+		// choosing a stage in someone else's workflow. The reference host and the
+		// Python host both require it. No corpus fixture pins it — which is why it
+		// needed deciding rather than reading — so the decision is recorded here
+		// and in `wire/tabs_stepper_test.go`, whose `Stepper` case is this host's
+		// evidence for it.
+		//
+		// `buildStrict` is deliberately NOT used on the kind: an unknown key there
+		// is still preserved structurally (§2 rule 2 tolerance). Strictness is
+		// applied one level in, inside `TabHeader`, where the reference and the
+		// Python host both build a closed record.
 		"Tabs": func(w *walkState, obj map[string]any, path string) Obj {
 			s := newSpec(w, obj, path)
 			s.optDrop("activeIndex", decodeBindingInt, isStaticIntZero)
+			s.req("children", decodeChildren)
+			s.optDrop("orientation", enumDecoder(orientationCases, "orientation", orientationAliases), isHorizontal)
+			s.opt("tabHeaders", decodeTabHeaders)
+			s.opt("tabTags", decodeStringArrayField)
+			s.opt("activeTag", decodeBindingString)
+			s.sentinel("onSelect")
+			s.sentinel("onSelectTag")
 			return s.build("Tabs")
 		},
 		"Stepper": func(w *walkState, obj map[string]any, path string) Obj {
 			s := newSpec(w, obj, path)
-			s.opt("activeStep", decodeBindingInt)
+			s.req("activeStep", decodeBindingInt)
+			s.req("children", decodeChildren)
+			s.sentinel("onSelect")
 			return s.build("Stepper")
 		},
 		// State-bound conditional child. Duplicate match values are NOT a
