@@ -992,6 +992,44 @@ func TestRenderObligationClaimIdsResolveAgainstTheClosedVocabulary(t *testing.T)
 	}
 }
 
+// ─── A trait's declared SCOPE is one this host can act on ────────────────────
+
+func TestEveryDeclaredTraitScopeIsActionable(t *testing.T) {
+	// `appliesTo` decides whether a trait claim is OWED here at all: one riding
+	// only kinds this host does not render owes nothing, one riding the envelope
+	// is owed by everything. A scope this host cannot interpret is therefore not
+	// a cosmetic defect — it is an unanswerable question about whether the gate
+	// should be red.
+	//
+	// Both arms are asserted in BOTH directions, because the tagged shape exists
+	// precisely so that "every kind" is not spellable as an empty array: an
+	// allKinds carrying a list, or a namedKinds carrying none, would each read as
+	// the opposite of what it says.
+	manifest := loadRenderFidelityManifest(t)
+
+	for _, row := range manifest.Traits {
+		if !strings.Contains(row.Trait, ".") {
+			t.Errorf("a trait id is the wire path of the member it governs, never a bare kind "+
+				"name: %q", row.Trait)
+		}
+		switch row.AppliesTo.Scope {
+		case "allKinds":
+			if len(row.AppliesTo.Kinds) != 0 {
+				t.Errorf("%s: an allKinds scope names no kinds — a list would be a narrower claim "+
+					"than the scope itself: %v", row.Trait, row.AppliesTo.Kinds)
+			}
+		case "namedKinds":
+			if len(row.AppliesTo.Kinds) == 0 {
+				t.Errorf("%s: a namedKinds scope with an empty list rides NOTHING, which is "+
+					"satisfiable by rendering nothing at all", row.Trait)
+			}
+		default:
+			t.Errorf("%s: this host cannot interpret the scope %q, so it cannot say whether the "+
+				"trait's claims are owed here", row.Trait, row.AppliesTo.Scope)
+		}
+	}
+}
+
 // ─── The registry is not itself a second source of truth ─────────────────────
 
 func TestRenderObligationCheckersDeclareNoOrphans(t *testing.T) {
