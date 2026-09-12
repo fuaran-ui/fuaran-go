@@ -89,12 +89,29 @@ jobs:
 
       # Print what this gate does NOT block on, on every run. A cap nobody can
       # see reads as "covered everything".
+      # REPORTING ONLY — this step must never decide the job.
+      #
+      # It did, for six days. `grep` exits 1 when it matches nothing, the step runs
+      # under `bash -e`, and Phase 1673 emptied `RESIDUE.txt` after closing the
+      # seven failures it named — so an EMPTY residue set, which is the best state
+      # this repository can be in, failed the run. Every push to `main` was red
+      # while the gate below was green, which is the report masking the thing it
+      # reports on.
+      #
+      # `|| true` per grep, and the empty case says so in words: "nothing named" and
+      # "the summary could not be produced" must not look alike, which is the same
+      # rule the gate itself keeps about skipped checks.
       - name: Report the conformance residue
         run: |
           echo "The blocking gate below runs the WHOLE suite and permits ONLY these"
           echo "named failures (conformance/RESIDUE.txt):"
           echo
-          grep -vE '^[[:space:]]*(#|$)' conformance/RESIDUE.txt | sed 's/^/  /'
+          named=$(grep -vE '^[[:space:]]*(#|$)' conformance/RESIDUE.txt || true)
+          if [ -n "$named" ]; then
+            echo "$named" | sed 's/^/  /'
+          else
+            echo "  (none — the residue set is EMPTY, so the gate permits no failure at all)"
+          fi
           echo
           echo "ALSO NOT GATED HERE — inert rather than capped:"
           echo "  - the class-vocabulary parity oracle reads the reference host's source"
@@ -111,7 +128,11 @@ jobs:
             echo "An unnamed failure reds the gate; so does a named one that starts passing."
             echo
             echo '```'
-            grep -vE '^[[:space:]]*(#|$)' conformance/RESIDUE.txt
+            if [ -n "$named" ]; then
+              echo "$named"
+            else
+              echo "(none — the residue set is EMPTY, so the gate permits no failure at all)"
+            fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
