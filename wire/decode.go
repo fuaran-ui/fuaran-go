@@ -3425,25 +3425,6 @@ func isHigherIsBetter(v Value) bool { return isStr(v, "HigherIsBetter") }
 // Phase 1677 — §3.6: an absent `Tabs.orientation` IS `Horizontal`.
 func isHorizontal(v Value) bool { return isStr(v, "Horizontal") }
 
-// decodeStructural is the identity field decoder: it accepts whatever the input
-// carries, exactly as an unconsumed key would be accepted by `build`. It exists
-// so that a slot can be NORMALISED without being TYPED — see `FragmentDecl`'s
-// `effect` / `holes`, which are dropped at their defaults and otherwise carried
-// through unexamined. Deliberately not `decodeJSONValue`, which is null-strict
-// under rule 12: routing a previously-structural slot through it would refuse
-// documents this host accepts today, under cover of a normalisation.
-func decodeStructural(_ *walkState, raw any, _ string) Value { return fromJSON(raw) }
-
-// Phase 1670 / WIRE_FORMAT.md §15.4 — a `FragmentDecl.effect` naming the
-// pure-deterministic class is the redundant spelling of an omitted one.
-func isPureDeterministicEffect(v Value) bool {
-	o, ok := v.(Obj)
-	if !ok || o.Tag != "" || len(o.Fields) != 2 {
-		return false
-	}
-	return isStr(o.Fields["determinism"], "Deterministic") && isStr(o.Fields["hostEffect"], "Pure")
-}
-
 // Phase 1077 — §3.6.2. `Natural` is the identity on BOTH the fit and the
 // aspect axis, so one predicate serves both slots.
 func isNaturalImageToken(v Value) bool { return isStr(v, "Natural") }
@@ -4165,35 +4146,6 @@ func init() {
 			s.opt("annotations", decodeChartAnnotationArray)
 			s.sentinel("onPointClick")
 			return s.build("Chart")
-		},
-		// FragmentDecl — NORMALISED, not typed (Phase 1677, adopting §15.4 as
-		// Phase 1670 restated it).
-		//
-		// The redundant `"holes":[]` and the pure-deterministic `"effect"` are not
-		// a second canonical spelling: a conformant emitter MUST omit both, both
-		// stay decode-accepted, and a decoder that meets either re-encodes without
-		// it. This host's model is structural, so DROPPING the member on decode is
-		// what stops it being emitted — the same `optDrop` seam every other
-		// omit-at-default slot uses.
-		//
-		// Nothing here is typed, and that is the boundary rather than an omission:
-		// `holes`' `HoleDecl` cases and `effect`'s two closed vocabularies have
-		// their own refusal paths and no fixtures behind them, and inventing
-		// refusals under cover of a normalisation would refuse documents the
-		// corpus accepts. `body` likewise stays structural, as it was before this
-		// phase — routing it through the node decoder is a real improvement and a
-		// separate one, with its own reject behaviour to answer for.
-		//
-		// `FragmentRef.args` is the third member of this class and is deliberately
-		// untouched: §15.4 records it as a SHOULD rather than a MUST, because the
-		// reference host cannot yet express a map's identity default. A host that
-		// normalised it anyway would be the one emitting bytes the reference does
-		// not.
-		"FragmentDecl": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.optDrop("effect", decodeStructural, isPureDeterministicEffect)
-			s.optDrop("holes", decodeStructural, isEmptyArr)
-			return s.build("FragmentDecl")
 		},
 		"Custom": func(w *walkState, obj map[string]any, path string) Obj {
 			s := newSpec(w, obj, path)
