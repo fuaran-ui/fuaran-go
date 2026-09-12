@@ -54,9 +54,24 @@ const (
 // cannot differ by a banker's-rounding tie or a float-print convention.
 func sparkR2(x float64) float64 { return math.Floor(x*100.0+0.5) / 100.0 }
 
-// sparklineSeries extracts the resolved series as floats. A value that is not
-// numeric at all stops the read and yields "nothing to draw" rather than a
-// silently shortened line — a partial picture is worse than the honest fallback.
+// sparklineSeries extracts the resolved series as floats, ONE READING PER
+// ELEMENT (WIRE_FORMAT.md §24.7, Phase 1704). The boolean says only whether the
+// resolved value was a sequence at all: a value that is not an array is the
+// UNRESOLVED case, which keeps the em-dash exactly as it always did.
+//
+// It no longer stops the read on an element it cannot parse, and the change of
+// mind is worth recording rather than quietly overwriting. This host abandoned
+// the whole series on one foreign element, on the reasoning that "a partial
+// picture is worse than the honest fallback" — which is true of a SHORTENED
+// series, and the conclusion drawn from it was the wrong one of the two
+// available. Reading element-wise into the sentinel is neither partial nor
+// silent: every element keeps its position, and the one that carries no number
+// says so where it stands. Discarding a hundred and ninety-nine readable points
+// because the two-hundredth is junk tells the reader nothing at all, which is
+// strictly less than telling them one point is missing.
+//
+// Three hosts had three answers here and the format had none; §24.7 is the
+// sentence that settles it, and this is this host's half of it.
 func sparklineSeries(v wire.Value) ([]float64, bool) {
 	arr, ok := v.(wire.Arr)
 	if !ok {
@@ -64,11 +79,7 @@ func sparklineSeries(v wire.Value) ([]float64, bool) {
 	}
 	out := make([]float64, 0, len(arr))
 	for _, item := range arr {
-		f, ok := numericValue(item)
-		if !ok {
-			return nil, false
-		}
-		out = append(out, f)
+		out = append(out, floatSeqElement(item))
 	}
 	return out, true
 }
