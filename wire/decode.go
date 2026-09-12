@@ -772,6 +772,18 @@ func isTagOnly(v Value, tag string) bool {
 	return ok && o.Tag == tag && len(o.Fields) == 0
 }
 
+// isPureDeterministicEffect reports the identity `EffectClass` — the one
+// `FragmentDecl.effect` omits (Phase 1670). Both members are required by the
+// spec, so an object carrying anything else, or carrying a third key, is NOT the
+// identity and rides to the wire unchanged.
+func isPureDeterministicEffect(v Value) bool {
+	obj, ok := v.(Obj)
+	if !ok || obj.Tag != "" || len(obj.Fields) != 2 {
+		return false
+	}
+	return isStr(obj.Fields["determinism"], "Deterministic") && isStr(obj.Fields["hostEffect"], "Pure")
+}
+
 func isStr(v Value, s string) bool {
 	t, ok := v.(Str)
 	return ok && string(t) == s
@@ -4295,6 +4307,30 @@ func init() {
 			// never asked for.
 			s.opt("autoAdvanceMs", decodePositiveInt)
 			return s.build("Switch")
+		},
+		// Phase 1670 — the parameterised fragment's two OMIT-AT-DEFAULT slots.
+		//
+		// `WIRE_FORMAT.md`'s parameterised-fragment section has always said a
+		// zero-hole declaration omits `holes` and a pure-deterministic one omits
+		// `effect`, and since Phase 1670 it says so as a MUST: the redundant
+		// `"holes":[]` and `{"determinism":"Deterministic","hostEffect":"Pure"}`
+		// are decode-accepted input, never a second canonical spelling. This
+		// host decoded the kind with no builder at all, so it echoed whatever it
+		// was handed and one document re-encoded to two different byte sequences
+		// depending on which host read it — invisible to this host's own
+		// round-trip gate, which compares its re-encode against bytes it
+		// produced itself.
+		//
+		// DELIBERATELY the whole builder, and deliberately structural otherwise:
+		// `build` preserves every unconsumed key exactly as the fall-through
+		// did, so `body`, `name` and any key a later spec version adds are
+		// untouched. This arm narrows the canonical form and changes nothing
+		// about what is accepted or carried.
+		"FragmentDecl": func(w *walkState, obj map[string]any, path string) Obj {
+			s := newSpec(w, obj, path)
+			s.optDrop("holes", decodeJSONPassthrough, isEmptyArr)
+			s.optDrop("effect", decodeJSONPassthrough, isPureDeterministicEffect)
+			return s.build("FragmentDecl")
 		},
 		// Isolation/embedding boundary (§4o). inputs passes through WITHOUT
 		// null-strictness — it embeds whole node trees whose Binding.Static
