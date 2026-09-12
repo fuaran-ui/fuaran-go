@@ -17,6 +17,13 @@ function Assert-NativeSuccess {
     # sets $LASTEXITCODE and the script carries on regardless. Without this, `go test ./...`
     # could report FAIL packages while `pwsh ./run.ps1` still exited 0 — a gate that cannot go
     # red. Every native invocation below is followed by a call to this.
+    #
+    # MEASURE THIS AT THE PROCESS BOUNDARY, WHICH IS THE ONLY PLACE IT MEANS ANYTHING.
+    # Read in-session, `$LASTEXITCODE` after `& ./run.ps1` reflects the last NATIVE command
+    # this script ran, not the script's own exit — so it can show 1 while `pwsh -File
+    # ./run.ps1` exits 0, and two honest observers can report opposite things. The gate is
+    # what a CHILD process returns. `run.tests.ps1` asserts that property for every stage
+    # below; run it after any edit to this file.
     param([string]$What)
     if ($LASTEXITCODE -ne 0) {
         throw "$What failed with exit code $LASTEXITCODE."
@@ -56,9 +63,28 @@ if (-not $SkipBuild) {
 }
 
 if (-not $SkipTests) {
-    Write-Host "==> go test" -ForegroundColor Cyan
-    & $go test ./...
-    Assert-NativeSuccess "go test ./..."
+    # THE TEST STAGE IS THE RESIDUE GATE, NOT A BARE `go test ./...` (Phase 1673).
+    #
+    # `cmd/conformance-residue` runs the WHOLE suite with no exclusions and
+    # compares the failure set against the named set in conformance/RESIDUE.txt,
+    # going red in BOTH directions. CI's blocking step is that same command, so
+    # this launcher and CI now block on one measurement and cannot drift apart.
+    # Before this, a developer could read a green `run.ps1` while CI was red on
+    # a stale cap — which is exactly what happened for six days from 2026-09-06
+    # (see RESIDUE.txt).
+    #
+    # It also fixes a false green this stage carried on its own: the gate invokes
+    # the suite with `-count=1`, and that is load-bearing rather than tidy. The
+    # conformance corpus is a SIBLING CHECKOUT outside this module, so Go's test
+    # cache cannot see it change; a bare `go test ./...` happily reports
+    # `(cached)` for most packages against a corpus it has not read since the
+    # last build. Observed while writing this: fourteen packages reported
+    # `(cached)` against a corpus checkout minutes old.
+    #
+    # A bare raw run is still one command away (`go test ./...`) for iteration.
+    Write-Host "==> go test (gated — full suite vs the named residue)" -ForegroundColor Cyan
+    & $go run ./cmd/conformance-residue
+    Assert-NativeSuccess "go run ./cmd/conformance-residue"
 }
 
 Write-Host "fuaran-go: run.ps1 complete." -ForegroundColor Green

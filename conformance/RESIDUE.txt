@@ -12,43 +12,45 @@
 # patterns it carried named `form-toggle`, `now-environment-binding` and
 # `switch-on-selection`, which the decoder adopted on 2026-08-11, so by the time
 # this file was written the quarantine excluded eight WHOLE tests to suppress
-# three fixtures that had passed for weeks — and in doing so hid the nine real
-# failures below, none of which it names. A stale exclusion is worse than no
-# exclusion, because it reads as a measured cap.
+# three fixtures that had passed for weeks — and in doing so hid nine real
+# failures it never named. A stale exclusion is worse than no exclusion, because
+# it reads as a measured cap.
 #
 # HOW TO SHRINK IT. Fix the decoder, delete the line, and the gate stays green.
 # There is no way to make this file grow that does not show up in a diff.
 #
-# `go test ./...` and `pwsh ./run.ps1` still run the suite RAW and will show
-# these as ordinary failures. That is deliberate: this file caps what BLOCKS,
-# never what is reported.
+# A bare `go test ./...` still runs the suite RAW and reports a listed failure as
+# an ordinary one: this file caps what BLOCKS, never what is reported. Since
+# Phase 1673 `pwsh ./run.ps1` is NOT in that category — its test stage is this
+# gate, so the launcher and CI block on the same set (see run.ps1).
 #
-# ── Root causes, so a line is never just a name ─────────────────────────────
+# ── The set is EMPTY, and that is a measurement rather than an omission ──────
 #
-# (b) Non-BMP (astral-plane) characters in a JSON object KEY do not survive the
-#     round trip — `𝄞` re-encodes as a replacement character.
-# (c) `encoding/json` is more permissive than the wire format requires: it
-#     accepts duplicate object keys, and it substitutes U+FFFD for lone or split
-#     surrogates instead of refusing the document. The four reject vectors below
-#     all need a scanner that refuses rather than repairs.
-# (d) The §1521 integer lenience rules are unimplemented: an integral float in an
-#     int slot is refused where the corpus accepts it, and an integer beyond
-#     2^53 is not normalised to the boundary value.
-
-# (a) Now.grain — CLOSED 2026-09-06. The decoder adopted `grain` on main while
-#     this file was being written; the STALE half of this gate is what reported
-#     it, by name, on the very first merge after the gate landed. Two lines
-#     deleted rather than an eighth added.
-
-# (b) astral-plane object keys
-TestRoundTrip/custom-nonascii-keys
-
-# (c) encoding/json repairs what the wire format refuses
-TestReject/reject-json-duplicate-key
-TestReject/reject-json-lone-high-surrogate
-TestReject/reject-json-lone-low-surrogate
-TestReject/reject-json-surrogate-pair-split
-
-# (d) §1521 integer lenience
-TestLenientAccept/lenient-1521-int-slot-integral-float
-TestLenientAccept/lenient-1521-payload-integer-beyond-int53
+# Every entry this file once carried now PASSES. The list is kept — with its
+# rules above intact — because the gate reads it on every run: an empty set says
+# "nothing is permitted to fail", which is a stronger claim than the file's
+# absence would make, and the regression direction still goes red by name.
+#
+# CLOSED, in the order the gate reported them:
+#
+# (a) Now.grain — 2026-09-06. The decoder adopted `grain` on main while this file
+#     was being written; the STALE half reported it on the first merge after the
+#     gate landed.
+# (b) astral-plane object keys (TestRoundTrip/custom-nonascii-keys)
+# (c) encoding/json repairing what the wire format refuses — the four reject
+#     vectors for duplicate object keys and for lone or split surrogates
+# (d) the §1521 integer lenience rules — an integral float in an int slot, and an
+#     integer beyond 2^53 normalised to the boundary value
+#
+#     (b), (c) and (d) were closed together by the decode-determinism adoption
+#     (`feat(wire): adopt the ratified decode-determinism rules on this host`,
+#     2026-09-06), which landed minutes after this file was written and made
+#     seven of its eight lines stale at once. The gate said so, by name, on every
+#     run from then on — and the repository's CI stayed red for six days because
+#     nobody deleted them. Phase 1673 did. That six days is the estate's own
+#     "a gate that is red on arrival is one people learn to step over", observed
+#     rather than predicted; it is why the lines are gone rather than annotated.
+#
+# The launcher agrees with this gate by construction since Phase 1673:
+# `run.ps1`'s test stage IS `cmd/conformance-residue`, so "green locally" and
+# "green in CI" are the same measurement and cannot drift apart.

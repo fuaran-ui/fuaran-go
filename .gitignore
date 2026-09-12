@@ -29,3 +29,8 @@ conformance/corpus/
 # counterexample, so `git status` surfaces them, and regenerated on demand from the
 # recorded seed. They are a prompt to act, never a source artefact.
 wire/fuzz-repros/
+
+# run.tests.ps1's scratch package. It is created inside the module (so `./...`
+# reaches it) and removed in that script's finally; ignored so an interrupted run
+# cannot leave a deliberately-broken package for the next commit to sweep up.
+selftestprobe/

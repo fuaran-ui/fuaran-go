@@ -122,6 +122,24 @@ jobs:
       - name: Test (gated — full suite vs the named residue)
         run: go run ./cmd/conformance-residue
 
+      # THE LAUNCHER'S OWN GO-RED PROOF (Phase 1673).
+      #
+      # `run.ps1` is what a developer runs, and for a time it could not fail:
+      # it ended `go test ./...` with no `$LASTEXITCODE` check, so
+      # `pwsh -File ./run.ps1` returned 0 against a red suite. Asserting the exit
+      # code fixed it; nothing asserted that the fix HOLDS, and a green launcher
+      # looks identical whether it can go red or not. This step breaks each stage
+      # in turn, in a scratch package, and requires the launcher to report it to
+      # its CALLER — the only reading that means anything (in-session,
+      # `$LASTEXITCODE` reflects the last NATIVE command, not the script's exit,
+      # which is how two honest observers once reported opposite verdicts).
+      #
+      # Red direction only: the green direction is what every other step here
+      # already demonstrates. Costs one extra full-suite run.
+      - name: Launcher self-test (run.ps1 must go red at the process boundary)
+        shell: pwsh
+        run: ./run.tests.ps1
+
       # The gate's own go-red proof. It re-runs the comparison against two
       # deliberately wrong residue sets — one missing a current failure (a
       # regression), one naming a test that cannot fail (a stale cap) — and fails
