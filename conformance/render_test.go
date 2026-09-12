@@ -640,6 +640,63 @@ func TestOffenderExplanationDistinguishesItsTwoBranches(t *testing.T) {
 	}
 }
 
+// TestReferenceVocabularyAdmitsNoDegeneratePrefix asks the question every other
+// guard around the oracle cannot (Phase 1677, porting the Python host's
+// test_reference_vocabulary_admits_no_degenerate_prefix): not "is the oracle
+// big enough" but "can the oracle still say no".
+//
+// Every neighbouring guard measures the vocabulary's SIZE — ">50 exact classes",
+// "fuaran-node is present", "the derived set is larger than the floor" — and a
+// vocabulary can be large, correct in every named member, and still admit
+// every possible input, because one over-broad prefix subsumes the lot. Two
+// such prefixes have reached this oracle already: the bare namespace, from a
+// doc-comment sentence (dropped at extraction, see referenceVocabulary), and
+// `fuaran-image-aspect-`, from a TEST project's expectation string (closed by
+// the *.Tests exclusion in referenceRendererFiles). Each was a different way
+// in. Stripping comments and excluding tests remove the two known ways; this
+// test is what catches the next one, because it checks the property those
+// fixes exist to restore rather than the fixes themselves.
+func TestReferenceVocabularyAdmitsNoDegeneratePrefix(t *testing.T) {
+	corpus, _ := loadCorpus(t)
+	exact, prefixes := referenceVocabulary(t, corpus)
+
+	// A prefix that names nothing beyond the namespace admits every class this
+	// host can emit, by construction. The extraction drops the bare token, so
+	// this half is enforced twice — deliberately: a future change to the
+	// extraction must not be able to reintroduce it silently.
+	for _, p := range prefixes {
+		if p == classPrefixNamespace || !strings.HasPrefix(p, classPrefixNamespace) || len(p) <= len(classPrefixNamespace) {
+			t.Errorf("the extracted prefix set contains %q, which admits every class this host can emit — the parity "+
+				"assertion is a tautology while it is there. It comes from prose (a doc-comment markup example, or a "+
+				"sentence about the vocabulary) leaking into the extraction; check stripFSharpComments still covers "+
+				"the comment form the reference used.", p)
+		}
+	}
+
+	// The go-red proof, run in-process: a parity lock that has silently gone
+	// vacuous looks exactly like one that is passing, so the falsifier is worth
+	// an assertion of its own rather than a comment claiming the check works.
+	// Two probes: an invented class no reference file could plausibly spell,
+	// and the instance this phase measured — the production renderer spells
+	// exactly four `fuaran-image-aspect-*` variants (Render.fs), so a fifth is
+	// admissible only through a prefix the reference never wrote.
+	for _, invented := range []string{
+		"fuaran-a-class-the-reference-host-does-not-spell",
+		"fuaran-image-aspect-cinemascope",
+	} {
+		if exact[invented] {
+			t.Errorf("the oracle admits %q as an EXACT class, which no reference source spells", invented)
+			continue
+		}
+		for _, p := range prefixes {
+			if strings.HasPrefix(invented, p) {
+				t.Errorf("the oracle admits the invented class %q through the prefix %q, so it admits anything "+
+					"under that prefix — find where the reference spells that prefix and whether it is code or prose", invented, p)
+			}
+		}
+	}
+}
+
 // TestReferenceCSSByteParity asserts the shipped reference stylesheet is a
 // byte-copy of the canonical artefact (skips only on a genuine standalone
 // checkout — see referenceHostRoot).
