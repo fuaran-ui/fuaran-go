@@ -2232,7 +2232,7 @@ func gridCellText(column wire.Obj, row wire.Obj) string {
 // Rich cell kinds (TonedPill, Checkbox, Link, Progress, …) render their TEXT
 // projection here — this host's inert server semantics for every interactive
 // node, not a special case for grids.
-func boundGrid(columns []wire.Obj, rows wire.Arr) string {
+func boundGrid(columns []wire.Obj, rows wire.Arr, hasRowAction bool) string {
 	var headerCells strings.Builder
 	for _, col := range columns {
 		headerCells.WriteString(textElement("th", []attr{{"class", "fuaran-grid-header"}}, strValue(col.Fields["label"])))
@@ -2248,7 +2248,12 @@ func boundGrid(columns []wire.Obj, rows wire.Arr) string {
 			cells.WriteString(element("td", []attr{{"class", "fuaran-grid-cell"}},
 				textElement("span", nil, gridCellText(col, row))))
 		}
-		bodyRows.WriteString(element("tr", []attr{{"class", "fuaran-grid-row"}}, cells.String()))
+		// Phase 1701 - the row-action affordance marker (WIRE_FORMAT.md §3.6.24).
+		// This host wires no click, but the class states what the DOCUMENT
+		// declared, and the row it marks is the seed a hydrating client takes
+		// over: a marked row here is a row that is about to become clickable.
+		bodyRows.WriteString(element("tr",
+			[]attr{{"class", "fuaran-grid-row" + gridRowInteractiveClass(hasRowAction)}}, cells.String()))
 	}
 	thead := element("thead", nil, element("tr", nil, headerCells.String()))
 	tbody := element("tbody", nil, bodyRows.String())
@@ -2287,7 +2292,8 @@ func (r *renderer) dataGrid(fields map[string]wire.Value) string {
 	resolved := r.source(fields["source"])
 	columns := gridColumns(fields["columns"])
 	if rows, ok := resolved.(wire.Arr); ok && anyFieldProjected(columns) {
-		return boundGrid(columns, rows)
+		_, hasRowAction := fields["onRowClick"]
+		return boundGrid(columns, rows, hasRowAction)
 	}
 	count := seqLen(resolved)
 	return textElement("div", []attr{

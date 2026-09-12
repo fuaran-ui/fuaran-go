@@ -823,6 +823,68 @@ type obligationChecker struct {
 	Check func(*testing.T)
 }
 
+// ─── DataGrid: the interactive-row class (§3.6.24, Phase 1701) ───────────────
+//
+// Built from RAW canonical JSON, for the reason the direction checkers give:
+// `onRowClick` is a closure-bearing slot whose whole wire content is its
+// PRESENCE, so authoring it through a surface would put the surface under test
+// rather than the renderer.
+
+const interactiveRowMarker = "fuaran-grid-row-interactive"
+
+// boundGridJSON is a data-bound grid over two static rows, with the row action
+// declared or omitted.
+func boundGridJSON(t *testing.T, rowAction bool) string {
+	t.Helper()
+	action := ""
+	if rowAction {
+		action = `"onRowClick":"<closure>",`
+	}
+	return renderJSON(t, `{"id":"g","kind":{"$type":"DataGrid","columns":[`+
+		`{"field":"reference","kind":{"$type":"Text"},"label":"Reference"}],`+action+
+		`"source":{"$type":"Static","value":[{"reference":"S-1"},{"reference":"S-2"}]}}}`)
+}
+
+// staticRowsGridJSON is the same grid in `staticRows` mode, which honours no row
+// action in any tier.
+func staticRowsGridJSON(t *testing.T, rowAction bool) string {
+	t.Helper()
+	action := ""
+	if rowAction {
+		action = `"onRowClick":"<closure>",`
+	}
+	return renderJSON(t, `{"id":"g","kind":{"$type":"DataGrid","columns":[],`+action+
+		`"source":{"$type":"Static","value":[]},`+
+		`"staticRows":{"headers":["Reference"],"rows":[["S-1"]]}}}`)
+}
+
+// DataGrid/interactive-row-only-with-action (§3.6.24).
+func checkInteractiveRowOnlyWithAction(t *testing.T) {
+	// Rule 1, both directions. An emission test alone cannot tell a renderer
+	// that honours the declaration from one that marks every row.
+	mustEmit(t, boundGridJSON(t, true), interactiveRowMarker,
+		"a grid declaring a row action must mark its rows, so the pointer affordance keyed on the marker promises a click the document declared")
+
+	undeclared := boundGridJSON(t, false)
+	mustNotEmit(t, undeclared, interactiveRowMarker,
+		"a grid declaring no row action must mark no row - a pointer over inert content is a promise the markup does not keep")
+	// ...and the rows are there either way, so the negative above is about the
+	// DECLARATION rather than about an empty render.
+	mustEmit(t, undeclared, `<tr class="fuaran-grid-row">`,
+		"the undeclared grid is expected to render real rows - the assertion above means nothing if it rendered none")
+
+	// Rule 2 - the static leg renders real rows AND can read the declaration,
+	// and must still mark none: the mode honours no row action in any tier, so
+	// a marked row there would promise a click nothing can deliver.
+	staticDeclared := staticRowsGridJSON(t, true)
+	mustEmit(t, staticDeclared, "fuaran-table-row",
+		"the static leg is expected to render real rows - the assertion below means nothing if it rendered none")
+	mustNotEmit(t, staticDeclared, interactiveRowMarker,
+		"a `staticRows` grid honours no row action in any tier, so its rows carry no interactive-row marker whatever the grid declares")
+	mustNotEmit(t, staticRowsGridJSON(t, false), interactiveRowMarker,
+		"...and neither does one that declares no action")
+}
+
 // checkers: which (kind, claim) pairs this host asserts, and how. Keyed by the
 // claim's WIRE token, because the enumeration it is matched against comes from
 // the artefact. A slice rather than a map so the subtests run in a stable
@@ -854,6 +916,8 @@ var checkers = []obligationChecker{
 	{"style.direction/declaration-wins-over-inference", checkDeclarationWinsOverInference},
 	{"style.direction/auto-is-no-declaration", checkAutoIsNoDeclaration},
 	{"style.direction/no-derived-direction-behaviour", checkNoDerivedDirectionBehaviour},
+	// Phase 1701 — the row-action affordance.
+	{"DataGrid/interactive-row-only-with-action", checkInteractiveRowOnlyWithAction},
 }
 
 func hasChecker(key string) bool {
