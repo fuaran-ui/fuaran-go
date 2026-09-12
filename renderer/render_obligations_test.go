@@ -42,6 +42,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
 // ─── The artefact ────────────────────────────────────────────────────────────
@@ -816,6 +818,107 @@ func checkNoDerivedDirectionBehaviour(t *testing.T) {
 	}
 }
 
+// ─── Sparkline float-sequence resolution (Phase 1704, §24.7) ─────────────────
+//
+// The claims are about a HOST-FED series, so these two checkers are the only
+// ones in this file that render against a non-empty store. That is structural
+// rather than convenient: a float-sequence slot TYPES its elements at decode, so
+// [1,"3.5",3] is a WRONG_TYPE and no document can carry the case. The store is
+// the only place a foreign element exists, which is why §24.7 is a render
+// obligation and not a codec family.
+//
+// The observable is the emitted <polyline points="…">: the lowering yields one
+// point per series element, so counting points counts readings. An assertion on
+// the em-dash alone could not tell a host that read every element from one that
+// read the first two and gave up.
+//
+// The document is the corpus's own bound-source sparkline —
+// nodes/state-absent-default.json's `absent-default-sparkline`, reproduced here
+// as one node so the checker renders the subject rather than digging it out of a
+// six-node composite.
+const boundSparklineJSON = `{"id":"absent-default-sparkline","kind":{"$type":"Sparkline","source":{"$type":"State","key":"series"}}}`
+
+// renderSeries renders the bound sparkline with `series` fed from the store.
+func renderSeries(t *testing.T, series wire.Arr) string {
+	t.Helper()
+	return renderHTML(t, mustDecode(t, boundSparklineJSON), Sources(map[string]wire.Value{"series": series}))
+}
+
+// pointCount is how many readings the emission shows: one `x,y` pair per element.
+func pointCount(html string) int {
+	const marker = `points="`
+	i := strings.Index(html, marker)
+	if i < 0 {
+		return 0
+	}
+	rest := html[i+len(marker):]
+	j := strings.Index(rest, `"`)
+	if j < 0 {
+		return 0
+	}
+	return len(strings.Fields(rest[:j]))
+}
+
+// Sparkline/float-seq-reads-element-wise (§24.7).
+func checkFloatSeqReadsElementWise(t *testing.T) {
+	finite := renderSeries(t, wire.Arr{wire.Float(1), wire.Float(2), wire.Float(3), wire.Float(4)})
+	if got := pointCount(finite); got != 4 {
+		t.Fatalf("a four-element series must draw four readings; got %d:\n%s", got, finite)
+	}
+
+	// The element the rule is about: one the host cannot read as a number, among
+	// readable neighbours. Both spellings, because a host special-casing strings
+	// and a host special-casing foreign types are different defects.
+	for _, foreign := range []wire.Value{wire.Str("banana"), wire.Bool(true), wire.Null{}} {
+		html := renderSeries(t, wire.Arr{wire.Float(1), foreign, wire.Float(3), wire.Float(4)})
+		if strings.Contains(html, "fuaran-sparkline-empty") {
+			t.Errorf("one unreadable element (%v) suppressed the whole series — the em-dash is the "+
+				"UNRESOLVED case, not the partly-readable one; discarding the readable points tells "+
+				"the reader nothing at all:\n%s", foreign, html)
+			continue
+		}
+		if got := pointCount(html); got != 4 {
+			t.Errorf("an unreadable element (%v) changed the series LENGTH: got %d readings for four "+
+				"elements — a series index is a position, so a dropped reading slides every later one "+
+				"one place left:\n%s", foreign, got, html)
+		}
+	}
+}
+
+// Sparkline/float-seq-accept-set-closed (§24.7).
+func checkFloatSeqAcceptSetClosed(t *testing.T) {
+	// The twin FIRST, so the comparison below is against a real render rather
+	// than two em-dashes agreeing about nothing.
+	genuine := renderSeries(t, wire.Arr{wire.Float(0), wire.Float(3.5), wire.Float(7)})
+	if got := pointCount(genuine); got != 3 {
+		t.Fatalf("the genuine number must be read — the closed set admits JSON numbers; got %d:\n%s", got, genuine)
+	}
+
+	// The comparison IS the claim, and it is the one formulation that reads the
+	// same on every host: a host that coerced "3.5" emits byte-identical markup
+	// for the two, whatever its geometry. Asserting the characters `3.5` are
+	// absent would pass on a host that coerced and then scaled the coordinate.
+	for _, spelling := range []string{"3.5", "+3.5", "0x1p-2", "infinity", "nan", "1_0"} {
+		coerced := renderSeries(t, wire.Arr{wire.Float(0), wire.Str(spelling), wire.Float(7)})
+		if coerced == genuine {
+			t.Errorf("the string %q resolved to the number it spells — the accept set at this slot is "+
+				"§7's and closed, and this host's own decoder refuses exactly this spelling, so "+
+				"accepting it here makes the two halves of one slot disagree", spelling)
+		}
+	}
+
+	// …and the three the set DOES admit, in the same shape. Without them the
+	// claim above would be satisfied by a host that read no string at all,
+	// including the sentinels the format exists to spell.
+	for _, sentinel := range []string{"NaN", "Infinity", "-Infinity"} {
+		html := renderSeries(t, wire.Arr{wire.Float(1), wire.Str(sentinel), wire.Float(3)})
+		if got := pointCount(html); got != 3 {
+			t.Errorf("the sentinel %q is IN the accept set and must read as its non-finite value; "+
+				"got %d readings for three elements:\n%s", sentinel, got, html)
+		}
+	}
+}
+
 // ─── The registry ────────────────────────────────────────────────────────────
 
 type obligationChecker struct {
@@ -918,6 +1021,9 @@ var checkers = []obligationChecker{
 	{"style.direction/no-derived-direction-behaviour", checkNoDerivedDirectionBehaviour},
 	// Phase 1701 — the row-action affordance.
 	{"DataGrid/interactive-row-only-with-action", checkInteractiveRowOnlyWithAction},
+	// Phase 1704 — the two float-sequence resolution claims (§24.7).
+	{"Sparkline/float-seq-reads-element-wise", checkFloatSeqReadsElementWise},
+	{"Sparkline/float-seq-accept-set-closed", checkFloatSeqAcceptSetClosed},
 }
 
 func hasChecker(key string) bool {

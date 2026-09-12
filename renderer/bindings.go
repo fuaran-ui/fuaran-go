@@ -320,6 +320,46 @@ func numericValue(v wire.Value) (float64, bool) {
 	return 0, false
 }
 
+// floatSeqElement reads ONE element of a float sequence, per WIRE_FORMAT.md
+// §24.7 (Phase 1704). The accept set is §7's and it is CLOSED: a JSON number, or
+// one of the three quoted sentinel spellings. Anything else — a decimal string,
+// a mis-cased sentinel, a bool, an object, a nested array — reads as NaN, which
+// says "there is no number here" in the position where the number is not.
+//
+// It is deliberately NOT numericValue, and the difference is the whole point of
+// the rule. numericValue accepts whatever strconv.ParseFloat accepts, which
+// includes "3.5" but also "0x1p-2", "infinity", "+Inf" and "1_0" — an accept set
+// that belongs to this runtime rather than to the format. Two consequences
+// followed from using it here. A host store carrying "3.5" drew a point where
+// the reference host drew none, so one store rendered different pictures on two
+// conformant hosts. And it contradicted this host's own DECODER, which types a
+// float-sequence element through expectNumber and refuses exactly these
+// spellings (WRONG_TYPE; reject/reject-spark-element-nonnumeric, and
+// reject/reject-spark-element-sentinel-case for a mis-cased "nan") — so the two
+// halves of one slot disagreed about what a number is.
+//
+// numericValue stays as it is: it serves the SCALAR float slots, where the same
+// question is open and unspecified, and narrowing it here would be a behaviour
+// change to slots this rule does not govern.
+func floatSeqElement(v wire.Value) float64 {
+	switch t := v.(type) {
+	case wire.Int:
+		return float64(t)
+	case wire.Float:
+		return float64(t)
+	case wire.Str:
+		switch string(t) {
+		case "NaN":
+			return math.NaN()
+		case "Infinity":
+			return math.Inf(1)
+		case "-Infinity":
+			return math.Inf(-1)
+		}
+	}
+	return math.NaN()
+}
+
 // ─── The host instant: grain truncation, epoch conversion, Since ────────────
 //
 // Phase 1663 — the three shared reductions the reference host keeps above its
