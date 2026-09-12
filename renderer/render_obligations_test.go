@@ -71,8 +71,30 @@ type renderFidelityKind struct {
 	Obligations []renderObligation `json:"obligations"`
 }
 
+// renderFidelityTraitScope is a trait's `appliesTo`: which kinds owe its claims.
+// A tagged scope rather than a bare list, because "every kind" must not be
+// spellable as an empty array - an empty list reads as NO kinds, the opposite
+// claim.
+type renderFidelityTraitScope struct {
+	Scope string   `json:"scope"`
+	Kinds []string `json:"kinds"`
+}
+
+// renderFidelityTrait is one NODE-LEVEL trait (WIRE_FORMAT.md §13, Phase 1696):
+// a member that rides the node envelope, so its claims are owed by every kind
+// this host renders and belong to none of them. The `trait` id is the wire path
+// of the member it governs, which is why it can share one registry with the kind
+// names: a dotted path can never collide with a `kind.$type`.
+type renderFidelityTrait struct {
+	Trait       string                   `json:"trait"`
+	Summary     string                   `json:"summary"`
+	AppliesTo   renderFidelityTraitScope `json:"appliesTo"`
+	Obligations []renderObligation       `json:"obligations"`
+}
+
 type renderFidelityManifest struct {
 	ObligationVocabulary []obligationVocabularyEntry `json:"obligationVocabulary"`
+	Traits               []renderFidelityTrait       `json:"traits"`
 	Kinds                []renderFidelityKind        `json:"kinds"`
 }
 
@@ -161,18 +183,32 @@ type obligationReport struct {
 	Outcome   obligationOutcome
 }
 
+// kindObligation pairs one declared obligation with its SUBJECT: a canonical
+// kind name, or - since Phase 1696 - the id of a node-level trait. The field
+// keeps its name because every caller reads it as "who owes this"; the dot in a
+// trait id is what tells the two populations apart.
 type kindObligation struct {
 	Kind       string
 	Obligation renderObligation
 }
 
-// allObligations pairs every declared obligation with the kind that owes it, in
-// table order.
+// allObligations pairs every declared obligation with the subject that owes it,
+// in table order: the kind rows first, then the trait rows.
+//
+// Both arrays, deliberately. The whole mechanism is that the ENUMERATION is the
+// artefact's, so a trait declared tomorrow must reach this host's report without
+// this host changing anything but its answer - and a reader iterating `Kinds`
+// alone would have a green gate over an unowed claim.
 func allObligations(m renderFidelityManifest) []kindObligation {
 	var all []kindObligation
 	for _, row := range m.Kinds {
 		for _, o := range row.Obligations {
 			all = append(all, kindObligation{Kind: row.Kind, Obligation: o})
+		}
+	}
+	for _, t := range m.Traits {
+		for _, o := range t.Obligations {
+			all = append(all, kindObligation{Kind: t.Trait, Obligation: o})
 		}
 	}
 	return all
@@ -662,6 +698,124 @@ func checkModalAriaModalOnlyWhenBlocking(t *testing.T) {
 	mustEmit(t, popover, "Updated hourly.", "…and it renders its children, or the negatives above prove nothing")
 }
 
+// ─── The `style.direction` trait (§3.1, Phase 1696) ──────────────────────────
+//
+// A trait rides the node ENVELOPE, so these five checkers are written against a
+// kind chosen for being uninteresting: the claims are about the wrapper, and a
+// checker leaning on some kind's own markup would be asserting that kind.
+//
+// The emission itself has been correct here since Phase 1653 (`direction_test.go`
+// pins it against the two corpus fixtures). What is new is that the claim is
+// ENUMERABLE: the roster declares it, so a regression here is reported by name
+// rather than noticed by whoever next reads §3.1.
+//
+// Two of the five are COMPARISONS rather than emission assertions, and that is
+// what makes them checkable at all. Rule 4 says `auto` is the absence of a
+// declaration, and the honest test is that the two emissions are byte-identical:
+// the reference host emits `dir="auto"` for a bidi-isolated display leaf under a
+// heuristic this host has not adopted, so "emits nothing" would be a claim that
+// means different things on different hosts. Rule 5 says nothing else is
+// derived, and the test is that a declared emission differs from the undeclared
+// one by the direction and its isolation ALONE - a subtraction no single-node
+// assertion can express.
+
+// directionLeaf is one node whose `style.direction` is as given; an empty
+// `direction` omits the member entirely.
+func directionLeaf(t *testing.T, direction, text string) string {
+	t.Helper()
+	style := ""
+	if direction != "" {
+		style = `,"style":{"direction":"` + direction + `"}`
+	}
+	return renderJSON(t, `{"id":"d","kind":{"$type":"Badge","label":"`+text+`","variant":"Neutral"}`+style+`}`)
+}
+
+// directionBlock is an `rtl` container holding one child, so the two claims a
+// single leaf cannot carry - inheritance and descendant emission - have a tree
+// to act on.
+func directionBlock(t *testing.T, childDirection string) string {
+	t.Helper()
+	childStyle := ""
+	if childDirection != "" {
+		childStyle = `,"style":{"direction":"` + childDirection + `"}`
+	}
+	return renderJSON(t, `{"id":"block","kind":{"$type":"Box","children":[`+
+		`{"id":"child","kind":{"$type":"Badge","label":"RR123456789IL","variant":"Neutral"}`+childStyle+`}`+
+		`],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"},"style":{"direction":"rtl"}}`)
+}
+
+// style.direction/declared-direction-emitted (§3.1 rule 1).
+func checkDeclaredDirectionEmitted(t *testing.T) {
+	mustEmit(t, directionLeaf(t, "ltr", "RR123456789IL"), ` dir="ltr"`,
+		"a declared ltr direction is emitted on the node's own wrapper")
+	mustEmit(t, directionLeaf(t, "rtl", "\u05e9\u05dc\u05d5\u05dd"), ` dir="rtl"`,
+		"…and so is a declared rtl one")
+
+	// The twin. Without it a renderer emitting `dir="ltr"` on every node would
+	// pass both assertions above while saying nothing true.
+	undeclared := directionLeaf(t, "", "plain")
+	mustNotEmit(t, undeclared, ` dir=`, "an undeclared node must not carry a direction it never declared")
+}
+
+// style.direction/declared-run-isolated (§3.1 rule 2). The ISOLATION is the
+// class, whose reference-stylesheet rule is `unicode-bidi: isolate`. `dir` alone
+// states a direction and leaves the text AROUND the run reordered, which is the
+// half that is invisible when you look only at the value itself.
+func checkDeclaredRunIsolated(t *testing.T) {
+	mustEmit(t, directionLeaf(t, "ltr", "RR123456789IL"), "fuaran-dir-ltr",
+		"a declared ltr run carries the isolating class")
+	mustEmit(t, directionLeaf(t, "rtl", "\u05e9\u05dc\u05d5\u05dd"), "fuaran-dir-rtl",
+		"…and so does a declared rtl one")
+	mustNotEmit(t, directionLeaf(t, "", "plain"), "fuaran-dir-",
+		"an undeclared node is isolated by nothing, because it declared nothing")
+}
+
+// style.direction/declaration-wins-over-inference (§3.1 rule 3). An `ltr`
+// reference INSIDE an `rtl` block - the case the whole member exists for.
+func checkDeclarationWinsOverInference(t *testing.T) {
+	html := directionBlock(t, "ltr")
+	mustEmit(t, html, ` dir="rtl"`, "the declaring container keeps its own direction")
+	mustEmit(t, html, ` dir="ltr"`,
+		"the nested declaration did not win over the inherited direction — the inference exists for values "+
+			"whose direction is unknown, the declaration for the ones it gets wrong")
+}
+
+// style.direction/auto-is-no-declaration (§3.1 rule 4). A byte comparison, per
+// the block above.
+func checkAutoIsNoDeclaration(t *testing.T) {
+	explicit := directionLeaf(t, "auto", "plain")
+	omitted := directionLeaf(t, "", "plain")
+	if explicit != omitted {
+		t.Errorf("a node declaring `auto` must render identically to the same node omitting the member — "+
+			"`auto` IS the absence of a declaration\nwith auto:\n%s\nomitted:\n%s", explicit, omitted)
+	}
+}
+
+// style.direction/no-derived-direction-behaviour (§3.1 rule 5). The SUBTRACTION:
+// a renderer that also flipped an alignment, swapped a layout side or pushed a
+// direction onto descendants fails here and passes every assertion above.
+func checkNoDerivedDirectionBehaviour(t *testing.T) {
+	declared := directionLeaf(t, "rtl", "RR123456789IL")
+	undeclared := directionLeaf(t, "", "RR123456789IL")
+
+	stripped := strings.Replace(declared, ` dir="rtl"`, "", 1)
+	stripped = strings.Replace(stripped, " fuaran-dir-rtl", "", 1)
+	if stripped != undeclared {
+		t.Errorf("a declared direction changed something other than the direction and its isolation — "+
+			"no layout side, locale, alignment or descendant direction may be derived from it"+
+			"\nstripped:\n%s\nundeclared:\n%s", stripped, undeclared)
+	}
+
+	// …and the descendant half, stated separately because a single leaf cannot
+	// carry it: an undeclared child inside a declaring parent emits no direction
+	// of its own. Inheritance is the receiving surface's, not a second emission.
+	html := directionBlock(t, "")
+	if got := strings.Count(html, ` dir=`); got != 1 {
+		t.Errorf("exactly one element declared a direction, so exactly one may carry it; got %d — "+
+			"a direction pushed onto descendants is a derived behaviour rule 5 forbids:\n%s", got, html)
+	}
+}
+
 // ─── The registry ────────────────────────────────────────────────────────────
 
 type obligationChecker struct {
@@ -694,6 +848,12 @@ var checkers = []obligationChecker{
 	{"FileUpload/picker-always-present", checkFileUploadPickerAlwaysPresent},
 	{"FileUpload/ceiling-recorded-never-enforced", checkFileUploadCeilingRecordedNeverEnforced},
 	{"Modal/aria-modal-only-when-blocking", checkModalAriaModalOnlyWhenBlocking},
+	// Phase 1696 — the node-level trait, keyed by its id rather than a kind.
+	{"style.direction/declared-direction-emitted", checkDeclaredDirectionEmitted},
+	{"style.direction/declared-run-isolated", checkDeclaredRunIsolated},
+	{"style.direction/declaration-wins-over-inference", checkDeclarationWinsOverInference},
+	{"style.direction/auto-is-no-declaration", checkAutoIsNoDeclaration},
+	{"style.direction/no-derived-direction-behaviour", checkNoDerivedDirectionBehaviour},
 }
 
 func hasChecker(key string) bool {
@@ -718,8 +878,9 @@ var declaredExemptions = map[string]string{}
 
 // statusOf is this host's answer for one declared obligation.
 //
-// It never returns notRendered today: this host renders Media, Image and Custom,
-// which are the three kinds carrying obligations. The arm exists because the
+// It never returns notRendered today: this host renders every kind carrying an
+// obligation, and the one declared TRAIT rides the node envelope, so every kind
+// it renders owes it. The arm exists because the
 // report shape is shared across the hosts — and because a future obligation on a
 // kind this host does NOT render would otherwise be reported as unchecked and go
 // red, which is the correct forcing function: someone must then say which of the
@@ -812,6 +973,9 @@ func TestRenderObligationClaimIdsResolveAgainstTheClosedVocabulary(t *testing.T)
 		t.Fatal("the artefact carries no obligation vocabulary")
 	}
 
+	// Both subject populations: a trait claim the vocabulary omits is exactly as
+	// unresolvable as a kind claim it omits, which is why the two share one
+	// closed set rather than having a vocabulary each.
 	for _, ko := range allObligations(manifest) {
 		key := ko.Kind + "/" + ko.Obligation.ID
 		if !vocabulary[ko.Obligation.ID] {
