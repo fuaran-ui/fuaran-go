@@ -40,9 +40,21 @@ import (
 // vector naming a slot absent from this map fails the run with the slot named —
 // the artefact's slotVocabulary is what a reader compares against, and being
 // behind it is a fact this host must report rather than skip.
-var renderTextSlotReaders = map[string][2]string{
-	"Fact.value":    {"Fact", "value"},
-	"Markdown.text": {"Markdown", "text"},
+//
+// Phase 1690 — a slot carries its KIND as well as its address, because the
+// vocabulary is no longer all TextSource: `Metric.value` is a numeric Binding,
+// and the family had to reach one to pin §24.8 at all (at a text slot every
+// divergent host already produced the empty string by accident of its runtime).
+type renderTextSlotReader struct {
+	tag     string
+	field   string
+	numeric bool
+}
+
+var renderTextSlotReaders = map[string]renderTextSlotReader{
+	"Fact.value":    {tag: "Fact", field: "value"},
+	"Markdown.text": {tag: "Markdown", field: "text"},
+	"Metric.value":  {tag: "Metric", field: "value", numeric: true},
 }
 
 type renderTextPinnedSources struct {
@@ -154,11 +166,21 @@ func renderTextSlot(t *testing.T, corpus string, v renderTextVector) string {
 			"vector %s names slot %q, which the corpus declares and this host has no reader for — the host is BEHIND the artefact and must add one (not checked is not passed)",
 			v.ID, v.Slot)
 	}
-	if target.Kind.Tag != reader[0] {
+	if target.Kind.Tag != reader.tag {
 		t.Fatalf("vector %s names slot %q on node %q, whose kind is %q", v.ID, v.Slot, v.NodeID, target.Kind.Tag)
 	}
 	sources := BindingSources{Values: map[string]wire.Value{}, Now: v.Sources.Now, Locale: v.Sources.Locale}
-	text, err := renderText(target.Kind.Fields[reader[1]], sources)
+	if reader.numeric {
+		// Through the renderer's OWN projection (metricValueText), not a second
+		// copy of it — the claim is about what this host renders, so a checker
+		// that spelled the em-dash itself would pass while the renderer diverged.
+		value, err := resolveScalarNumber(target.Kind.Fields[reader.field], sources)
+		if err != nil {
+			t.Fatalf("vector %s: resolution reported an error: %v", v.ID, err)
+		}
+		return metricValueText(target.Kind.Fields, value)
+	}
+	text, err := renderText(target.Kind.Fields[reader.field], sources)
 	if err != nil {
 		t.Fatalf("vector %s: resolution reported an error: %v", v.ID, err)
 	}

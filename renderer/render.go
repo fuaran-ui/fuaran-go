@@ -991,6 +991,25 @@ func (r *renderer) markdown(fields map[string]wire.Value) string {
 		MarkdownToHTMLWithEgress(r.egress, r.text(fields["text"])))
 }
 
+// metricValueText is the TEXT a Metric's numeric value slot reads — the
+// resolved number in the slot's declared format, or the em-dash when the
+// binding does not resolve (WIRE_FORMAT.md §24.8, which a bare State now
+// reaches).
+//
+// Extracted from metric below in Phase 1690 so the render-text conformance leg
+// asserts the same projection this renderer emits rather than a second copy of
+// it: a checker that restates the projection agrees with the renderer on the
+// day it is written and never again.
+// It takes the ALREADY-RESOLVED value rather than resolving again, so the one
+// call site that also needs the resolution for its loading branch does not
+// resolve twice (and does not report the same diagnostic twice).
+func metricValueText(fields map[string]wire.Value, value wire.Value) string {
+	if value == nil {
+		return emDash
+	}
+	return formatNumber(fields["format"], value)
+}
+
 func (r *renderer) metric(node wire.Node, fields map[string]wire.Value) string {
 	value := r.scalarNumber(fields["value"])
 	if value == nil {
@@ -999,10 +1018,7 @@ func (r *renderer) metric(node wire.Node, fields map[string]wire.Value) string {
 		}
 	}
 	tone := lowerEnum(fields["tone"], "Default")
-	valueText := emDash
-	if value != nil {
-		valueText = formatNumber(fields["format"], value)
-	}
+	valueText := metricValueText(fields, value)
 	var parts strings.Builder
 	parts.WriteString(textElement("div", []attr{{"class", "fuaran-metric-label"}}, r.text(fields["label"])))
 	parts.WriteString(textElement("div", []attr{{"class", "fuaran-metric-value"}}, valueText))
