@@ -1,7 +1,15 @@
-// Style-observer conformance: the pure-tier flag + observation encode is
-// certified byte-for-byte against the sibling hosts in the styleobserver /
-// thememanifest package tests (which mirror the fuaran-py reference vectors).
-// This leg adds the shared a11y-contract.json check — the canonical rule set +
+// Style-observer conformance: the a11y-contract leg.
+//
+// This header used to say the pure-tier flag + observation encode was "certified
+// byte-for-byte against the sibling hosts in the styleobserver / thememanifest
+// package tests (which mirror the fuaran-py reference vectors)". That described
+// an arrangement in which four hosts had each written the same literals down,
+// which is agreement rather than certification. Phase 1752 moved the cases into
+// the corpus: styleobserver_corpus_test.go beside this file certifies this host
+// against the emitted `style-observer/` family, and the package tests' literals
+// are now its go-red partner.
+//
+// This leg carries the shared a11y-contract.json check — the canonical rule set +
 // severity threshold both hosts read — and documents the headless boundary: the
 // static gate disables `color-contrast` precisely because live contrast needs
 // real layout metrics, which is why the Go observer's contrast tier operates on

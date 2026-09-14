@@ -1,3 +1,15 @@
+// The encode literals in this file are the GO-RED PARTNER of the shared
+// `style-observer/` corpus family, not a duplicate of it (Phase 1752).
+// conformance/styleobserver_corpus_test.go certifies this host against that
+// family, whose bytes are written by the reference host's emitter. These are
+// written by hand. Keeping both is the point: a regression that moved the
+// implementation AND the emitted family together would satisfy the corpus
+// checker and fail here — the one failure a family emitted from the thing it
+// certifies cannot see on its own. Do not delete them as redundant.
+//
+// The observer-plumbing tests (subscription, change-only emission, tree order,
+// callback isolation) are deliberately NOT in the family: they are in-memory
+// behaviour, and the corpus certifies bytes.
 package styleobserver
 
 import (
