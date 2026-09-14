@@ -57,6 +57,16 @@ if (-not $SkipBuild) {
     Write-Host "==> go vet" -ForegroundColor Cyan
     & $go vet ./...
     Assert-NativeSuccess "go vet ./..."
+    # The `race`-constrained sources compile only under `go test -race`, which
+    # needs cgo and a C toolchain a stock Windows dev box does not have — so
+    # `go vet ./...` above never type-checks them and a syntax error in one
+    # first surfaces in CI, on the leg it exists to prove. `-tags race` selects
+    # them without the detector, so the check costs nothing and needs no
+    # compiler. Verified 2026-09-14 (Phase 1750): `go list -tags race` names
+    # `serverdriven/race_selftest_test.go`; the untagged list does not.
+    Write-Host "==> go vet -tags race (the race-constrained sources)" -ForegroundColor Cyan
+    & $go vet -tags race ./...
+    Assert-NativeSuccess "go vet -tags race ./..."
     Write-Host "==> go build" -ForegroundColor Cyan
     & $go build ./...
     Assert-NativeSuccess "go build ./..."

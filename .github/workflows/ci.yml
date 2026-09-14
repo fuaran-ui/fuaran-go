@@ -191,6 +191,22 @@ jobs:
       # against a named residue list, and a race report is not a test failure it
       # can name — the detector fails the process. Separate step, separate
       # signal.
+      #
+      # THE LEG PROVES ITSELF, on every run rather than once (Phase 1750). A
+      # detector that is not actually enabled — CGO_ENABLED unset, `-race`
+      # dropped from the line below, a toolchain built without the race runtime
+      # — reports nothing, and this step then goes green having observed no
+      # concurrency at all. The falsification note above (remove the mutex, the
+      # assertions fail on their own arithmetic) was a one-off done by hand on a
+      # machine that could not run the detector, so it says nothing about THIS
+      # runner. `serverdriven/race_selftest_test.go` closes that: constrained to
+      # `//go:build race`, so it is compiled by this step and by nothing else, it
+      # writes a scratch module holding the shape `Connection` guards, runs it
+      # under `go test -race` WITHOUT the mutex and requires a reported DATA
+      # RACE, then WITH it and requires a clean pass. Red in both directions —
+      # the posture the residue gate's own self-test above already takes.
+      # `run.ps1` type-checks that file with `go vet -tags race`, so a stock
+      # Windows box still catches a syntax error in it without a C compiler.
       - name: Test (race detector — the concurrent packages)
         env:
           CGO_ENABLED: "1"
