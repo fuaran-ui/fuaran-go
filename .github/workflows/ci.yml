@@ -66,7 +66,7 @@ jobs:
       - name: Assert the corpus is where the tests resolve it
         run: test -f ../wire-format-fixtures/manifest.json
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: fuaran-go/go.mod
 
