@@ -1071,6 +1071,25 @@ func statusOf(kind, claimID string) obligationOutcome {
 }
 
 // ─── The gate ────────────────────────────────────────────────────────────────
+//
+// THE GATE IS TWO TESTS, AND RUNNING ONLY THIS ONE IS A VACUOUS GREEN. This one
+// asserts registry COMPLETENESS — that every obligation the manifest declares
+// has a checker here, or a declared exemption saying why not. It never invokes a
+// checker. The test that invokes them is TestRenderObligationCheckers, below.
+//
+// The two together are sound and `go test ./renderer/` runs both, so the split
+// costs nothing in the real gate. It costs a reader running a filtered subset,
+// and the name is what misleads: a green "…AreAllAsserted" reads as "the claims
+// hold" when it means "the claims have checkers".
+//
+// Measured, Phase 1751, discharging that phase's go-red task against the
+// mechanism Phase 1696 landed. Dropping the `dir` emission in render.go left
+// THIS test passing, and turned TestRenderObligationCheckers red naming the
+// broken claims — style.direction/declared-direction-emitted,
+// /declaration-wins-over-inference and /no-derived-direction-behaviour.
+// style.direction/declared-run-isolated correctly stayed green: the isolation is
+// the `fuaran-dir-*` class from theme.go, a separate emission from the `dir`
+// attribute, which is why §3.1 states the two as separate obligations.
 
 func TestRenderObligationsAreAllAsserted(t *testing.T) {
 	manifest := loadRenderFidelityManifest(t)
