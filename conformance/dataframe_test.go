@@ -17,9 +17,28 @@ import (
 	"github.com/fuaran-ui/fuaran-go/dataframe"
 )
 
+// parityRootEnv names the fuaran-py checkout holding the reference report, for a
+// working copy that is not the canonical side-by-side sibling — a git worktree, say.
+// The default walk below climbs to whatever `fuaran-py` sits beside this repo, which
+// from a worktree is a checkout this session does not own and which can be at a
+// different commit than the change under test; the two then disagree about the wire
+// and the failure reads as a codec defect. A value naming no directory is REFUSED
+// rather than ignored, because falling back reaches the very checkout the override
+// exists to leave alone. Same contract as the corpus and CSS sibling overrides.
+const parityRootEnv = "FUARAN_PY_ROOT"
+
 // findDataframeParity walks up from the working directory looking for the F#
 // reference report under the fuaran-py sibling. Returns "" when absent.
-func findDataframeParity() string {
+func findDataframeParity(t *testing.T) string {
+	if declared, ok := os.LookupEnv(parityRootEnv); ok {
+		p := filepath.Join(declared, "tests", "fixtures", "dataframe_parity.json")
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s names %q, which holds no tests/fixtures/dataframe_parity.json: %v",
+				parityRootEnv, declared, err)
+		}
+		return p
+	}
+
 	dir, err := os.Getwd()
 	if err != nil {
 		return ""
@@ -50,7 +69,7 @@ type dataframeReport struct {
 }
 
 func TestDataframeParity(t *testing.T) {
-	path := findDataframeParity()
+	path := findDataframeParity(t)
 	if path == "" {
 		t.Skip("dataframe_parity.json not found alongside the repo; skipping (standalone checkout)")
 	}

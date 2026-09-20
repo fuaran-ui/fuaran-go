@@ -61,8 +61,10 @@ func exprBinding(binding wire.Value) (wire.Obj, bool) {
 	}}
 	pipeline := wire.Arr{
 		wire.Obj{Tag: "derive", Fields: map[string]wire.Value{"expr": obj.Fields["expr"], "name": wire.Str("__value")}},
+		// 0.28.0 — the project step's rename list is `columns`. This is an EMITTER, so it
+		// writes the canonical spelling rather than the alias the decoder still accepts.
 		wire.Obj{Tag: "project", Fields: map[string]wire.Value{
-			"cols": wire.Arr{wire.Obj{Fields: map[string]wire.Value{"a": wire.Str("__value"), "b": wire.Str("__value")}}},
+			"columns": wire.Arr{wire.Obj{Fields: map[string]wire.Value{"a": wire.Str("__value"), "b": wire.Str("__value")}}},
 		}},
 	}
 	fields := map[string]wire.Value{"pipeline": pipeline, "source": unitFrame}

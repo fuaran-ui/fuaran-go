@@ -626,7 +626,9 @@ func decodeComputeExpr(raw any) Value {
 
 func decodeOrderKey(raw any) Value {
 	m := cObj(raw, "order")
-	col := cStr(cFieldAliased(m, "col", "column", "order"), "order.col")
+	// 0.28.0 — `column` is canonical and `col` its decode alias; the swap is here, and
+	// cFieldAliased refuses both-present exactly as it did in the other direction.
+	col := cStr(cFieldAliased(m, "column", "col", "order"), "order.column")
 	dirV, hasDir := m["dir"]
 	descV, hasDesc := m["descending"]
 	directionV, hasDirection := m["direction"]
@@ -658,7 +660,7 @@ func decodeOrderKey(raw any) Value {
 			dir = "desc"
 		}
 	}
-	return Obj{Fields: map[string]Value{"col": Str(col), "dir": Str(dir)}}
+	return Obj{Fields: map[string]Value{"column": Str(col), "dir": Str(dir)}}
 }
 
 func decodeOrderKeys(raw any, ctx string) Value {
@@ -765,7 +767,10 @@ func decodeComputeStep(raw any) Value {
 		}
 		cfail("flat filter step: {column, op} needs \"param\" (a pipeline param name) or \"value\" (a scalar literal) as the right-hand side")
 	case "project":
-		return tagged("project", map[string]Value{"cols": decodePairList(cField(m, "cols", "project"), "project.cols")})
+		// 0.28.0 — `columns` canonical, `cols` a decode alias, both-present refused.
+		return tagged("project", map[string]Value{
+			"columns": decodePairList(cFieldAliased(m, "columns", "cols", "project"), "project.columns"),
+		})
 	case "derive":
 		return tagged("derive", map[string]Value{
 			"expr": decodeComputeExpr(cField(m, "expr", "derive")),

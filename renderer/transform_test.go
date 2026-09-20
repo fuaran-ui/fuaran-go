@@ -147,7 +147,7 @@ func TestIslandsSkeletonCarriesResolvedValues(t *testing.T) {
 func TestScalarTransform1x1Law(t *testing.T) {
 	// Two source rows, no aggregation → a >1-row result in a scalar slot is
 	// ambiguous → the badge renders absence (empty), never the first row.
-	ambiguous := `{"id":"b","kind":{"$type":"Badge","label":{"$type":"Bound","binding":{"$type":"Transform","pipeline":[{"$type":"project","cols":[{"a":"v","b":"v"}]}],"source":{"columns":{"v":{"validity":[true,true],"values":["a","b"]}},"schema":[{"name":"v","type":"string"}]}}},"variant":"Neutral"}}`
+	ambiguous := `{"id":"b","kind":{"$type":"Badge","label":{"$type":"Bound","binding":{"$type":"Transform","pipeline":[{"$type":"project","columns":[{"a":"v","b":"v"}]}],"source":{"columns":{"v":{"validity":[true,true],"values":["a","b"]}},"schema":[{"name":"v","type":"string"}]}}},"variant":"Neutral"}}`
 	html := renderHTML(t, mustDecode(t, ambiguous), BindingSources{})
 	mustContain(t, html, `class="fuaran-badge fuaran-badge-neutral"></span>`)
 	if strings.Contains(html, `>a<`) {

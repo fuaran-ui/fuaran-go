@@ -158,8 +158,11 @@ func EncodeExprValue(e ColExpr) wire.Value {
 func pairWire(p Pair) wire.Obj {
 	return wire.Obj{Fields: map[string]wire.Value{"a": wire.Str(p.A), "b": wire.Str(p.B)}}
 }
+
+// 0.28.0 — the member is `column`, not `col`: a member whose only honest name is "the
+// column" is spelled out in full. `col` remains a decode alias and is never emitted.
 func orderWire(o OrderKey) wire.Obj {
-	return wire.Obj{Fields: map[string]wire.Value{"col": wire.Str(o.Col), "dir": wire.Str(o.Dir)}}
+	return wire.Obj{Fields: map[string]wire.Value{"column": wire.Str(o.Col), "dir": wire.Str(o.Dir)}}
 }
 func strArr(xs []string) wire.Arr {
 	arr := make(wire.Arr, len(xs))
@@ -179,7 +182,8 @@ func EncodeTransformValue(t Transform) wire.Value {
 		for i, p := range v.Cols {
 			cols[i] = pairWire(p)
 		}
-		return typed("project", map[string]wire.Value{"cols": cols})
+		// 0.28.0 — `columns`, not `cols`, for the reason `orderWire` above states.
+		return typed("project", map[string]wire.Value{"columns": cols})
 	case Derive:
 		return typed("derive", map[string]wire.Value{"name": wire.Str(v.Name), "expr": EncodeExprValue(v.Expr)})
 	case GroupBy:
@@ -985,16 +989,17 @@ func pairOf(el any) (Pair, *ColumnError) {
 }
 
 func orderOf(el any) (OrderKey, *ColumnError) {
-	// Sort-key aliases: `column` for `col`; ONE of `dir` (canonical),
-	// `descending` (alias boolean), or `direction` (alias) — a directionless
-	// entry is the SQL default (asc).
-	colV, e := fieldAliased(el, "col", "column")
+	// fuaran-core#92 admitted `column` as an alias of `col`; 0.28.0 SWAPPED which of the
+	// two is canonical, so both still decode, `column` re-encodes, and giving both is
+	// refused as ambiguous. Then ONE of `dir` (canonical), `descending` (alias boolean),
+	// or `direction` (alias) — a directionless entry is the SQL default (asc).
+	colV, e := fieldAliased(el, "column", "col")
 	if e != nil {
 		return OrderKey{}, e
 	}
 	col, ok := colV.(string)
 	if !ok {
-		return OrderKey{}, cerr(MalformedShape, "order.col: expected string")
+		return OrderKey{}, cerr(MalformedShape, "order.column: expected string")
 	}
 	dirV, hasDir := tryF(el, "dir")
 	descV, hasDesc := tryF(el, "descending")
@@ -1173,11 +1178,13 @@ func DecodeTransform(el any) (Transform, *ColumnError) {
 		return nil, cerr(MalformedShape,
 			"flat filter step: {column, op} needs \"param\" (a pipeline param name) or \"value\" (a scalar literal) as the right-hand side")
 	case "project":
-		v, e := field(el, "cols")
+		// 0.28.0 — `cols` is the pre-rename spelling, kept as a decode alias; giving both
+		// is the same ambiguity refusal every other aliased member of this algebra makes.
+		v, e := fieldAliased(el, "columns", "cols")
 		if e != nil {
 			return nil, e
 		}
-		ps, ce := pairList(v, "project.cols")
+		ps, ce := pairList(v, "project.columns")
 		if ce != nil {
 			return nil, ce
 		}
