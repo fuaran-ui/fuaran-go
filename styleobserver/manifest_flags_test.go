@@ -93,3 +93,56 @@ func TestVerifyUsageBudgets(t *testing.T) {
 		t.Fatalf("within tolerance should be clean: %v", kinds(got))
 	}
 }
+
+// Phase 1727 — the palette-attribution tie-break. Two colour tokens carry the
+// same value, declared secondary-before-brand; the rule (fuaran-dotnet's
+// docs/THEME-BRIDGE-GUIDE.md, "Palette attribution order") attributes the fill
+// to the FIRST token in canonical token-path order, so `color.brand` takes the
+// 60px² and `color.secondary` takes none. This host meets the rule through its
+// DECODER, which walks each DTCG group's keys in sorted order — so the case goes
+// through Decode rather than a token-list literal, and a decoder that stopped
+// sorting (or an attribution that stopped trusting the list order) goes red
+// here rather than silently re-diverging. The corpus vector of the same name is
+// the cross-host law; this is its go-red partner.
+func TestSameValuedTokensAttributeToThePathFirstToken(t *testing.T) {
+	m, err := tm.Decode(`{"meta":{"name":"t","version":"1"},"tokens":{"color":{` +
+		`"secondary":{"$type":"color","$value":"#010203"},` +
+		`"brand":{"$type":"color","$value":"#010203"}}},"roles":[],"invariants":[` +
+		`{"kind":"UsageBudget","token":"color.brand","targetPct":10,"tolerancePct":5},` +
+		`{"kind":"UsageBudget","token":"color.secondary","targetPct":0,"tolerancePct":5}]}`)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	fill := StyleObservation{NodeID: "a", EffectiveBackground: RGB(1, 2, 3)}
+	other := StyleObservation{NodeID: "b", EffectiveBackground: RGB(9, 9, 9)}
+	flags := VerifyUsageBudgets(m, []NodeArea{{Obs: fill, Area: 60}, {Obs: other, Area: 40}})
+	if !eqStr(kinds(flags), []string{"UsageBudgetExceeded"}) {
+		t.Fatalf("a document-order attribution breaches both budgets; got %v", kinds(flags))
+	}
+	if ube := flags[0].(UsageBudgetExceeded); ube.Token != "color.brand" || ube.ObservedPct != 60.0 {
+		t.Fatalf("attributed to the wrong token: %+v", ube)
+	}
+}
+
+// Phase 1727 — the order is SEGMENT-WISE, not a sort of the dotted string:
+// `color.brand.base` precedes `color.brand-alt` because the key `brand`
+// precedes `brand-alt`, although `-` sorts before `.` as a character.
+func TestTokenPathOrderIsSegmentWise(t *testing.T) {
+	m, err := tm.Decode(`{"meta":{"name":"t","version":"1"},"tokens":{"color":{` +
+		`"brand-alt":{"$type":"color","$value":"#010203"},` +
+		`"brand":{"base":{"$type":"color","$value":"#010203"}}}},"roles":[],"invariants":[` +
+		`{"kind":"UsageBudget","token":"color.brand.base","targetPct":10,"tolerancePct":5},` +
+		`{"kind":"UsageBudget","token":"color.brand-alt","targetPct":0,"tolerancePct":5}]}`)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	fill := StyleObservation{NodeID: "a", EffectiveBackground: RGB(1, 2, 3)}
+	other := StyleObservation{NodeID: "b", EffectiveBackground: RGB(9, 9, 9)}
+	flags := VerifyUsageBudgets(m, []NodeArea{{Obs: fill, Area: 60}, {Obs: other, Area: 40}})
+	if !eqStr(kinds(flags), []string{"UsageBudgetExceeded"}) {
+		t.Fatalf("flags: %v", kinds(flags))
+	}
+	if ube := flags[0].(UsageBudgetExceeded); ube.Token != "color.brand.base" {
+		t.Fatalf("attributed to the wrong token: %+v", ube)
+	}
+}
