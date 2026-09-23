@@ -323,8 +323,8 @@ var ruleSlotHonour = map[string]struct{ format, textBounds bool }{
 	"RangedNumber":    {},
 	"Range":           {},
 	"SegmentedChoice": {},
-	"Date":            {},
-	"DateRange":       {},
+	"DateTime":        {},
+	"DateTimeRange":   {},
 }
 
 // checkFieldRules raises FUARAN100 (Warning) for each FieldRule slot the

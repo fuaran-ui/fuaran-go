@@ -509,7 +509,7 @@ func sinceUnitAndCount(declared string, deltaSeconds float64) (string, float64) 
 // with exact cross-pipeline parity, and the relative-time pair reduces to
 // (unit, count) through the one shared ladder and then phrases it in the
 // deterministic English form — the fallback tier. The four cases NOT here
-// (Number / Currency / Percent / Date) take their text from a locale database,
+// (Number / Currency / Percent / DateTime) take their text from a locale database,
 // so a stdlib-only host has no canonical answer to give and resolves them to
 // absence exactly as it did before this seam existed. The corpus's render-text
 // family enumerates that exclusion with its reason.
@@ -552,7 +552,7 @@ func ResolveLocaleTag(binding wire.Value, sources BindingSources) (string, bool)
 // Since is the one case whose text is a function of the HOST INSTANT as well as
 // of its source, so the delta is taken here, where the instant lives, and the
 // phrasing helpers stay pure projections of their arguments. The source is read
-// as an instant in whole Unix-epoch seconds (Date's convention) and the sign
+// as an instant in whole Unix-epoch seconds (DateTime's convention) and the sign
 // follows Intl.RelativeTimeFormat's: negative is the past. An unset or
 // unreadable host instant is ABSENCE, for exactly the reason Binding.Now gives.
 func formatProjection(binding wire.Obj, sources BindingSources) (wire.Value, error) {
@@ -627,7 +627,7 @@ func formatNumber(format, value wire.Value) string {
 		// binding rather than the format.
 		return ""
 	default:
-		// None / Date / Custom: the plain numeric form.
+		// None / DateTime / Custom: the plain numeric form.
 		return plainNumber(num)
 	}
 }

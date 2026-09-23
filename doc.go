@@ -40,7 +40,7 @@ package fuarango
 // nowhere for the instant to live. Now resolves the host instant, grain-truncated
 // (Second / Minute / Hour / Day) BEFORE anything projects it; Format renders the
 // three locale-INDEPENDENT cases (Since, RelativeTime, Duration) and resolves the
-// four locale-database ones (Number, Currency, Percent, Date) to absence exactly
+// four locale-database ones (Number, Currency, Percent, DateTime) to absence exactly
 // as before. ResolveLocaleTag is the new exported seam for the Explicit-wins
 // LocaleSource precedence, for a host that wants to render those four itself.
 //

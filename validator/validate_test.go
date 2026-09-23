@@ -324,7 +324,7 @@ func TestUnhonourableRuleSlot(t *testing.T) {
 	// compares the field's VALUE, which every control has. A Date field whose
 	// only rule is a compare is clean — which is the corpus fixture's own
 	// `hire-end-date`, so this pins the fixture staying finding-free.
-	compareOnly := formWithRule("Date", map[string]wire.Value{
+	compareOnly := formWithRule("DateTime", map[string]wire.Value{
 		"compare": wire.Obj{Fields: map[string]wire.Value{
 			"op": wire.Str("GreaterThanOrEqual"),
 			"against": wire.Obj{Tag: "State", Fields: map[string]wire.Value{

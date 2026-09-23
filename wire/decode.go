@@ -564,11 +564,12 @@ var (
 	badgeVariantCases   = newCaseSet("Neutral", "Brand", "Success", "Warning", "Critical", "Info")
 	buttonVariantCases  = newCaseSet("Primary", "Secondary", "Tertiary", "Destructive")
 	headingVariantCases = newCaseSet("Standard", "Eyebrow", "Caption", "Lead")
-	dateVariantCases    = newCaseSet("Date", "Time", "DateTime")
-	styleRoleCases      = newCaseSet("None", "Eyebrow", "Data", "Lede", "Caption")
-	fontVoiceCases      = newCaseSet("Default", "Display", "Structural")
-	liveRegionCases     = newCaseSet("polite", "assertive", "off")
-	imageVariantCases   = newCaseSet("Default", "Avatar", "Rounded")
+	// Phase 1811 — DateTimeVariant (was DateVariant); the three cases did not move.
+	dateTimeVariantCases = newCaseSet("Date", "Time", "DateTime")
+	styleRoleCases       = newCaseSet("None", "Eyebrow", "Data", "Lede", "Caption")
+	fontVoiceCases       = newCaseSet("Default", "Display", "Structural")
+	liveRegionCases      = newCaseSet("polite", "assertive", "off")
+	imageVariantCases    = newCaseSet("Default", "Avatar", "Rounded")
 	// Phase 1077 — §3.6.2. Three closed TOKEN vocabularies, never CSS values:
 	// `aspectRatio` names one of four ratios and can never carry "16 / 9",
 	// "16:9" or 1.7778, which is the free-form escape the tokens exist to
@@ -658,7 +659,9 @@ var (
 		"Static", "Query", "Filter", "Selection", "State", "Now", "Computed",
 		"I18n", "Local", "Format", "Data", "Transform", "Expr", "Invoke", "Bound",
 	)
-	cellFormatCases = newCaseSet("None", "Number", "Currency", "Percent", "SignificantDigits", "Date", "Duration", "RelativeTime", "Custom")
+	// Phase 1811 — DateTime is canonical; Date is its section-16 lenient alias (the
+	// pre-rename spelling), admitted here and normalised in decodeCellFormat.
+	cellFormatCases = newCaseSet("None", "Number", "Currency", "Percent", "SignificantDigits", "DateTime", "Date", "Duration", "RelativeTime", "Custom")
 	// Phase 819 — the Duration / RelativeTime format enums (shared by the
 	// CellFormat vocabulary; the binding-level Format object still decodes
 	// structurally).
@@ -681,7 +684,7 @@ var (
 	// a document migrating between the two changes its `$type` and nothing else.
 	//
 	// Phase 1121's `Tokens` and Phase 1130's `Rating` / `Color` join them.
-	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Toggle", "Choice", "SegmentedChoice", "Combobox", "TextArea", "Range", "Date", "DateRange", "Tokens", "Rating", "Color")
+	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Toggle", "Choice", "SegmentedChoice", "Combobox", "TextArea", "Range", "DateTime", "DateTimeRange", "Tokens", "Rating", "Color")
 	flushTriggerCases = newCaseSet("OnBlur", "OnSubmit", "OnDebounce", "OnCommitAction")
 	actionCases       = newCaseSet(
 		"Chain", "Dispatch", "Navigate", "SetState", "Notify", "WriteToClipboard",
@@ -1279,6 +1282,12 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		return Obj{Tag: "Local", Fields: localFields}
 	case "Format":
 		format := fromJSON(require(obj, "format", path))
+		if o, ok := format.(Obj); ok && o.Tag == "Date" {
+			// Phase 1811 — Format.DateTime is canonical; Date (the pre-rename
+			// spelling) is a section-16 lenient alias and re-encodes canonical.
+			o.Tag = "DateTime"
+			format = o
+		}
 		locale := fromJSON(require(obj, "locale", path))
 		source := decodeBindingWith(w, require(obj, "source", path), path+".source", floatStatic)
 		return Obj{Tag: "Format", Fields: map[string]Value{"format": format, "locale": locale, "source": source}}
@@ -2002,6 +2011,11 @@ func decodeCellFormat(w *walkState, raw any, path string) Value {
 		// RelativeTime case.
 		unit := enumStr(require(obj, "unit", path), path+".unit", relativeTimeUnitCases, "unit", noAliases)
 		return Obj{Tag: "RelativeTime", Fields: map[string]Value{"unit": Str(unit)}}
+	case "DateTime", "Date":
+		// Phase 1811 — DateTime is canonical; Date (the pre-rename spelling) is a
+		// section-16 lenient alias, decoded to the same value and re-encoded canonical.
+		format := expectString(require(obj, "format", path), path+".format")
+		return Obj{Tag: "DateTime", Fields: map[string]Value{"format": Str(format)}}
 	}
 	return fromJSON(raw)
 }
@@ -2648,7 +2662,7 @@ type controlAutoBind struct {
 // ISO-empty date / ISO-empty {from, to} pair), as its decoded wire shape.
 func placeholderMatches(kindTag string, v Value) bool {
 	switch kindTag {
-	case "Text", "TextArea", "Date":
+	case "Text", "TextArea", "DateTime":
 		return isStr(v, "")
 	// `Rating` shares `Number`'s zero placeholder: an auto-bound rating starts
 	// unrated, and the commonest one a reader sees is an average arriving
@@ -2682,8 +2696,8 @@ func placeholderMatches(kindTag string, v Value) bool {
 			return false
 		}
 		return isNumericZero(o.Fields["min"]) && isNumericZero(o.Fields["max"])
-	case "DateRange":
-		// ISO-empty both ends — the pair analogue of Date's "" placeholder.
+	case "DateTimeRange":
+		// ISO-empty both ends — the pair analogue of DateTime's "" placeholder.
 		o, ok := v.(Obj)
 		if !ok || o.Tag != "" || len(o.Fields) != 2 {
 			return false
@@ -2718,9 +2732,54 @@ func isAutoBoundValue(ab controlAutoBind, kindTag string, v Value) bool {
 // only when present (a present value normalises to the "<closure>" sentinel);
 // an absent `value` is the context's auto-binding (left absent — the canonical
 // omitted form); a present value that IS exactly the auto-binding drops.
+// Phase 1811 — the section-16 lenient $type aliases of the two temporal form-field
+// kinds: the pre-rename spellings (Date / DateRange, kept by the reference host's D8
+// ruling) and the invented time-input spellings (Time / TimeRange, which also fix
+// the variant). Admitted at dispatch, normalised to the canonical tag, and
+// deliberately NOT part of formFieldCases, which is the attested vocabulary.
+var (
+	temporalFormFieldAliases = newCaseSet("Date", "Time", "DateRange", "TimeRange")
+	formFieldCasesLenient    = newCaseSet(append(append([]string(nil), formFieldCases.names...), temporalFormFieldAliases.names...)...)
+)
+
+// canonicalTemporalTag maps a section-16 temporal alias to its canonical tag and
+// returns every other tag unchanged.
+func canonicalTemporalTag(tag string) string {
+	switch tag {
+	case "Date", "Time":
+		return "DateTime"
+	case "DateRange", "TimeRange":
+		return "DateTimeRange"
+	}
+	return tag
+}
+
+// temporalVariant reads the variant of a DateTime / DateTimeRange field through
+// the Time / TimeRange alias rule: under the canonical tag (or the pre-rename
+// alias) the member is required as it always was; under the time-alias tag the
+// alias SUPPLIES Time when it is absent, and an explicit member beside it must
+// agree — a $type of Time carrying variant Date is refused as ambiguous rather
+// than resolved to either, the 0.28.0 column-member posture applied to a $type.
+func temporalVariant(s *spec, rawTag, timeAlias string) {
+	if rawTag != timeAlias {
+		s.req("variant", enumDecoder(dateTimeVariantCases, "variant", noAliases))
+		return
+	}
+	raw, ok := s.take("variant")
+	if !ok {
+		s.set("variant", Str("Time"))
+		return
+	}
+	if v := enumStr(raw, s.path+".variant", dateTimeVariantCases, "variant", noAliases); v != "Time" {
+		fail(CodeWrongType, s.path+".variant", "a $type of "+timeAlias+" already fixes the variant to Time, and a different one beside it is ambiguous")
+	}
+	s.set("variant", Str("Time"))
+}
+
 func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind) Value {
 	obj := expectObject(raw, path)
-	tag := dispatch(obj, path, formFieldCases, CodeUnknownDUCase)
+	rawTag := dispatch(obj, path, formFieldCasesLenient, CodeUnknownDUCase)
+	tag := canonicalTemporalTag(rawTag)
 	s := newSpec(w, obj, path)
 
 	handler := func(name string) {
@@ -2864,16 +2923,17 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 				s.set("value", v)
 			}
 		}
-	case "Date":
+	case "DateTime":
+		// Phase 1811 — DateTime (was Date). rawTag may be the Date or Time alias.
 		handler("onChange")
 		valueSlot(decodeBindingString)
-		s.req("variant", enumDecoder(dateVariantCases, "variant", noAliases))
+		temporalVariant(s, rawTag, "Time")
 		s.opt("min", decodeString)
 		s.opt("max", decodeString)
 		s.opt("step", expectNumberField)
-	case "DateRange":
-		// Range's pair mechanics with Date's value conventions: the value slot
-		// is the bare ordered {from, to} pair, the scalars are Date's. Every
+	case "DateTimeRange":
+		// Range's pair mechanics with DateTime's value conventions: the value slot
+		// is the bare ordered {from, to} pair, the scalars are DateTime's. Every
 		// s.opt below is load-bearing — buildStrict DROPS unconsumed keys, so a
 		// forgotten one fails byte-comparison rather than erroring.
 		handler("onChange")
@@ -2883,7 +2943,7 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 				s.set("value", v)
 			}
 		}
-		s.req("variant", enumDecoder(dateVariantCases, "variant", noAliases))
+		temporalVariant(s, rawTag, "TimeRange")
 		s.opt("min", decodeString)
 		s.opt("max", decodeString)
 		s.opt("step", expectNumberField)
@@ -4496,6 +4556,12 @@ func decodeAccessibility(w *walkState, raw any, path string) Obj {
 	if raw, ok := obj["hidden"]; ok {
 		fields["hidden"] = decodeBindingBool(w, raw, path+".hidden")
 	}
+	// Phase 1812 — the node's SPOKEN rendering for a voice surface: an ordinary
+	// TextSource (bare-string canonical for a literal, as tooltip). Inert to every
+	// visual renderer — it must reach no attribute and no visible text.
+	if raw, ok := obj["speak"]; ok {
+		fields["speak"] = decodeTextSource(w, raw, path+".speak")
+	}
 	return Obj{Fields: fields}
 }
 
@@ -4580,6 +4646,13 @@ func decodeNodeValue(w *walkState, raw any, path string) Node {
 	// own narrower thing it took two hosts and a ruling to unwind.
 	if raw, ok := obj["visible"]; ok {
 		extras["visible"] = decodeBinding(w, raw, path+".visible")
+	}
+	// Phase 1812 — the author-declared degraded rendering: a full node a BEHIND
+	// reader renders in place of its Unknown placeholder. A current reader (this
+	// one, for any kind it decodes) decodes and preserves it and never renders
+	// it; it walks the same policy-gated node decoder as any nested node.
+	if raw, ok := obj["fallback"]; ok {
+		extras["fallback"] = decodeNodeValue(w, raw, path+".fallback")
 	}
 	return Node{ID: id, Kind: kind, Extras: extras}
 }

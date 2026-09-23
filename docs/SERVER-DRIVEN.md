@@ -49,7 +49,7 @@ absence rather than to a plausible wrong date.
 `Locale` is the tag a `LocaleSource.Ambient` reads (`""` = the runtime default).
 The `Format` cases this host renders — `Since`, `RelativeTime`, `Duration` — are
 locale-independent by declaration and consult no tag; `Number` / `Currency` /
-`Percent` / `Date` take their text from a locale database and resolve to absence
+`Percent` / `DateTime` take their text from a locale database and resolve to absence
 here. `renderer.ResolveLocaleTag` hands you the tag a document asked for if you
 want to render those four yourself.
 
