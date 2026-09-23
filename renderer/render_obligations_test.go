@@ -791,6 +791,20 @@ func checkAutoIsNoDeclaration(t *testing.T) {
 		t.Errorf("a node declaring `auto` must render identically to the same node omitting the member — "+
 			"`auto` IS the absence of a declaration\nwith auto:\n%s\nomitted:\n%s", explicit, omitted)
 	}
+
+	// The comparison above alone CANNOT go red against the renderer: the decoder
+	// normalises the omitted-when-default `auto` away (§16), so both documents
+	// reach the renderer as the same tree and the check measures the codec.
+	// Measured, Phase 1838 — a renderer planted to emit `dir="auto"` left it
+	// green. The renderer's own answer is asserted on a tree that CARRIES the
+	// member, as one built in memory rather than decoded does.
+	carried := renderHTML(t, withRootDirection(mustDecode(t,
+		`{"id":"d","kind":{"$type":"Badge","label":"plain","variant":"Neutral"}}`), "auto"), BindingSources{})
+	if carried != omitted {
+		t.Errorf("a tree carrying `auto` in memory must render identically to one omitting it — the "+
+			"renderer, not only the decoder, must treat `auto` as no declaration\ncarried:\n%s\nomitted:\n%s",
+			carried, omitted)
+	}
 }
 
 // style.direction/no-derived-direction-behaviour (§3.1 rule 5). The SUBTRACTION:

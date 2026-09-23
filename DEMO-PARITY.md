@@ -27,7 +27,7 @@ by hand. It is what this file can honestly assert from inside the repo, and it i
 | `canonical-json` (number form, rule-6 escaping, Ordinal key sort) | ✅ | `canonical/` | the corpus divergence-zone float vectors + per-primitive unit suites |
 | `apply` (tree-op apply engine + dry-run) | ✅ | `ops/` | apply-envelope leg over the corpus op fixtures + the `CanApply` ≡ apply-success law; placement algebra + clone verbs |
 | `validator` (pre-emit structural defects) | ✅ | `validator/` | per-rule fire / stay-silent suites + the declared rule-coverage pin (`validator-coverage.json`, machine-checked against what the validator actually raises) |
-| `render` (server-HTML + markdown + sanitiser + islands + ambient egress policy) | ✅ | `renderer/` | markdown corpus byte-pin, class-vocabulary + reference-CSS parity locks, sanitisation leg |
+| `render` (server-HTML + markdown + sanitiser + islands + ambient egress policy) | ✅ | `renderer/` | markdown corpus byte-pin, class-vocabulary + reference-CSS parity locks, sanitisation leg; the render-fidelity obligation roster (every declared claim has a checker, no exemptions), with `style.direction`'s five §3.1 rules also swept over a corpus tree of every roster kind; real controls for the `Rating` / `Color` / `Tokens` form fields, each pinned by tests that go red on the bare-input floor |
 | `server-driven` (driver + transport-neutral channel + reconnect replay) | ✅ | `serverdriven/` | driver / channel / SSE / stdlib-WebSocket suites + the state-seeding leg |
 | `opstream-hashchain` (SHA-256 chain, verify, replay, sink) | ✅ | `opstream/` | chain corpus golden, byte-identical |
 | `dag-record` (DAG record wire form) | ✅ | `dag/` | `dag/` corpus fixtures, both actor cases |
@@ -80,3 +80,9 @@ _2026-09-22 (Phase 1728) — file created. This host had no matrix of its own; t
 derived from the packages present and the suites that gate them. The `theme-manifest` row lands
 carrying its **encode** half: `thememanifest.Encode`, byte-pinned to the `fuaran-rs` oracle. Additive
 throughout — no capability changed status, and no existing row was rewritten._
+
+_2026-09-23 (Phase 1838) — the `render` row's **Certified against** cell now names the render
+obligations it already carried: the render-fidelity roster gate, `style.direction` held on every
+roster kind rather than on the two the obligation checkers build, and the `Rating` / `Color` /
+`Tokens` controls (shipped in Phase 1677) with the floor-reddening tests that hold them. No status
+changed; the row was under-describing its gate, not over-claiming it._

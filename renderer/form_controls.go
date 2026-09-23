@@ -26,11 +26,13 @@ import (
 // markup. What is NOT ported is anything needing a keystroke: this tier has no
 // script, and the reference's floors are shaped by that same constraint.
 //
-// THE FIDELITY DECLARATION IS NOT HERE. `render-fidelity.json` is the corpus's,
-// and the corpus is another phase's write lane — Phase 1674 owns declaring
-// these three obligations in the roster so a gate exists for them. This file is
-// the behaviour; that declaration is what will make it checkable from the
-// artefact rather than from these tests.
+// THE GATE IS form_controls_test.go, NOT THE ROSTER. `render-fidelity.json`
+// declares no obligation for these three: they are form-FIELD kinds, which ride
+// the `Form` row's fallback rather than carrying rows of their own (the
+// declaration this file once anticipated from Phase 1674 landed as
+// `style.direction`'s trait instead). So these tests are what holds the
+// controls, and each kind's set goes red when that kind is routed back to the
+// bare floor — measured per kind in Phase 1838.
 
 // hexColorUnset is the value a `<input type="color">` holds when nothing valid
 // was declared. Black, matching the reference host, and deliberately not an
