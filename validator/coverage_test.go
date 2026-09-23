@@ -209,3 +209,31 @@ func TestRaisedCodesAreInTheCanonicalVocabulary(t *testing.T) {
 		}
 	}
 }
+
+// decidedCodes are rules this host has been asked for a STANCE on, one way or the
+// other. For these `abstentionDefault` — "an honest 'not yet'" — is not an
+// answer: each is an Error the corpus carries a negative fixture for, so leaving
+// it to the default would let a Go consumer read silence as coverage. FUARAN075
+// is here from Phase 1835 (the corpus pairs of Phase 1784 / 1800).
+var decidedCodes = []string{"FUARAN075"}
+
+// Each decided code is in EXACTLY ONE of `implemented` / `abstained`. Neither is
+// the silent pass this list exists to refuse; both is caught above as a
+// contradiction, and is re-asserted here so this check stands on its own.
+func TestDecidedCodesHaveExactlyOneStance(t *testing.T) {
+	d := declaration(t)
+	implemented := map[string]bool{}
+	for _, c := range d.Implemented {
+		implemented[c] = true
+	}
+	for _, code := range decidedCodes {
+		_, abstained := d.Abstained[code]
+		switch {
+		case implemented[code] && abstained:
+			t.Errorf("%s is declared both implemented and abstained", code)
+		case !implemented[code] && !abstained:
+			t.Errorf("%s is neither implemented nor abstained — this host was asked for a stance "+
+				"on it, and the abstention default is not one", code)
+		}
+	}
+}

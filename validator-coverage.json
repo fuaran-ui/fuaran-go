@@ -4,11 +4,12 @@
   "family": "pre-emit",
   "vocabulary": "wire-format-fixtures/validator/defect-vocabulary.json",
   "posture": "subset",
-  "postureReason": "A headless codec and emitter. It implements the rules that bear on what it EMITS; the rules that exist to warn a human author as they type have no author to warn on this host, which is why a thin set here is a legitimate posture rather than a backlog. FUARAN069 is the exception and is now implemented: an inert control is a defect in what this host emits, not merely an authoring warning.",
+  "postureReason": "A headless codec and emitter. It implements the rules that bear on what it EMITS; the rules that exist to warn a human author as they type have no author to warn on this host, which is why a thin set here is a legitimate posture rather than a backlog. FUARAN069 is the exception and is now implemented: an inert control is a defect in what this host emits, not merely an authoring warning. FUARAN075 is implemented on the same ground (Phase 1835): a filter edge naming a chip the document never declares is an Error in what this host emits, and both halves of it are positive facts the decoded tree already holds, so the rule needs none of the tree-wide write projection the abstentions below wait on.",
   "implemented": [
     "FUARAN-DUP-ID",
     "FUARAN-EMPTY-ID",
     "FUARAN069",
+    "FUARAN075",
     "FUARAN082",
     "FUARAN083",
     "FUARAN100",

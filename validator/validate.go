@@ -52,6 +52,7 @@ func ValidateNode(node wire.Node) []Finding {
 	var findings []Finding
 	seen := make(map[string]bool)
 	walk(node, "$", &findings, seen)
+	checkFilterEdges(node, &findings)
 	return findings
 }
 
@@ -454,6 +455,157 @@ func checkInertControl(node wire.Node, kind wire.Obj, path string, findings *[]F
 				}
 				report(fmt.Sprintf("FormField(%s)", id))
 			}
+		}
+	}
+}
+
+// ── FUARAN075 — the dangling-filter-reference rule (fuaran#1800, Phase 1835) ──
+//
+// A node DECLARES a filter edge on a name no `Filters` chip in the tree
+// declares. Two shapes carry such an edge: a `Query`'s `dependsOn` entry
+// (fuaran#421), and a `Transform` / `Expr` param whose `from` is a `Filter`
+// binding (fuaran#424 / #1534). A plain `Filter` binding VALUE read is exempt —
+// a host may feed the filter bag without chips — and so is a chip's own
+// self-read, which is a declaration rather than an edge.
+//
+// It is an Error because nothing downstream of the tree can notice: an
+// undeclared chip resolves to nothing exactly as an unset one does, the lenient
+// "unset filter ⇒ no constraint" prune drops the dependent step, and a
+// `dependsOn` entry subscribes its consumer to a slot nothing can ever write.
+// Both documents are legal wire and round-trip byte-identically, which is why
+// the corpus carries each arm as a PAIR differing in one thing —
+// `nodes/filters-dependson-{declared,undeclared}.json` and
+// `nodes/filters-param-source-{declared,undeclared}.json`.
+//
+// Judged TREE-WIDE, after the per-node walk, because "names a chip this tree
+// declares" is only answerable once the whole tree has been seen: a consumer may
+// precede its `Filters` sibling in document order. Unlike the per-node rules
+// above, this reads INTO binding values — which it can do soundly because both
+// halves are positive facts over data the decoder retains (a declared name, a
+// named edge); nothing here reasons from the absence of a writer, the
+// projection FUARAN099/101/105/106/107/148 abstain for want of.
+//
+// Attribution is by NEAREST ENCLOSING NODE, which is what the reference host's
+// binding walk calls the edge's reader. The walk covers a node's kind AND its
+// extras (state branches, `visible`), because the reference's walk descends
+// both.
+
+// filterEdgeParamTags are the binding tags whose `params` may carry a `Filter`
+// source — the DECLARED param edge.
+var filterEdgeParamTags = map[string]bool{"Transform": true, "Expr": true}
+
+// sortedKeys returns an object's field names in Ordinal order, so every walk
+// below reports in a deterministic order.
+func sortedKeys(fields map[string]wire.Value) []string {
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// declaredFilterNames collects every chip name a `Filters` node in the tree
+// declares (`items[*].name`).
+func declaredFilterNames(value wire.Value, out map[string]bool) {
+	switch t := value.(type) {
+	case wire.Node:
+		if t.Kind.Tag == "Filters" {
+			if items, ok := t.Kind.Fields["items"].(wire.Arr); ok {
+				for _, item := range items {
+					if spec, ok := item.(wire.Obj); ok {
+						if name, ok := spec.Fields["name"].(wire.Str); ok {
+							out[string(name)] = true
+						}
+					}
+				}
+			}
+		}
+		declaredFilterNames(t.Kind, out)
+		for _, k := range sortedKeys(t.Extras) {
+			declaredFilterNames(t.Extras[k], out)
+		}
+	case wire.Arr:
+		for _, item := range t {
+			declaredFilterNames(item, out)
+		}
+	case wire.Obj:
+		for _, k := range sortedKeys(t.Fields) {
+			declaredFilterNames(t.Fields[k], out)
+		}
+	}
+}
+
+// filterEdge is one declared filter edge: the reading node, the filter it
+// names, and the $-rooted path of the name.
+type filterEdge struct {
+	reader string
+	name   string
+	path   string
+}
+
+// filterEdgeUses collects every declared filter edge in document order.
+func filterEdgeUses(value wire.Value, reader, path string, out *[]filterEdge) {
+	switch t := value.(type) {
+	case wire.Node:
+		filterEdgeUses(t.Kind, t.ID, path+".kind", out)
+		for _, k := range sortedKeys(t.Extras) {
+			filterEdgeUses(t.Extras[k], t.ID, path+"."+k, out)
+		}
+	case wire.Arr:
+		for i, item := range t {
+			filterEdgeUses(item, reader, path+"."+strconv.Itoa(i), out)
+		}
+	case wire.Obj:
+		if t.Tag == "Query" {
+			if dependsOn, ok := t.Fields["dependsOn"].(wire.Arr); ok {
+				for i, entry := range dependsOn {
+					if name, ok := entry.(wire.Str); ok {
+						*out = append(*out, filterEdge{reader, string(name), path + ".dependsOn." + strconv.Itoa(i)})
+					}
+				}
+			}
+		}
+		if filterEdgeParamTags[t.Tag] {
+			if params, ok := t.Fields["params"].(wire.Arr); ok {
+				for i, param := range params {
+					p, ok := param.(wire.Obj)
+					if !ok {
+						continue
+					}
+					// A param's `Filter` source is the DECLARED edge; a plain
+					// `Filter` binding elsewhere is an ordinary value read.
+					if source, ok := p.Fields["from"].(wire.Obj); ok && source.Tag == "Filter" {
+						if name, ok := source.Fields["name"].(wire.Str); ok {
+							*out = append(*out, filterEdge{reader, string(name), path + ".params." + strconv.Itoa(i) + ".from"})
+						}
+					}
+				}
+			}
+		}
+		for _, k := range sortedKeys(t.Fields) {
+			filterEdgeUses(t.Fields[k], reader, path+"."+k, out)
+		}
+	}
+}
+
+// checkFilterEdges raises FUARAN075 (Error) for a declared filter edge grounded
+// in no chip.
+func checkFilterEdges(root wire.Node, findings *[]Finding) {
+	declared := map[string]bool{}
+	declaredFilterNames(root, declared)
+
+	var uses []filterEdge
+	filterEdgeUses(root, root.ID, "$", &uses)
+
+	for _, use := range uses {
+		if !declared[use.name] {
+			*findings = append(*findings, Finding{
+				Code: "FUARAN075", Path: use.path,
+				Message: fmt.Sprintf("'%s' declares a filter edge on '%s' (dependsOn / Transform param "+
+					"source) but no Filters chip declares that name", use.reader, use.name),
+				Severity: SeverityError,
+			})
 		}
 	}
 }
