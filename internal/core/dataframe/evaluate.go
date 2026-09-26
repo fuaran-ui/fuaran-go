@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/fuaran-ui/fuaran-go/canonical"
+	"github.com/fuaran-ui/fuaran-go/internal/core/canonical"
 )
 
 // The pure columnar reference evaluator — a fold over the pipeline threading a

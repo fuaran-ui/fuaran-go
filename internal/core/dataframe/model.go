@@ -1,17 +1,7 @@
-// Package dataframe is the Go host of the Compute-layer columnar/dataframe
-// surface — the typed null-aware Cell/Column/Table model, the DataSource codec,
-// and the reference evaluator that runs a serialisable Binding.Transform
-// pipeline (filter / project / derive / groupBy / join / window / pivot /
-// unpivot / sort / distinct / limit / union over the scalar ColExpr algebra) to
-// produce result rows. The pipeline is data on the wire; every host's evaluator
-// runs it identically. This is the substrate for the Living Sheet and the data
-// behind the Pandas dashboard.
-//
-// Host-local: no wire change. The pipeline round-trip is already corpus-
-// certified (grid-transform.json); this adds the deep typed decode + the
-// evaluation, certified value-for-value against the F# reference report
-// (fuaran-py/tests/fixtures/dataframe_parity.json). The per-step shape is
-// Fuaran.Core-owned; this mirrors fuaran-py, not the UI spec.
+// Package dataframe is the Core twin behind the internal/core boundary: the
+// Compute-layer model, the Transform evaluator, list-parameter substitution and
+// the decode half of the canonical codec. The public github.com/fuaran-ui/fuaran-go/dataframe
+// package forwards to it; see that package for the full documentation.
 package dataframe
 
 // ── Column scalar types (the closed, Arrow-compatible set) — wire tags ───────
@@ -49,6 +39,15 @@ func CellDate(v string) Cell      { return Cell{Kind: TypeDate, Value: v} }
 func CellTimestamp(v string) Cell { return Cell{Kind: TypeTimestamp, Value: v} }
 
 func isNull(c Cell) bool { return c.Kind == "null" }
+
+// CellIsNull reports whether c is the null cell. It and DefaultFor are exported
+// for the encode half of the codec, which lowers into the host's own wire model
+// and so lives outside this boundary; the public dataframe package does not
+// forward them.
+func CellIsNull(c Cell) bool { return isNull(c) }
+
+// DefaultFor is the type-default placeholder a null cell encodes as.
+func DefaultFor(ty string) Cell { return defaultFor(ty) }
 
 // typeOf is the column type a present cell carries ("" for the null).
 func typeOf(c Cell) string {

@@ -293,7 +293,7 @@ three rules govern it. All three are the wire format's; none is a Go choice.
 Reactivity is not part of this host's share of the rule, and the omission is the
 library-not-a-runtime line rather than a gap: the chip-to-grid edge is derived
 from the pipeline's params and lives wherever the selection is *held*, which is
-never here. Pinned by `dataframe/listparams_test.go` (the mechanism) and
+never here. Pinned by `internal/core/dataframe/listparams_test.go` (the mechanism) and
 `conformance/listparam_test.go` (the emitted rows, over the shared corpus
 fixture).
 
@@ -527,7 +527,10 @@ rather than in a `STABILITY.md` it does not have; the version advances `0.0.1-al
 fuaran-go/
 ├── go.mod
 ├── doc.go             # package doc + Version
-├── canonical/         # canonical-JSON primitives — number form + string escaping
+├── canonical/         # canonical-JSON primitives — number form + string escaping (forwards to internal/core)
+├── dataframe/         # Compute-layer model, Transform evaluator + codec (forwards to internal/core; keeps the wire-model encode)
+├── function/          # function registry + capability model (forwards to internal/core; keeps the bounded parse)
+├── internal/core/     # the Core twins behind a test-held import boundary — see CONTRIBUTING.md
 ├── wire/              # Node / TreeOp codec + structural model + DecodeError envelope
 ├── ops/               # tree-op apply engine — Apply / CanApply + typed ApplyError
 ├── validator/         # pre-emit default-deny structural validator
