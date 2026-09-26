@@ -14,8 +14,10 @@
 // Reference semantics (canonical = the F# reference host):
 //   - default-deny by shape: an arg must address a declared hole that takes a
 //     scalar value, and lie in that hole's space; every required hole must be
-//     bound; a slot hole with no declared space is not scalar-invocable. Every
-//     refusal is NAMED and returned, never a panic.
+//     bound; a slot hole with no declared space ranges over the tree space its
+//     slot constraint names (Phase 1873), and a hole with neither a space nor a
+//     slot reading (an action hole) is not invocable. Every refusal is NAMED
+//     and returned, never a panic.
 //   - the replay key is `id + "#" + fnv1a(CanonicalFields(addr, value, ...))`
 //     over the addr-sorted args (Phase 1860, the reference's fuaran-core#225
 //     form): each field escaped and terminated, so the pre-image is injective
@@ -269,7 +271,8 @@ func InvocationKey(c Capability, args []InvokeArg) string {
 
 // SpaceValidate reports whether a candidate string value lies in a value space.
 // A nil space is not scalar-valued and never validates — callers distinguish
-// that case (a slot hole) before asking.
+// that case before asking (ValidateArgs supplies a spaceless slot hole's tree
+// space, and refuses an action hole by name).
 //
 // The integer leg parses as a 32-BIT signed integer, matching the reference's
 // own parse: a value outside that range is out of the space whatever the
@@ -331,6 +334,26 @@ func slotKindOf(s string) (string, bool) {
 	return kind, ok
 }
 
+// invocationSpace is the value space an argument for this hole must lie in.
+//
+// The rule (Phase 1873, from fuaran-core#229): a slot hole with no declared
+// space ranges over the tree space constrained to its slot kind, so it admits
+// a well-formed wire document whose "kind" satisfies that constraint (any kind
+// when the slot is unconstrained) — exactly the space the reference's decoder
+// restores for a slot entry that travels without one.
+//
+// The reference writes a slot's space only when it disagrees with the slot's
+// constraint, so this is the ordinary shape of a slotted capability on the
+// wire. The space is supplied here, at validation, rather than at decode, so a
+// declaration re-encodes to the bytes it arrived as. Every other hole answers
+// its declared space; nil (an action hole) is not invocable.
+func invocationSpace(h SigEntry) *Space {
+	if h.Space == nil && h.Kind == "slot" {
+		return &Space{Kind: "slotTree", SlotKind: h.Slot}
+	}
+	return h.Space
+}
+
 // ValidateArgs checks typed args against a capability's signature BEFORE any
 // dispatch: every arg must address a declared hole that takes a scalar value
 // in-space, and every required hole must be bound. Returns nil on acceptance
@@ -357,11 +380,12 @@ func ValidateArgs(c Capability, args []InvokeArg) *InvokeError {
 		if hole == nil {
 			return &InvokeError{Kind: ErrUnknownArg, Addr: a.Addr, Declared: declared}
 		}
-		if hole.Space == nil {
-			// A slot hole: tree-typed, so no scalar value-space to lie in.
+		space := invocationSpace(*hole)
+		if space == nil {
+			// An action hole: no value space, so nothing an argument can lie in.
 			return &InvokeError{Kind: ErrUninvocableArg, Addr: a.Addr}
 		}
-		if hole.Space.Kind == "slotTree" {
+		if space.Kind == "slotTree" {
 			// A tree space: an argument that is no tree at all (a scalar, a
 			// malformed document) is uninvocable; a tree of the wrong kind is out
 			// of the space. The reference's order (fuaran-core#229).
@@ -369,7 +393,7 @@ func ValidateArgs(c Capability, args []InvokeArg) *InvokeError {
 				return &InvokeError{Kind: ErrUninvocableArg, Addr: a.Addr}
 			}
 		}
-		if !SpaceValidate(hole.Space, a.Value) {
+		if !SpaceValidate(space, a.Value) {
 			return &InvokeError{Kind: ErrArgOutOfSpace, Addr: a.Addr, Got: a.Value}
 		}
 	}
