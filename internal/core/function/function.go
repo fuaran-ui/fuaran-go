@@ -25,11 +25,16 @@ const (
 // language-neutral wire form the goldens carry (intRange / floatRange /
 // stringLen / enum / anyString); Min/Max are the range bounds, Choices the enum
 // set. A nil *Space means the hole carries no value-space (a slot hole).
+//
+// A capability declaration may also carry the tree space "slotTree"
+// (fuaran-core#229): its argument is a wire document whose "kind" satisfies
+// SlotKind ("" = any kind). The function-registry goldens never carry one.
 type Space struct {
-	Kind    string   `json:"kind"`
-	Min     float64  `json:"min"`
-	Max     float64  `json:"max"`
-	Choices []string `json:"choices"`
+	Kind     string   `json:"kind"`
+	Min      float64  `json:"min"`
+	Max      float64  `json:"max"`
+	Choices  []string `json:"choices"`
+	SlotKind string   `json:"slotKind,omitempty"`
 }
 
 // SigEntry is one hole in a function signature — matched by absolute Addr
@@ -172,6 +177,8 @@ func spaceEqual(a, b *Space) bool {
 			}
 		}
 		return true
+	case "slotTree":
+		return a.SlotKind == b.SlotKind
 	default:
 		return true
 	}

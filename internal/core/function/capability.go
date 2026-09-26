@@ -14,12 +14,14 @@
 // Reference semantics (canonical = the F# reference host):
 //   - default-deny by shape: an arg must address a declared hole that takes a
 //     scalar value, and lie in that hole's space; every required hole must be
-//     bound; a slot hole is not scalar-invocable. Every refusal is NAMED and
-//     returned, never a panic.
-//   - the replay key is `id + "#" + fnv1a(addr-sorted "addr=value" string)`, so
-//     two invocations with the same args journal and replay under one key and
-//     different args do not collide. The hash iterates UTF-16 code units, which
-//     is what makes it value-identical to the reference on non-ASCII args.
+//     bound; a slot hole with no declared space is not scalar-invocable. Every
+//     refusal is NAMED and returned, never a panic.
+//   - the replay key is `id + "#" + fnv1a(CanonicalFields(addr, value, ...))`
+//     over the addr-sorted args (Phase 1860, the reference's fuaran-core#225
+//     form): each field escaped and terminated, so the pre-image is injective
+//     and two distinct argument sets never share one. The hash iterates UTF-16
+//     code units, which is what makes it value-identical to the reference on
+//     non-ASCII args.
 //   - registry enumeration is id-sorted; stability is part of the contract
 //     (it is the discovery surface an agent reads).
 //
@@ -29,6 +31,7 @@
 package function
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -197,21 +200,71 @@ func FNV1a(s string) string {
 	return fmt.Sprintf("%08x", h)
 }
 
+// FoldSep terminates every field of a canonical pre-image: U+0001 (SOH). No
+// canonical wire encoding emits it unescaped. Twin of the reference's
+// `Hash.foldSep`.
+const FoldSep = "\u0001"
+
+// FieldEsc escapes a FoldSep or a FieldEsc a field carries: U+0010 (DLE). Twin
+// of the reference's `Hash.fieldEsc`.
+const FieldEsc = "\u0010"
+
+// CanonicalField is ONE field of an injective canonical pre-image: every
+// FieldEsc and every FoldSep the field carries is escaped by a preceding
+// FieldEsc, then the field is terminated by FoldSep. The first UNESCAPED FoldSep
+// is therefore always the end of the field, whatever the field contains.
+// Escaping FieldEsc first keeps the escapes the second replacement inserts from
+// being escaped again. Twin of the reference's `Hash.canonicalField`.
+func CanonicalField(s string) string {
+	s = strings.ReplaceAll(s, FieldEsc, FieldEsc+FieldEsc)
+	s = strings.ReplaceAll(s, FoldSep, FieldEsc+FoldSep)
+	return s + FoldSep
+}
+
+// CanonicalFields is the canonical pre-image of a field sequence: each field
+// through CanonicalField, concatenated. Injective — two field lists with one
+// pre-image are one list. Twin of the reference's `Hash.canonicalFields`.
+func CanonicalFields(fields []string) string {
+	var sb strings.Builder
+	for _, f := range fields {
+		sb.WriteString(CanonicalField(f))
+	}
+	return sb.String()
+}
+
+// lessUTF16 orders two strings by UTF-16 code unit, the reference's ordinal
+// string comparison. Go's `<` compares UTF-8 bytes, which agrees everywhere
+// except between a supplementary-plane character (a surrogate pair, D800-DBFF
+// first) and a BMP character at or above U+E000 — where the two orders invert.
+func lessUTF16(a, b string) bool {
+	ua, ub := utf16.Encode([]rune(a)), utf16.Encode([]rune(b))
+	for i := 0; i < len(ua) && i < len(ub); i++ {
+		if ua[i] != ub[i] {
+			return ua[i] < ub[i]
+		}
+	}
+	return len(ua) < len(ub)
+}
+
 // InvocationKey is the effect-identity key the capture seam journals a
 // non-deterministic invocation under: the capability id plus a hash of the
-// canonical (addr-sorted) `addr=value` argument string, joined with no
-// separator — the reference's exact pre-image.
+// canonical pre-image of the addr-sorted args — two fields per binding (addr,
+// value) through CanonicalFields. Two invocations with the same args replay the
+// same captured value, and the pre-image is injective, so distinct argument
+// sets never share one whatever their values contain (Phase 1860; the
+// reference's fuaran-core#225 form, which replaced the old separator-free
+// `addr=value` join under which [a="1b=2"] and [a="1"; b="2"] collided). That
+// two distinct pre-images hash apart is a property of FNV1a and is not claimed.
+// The sort is stable and by UTF-16 code unit, as the reference's is.
 func InvocationKey(c Capability, args []InvokeArg) string {
 	sorted := make([]InvokeArg, len(args))
 	copy(sorted, args)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Addr < sorted[j].Addr })
-	var sb strings.Builder
+	sort.SliceStable(sorted, func(i, j int) bool { return lessUTF16(sorted[i].Addr, sorted[j].Addr) })
+	fields := make([]string, 0, 2*len(sorted))
 	for _, a := range sorted {
-		sb.WriteString(a.Addr)
-		sb.WriteByte('=')
-		sb.WriteString(a.Value)
+		fields = append(fields, a.Addr, a.Value)
 	}
-	return c.ID + "#" + FNV1a(sb.String())
+	return c.ID + "#" + FNV1a(CanonicalFields(fields))
 }
 
 // SpaceValidate reports whether a candidate string value lies in a value space.
@@ -251,9 +304,31 @@ func SpaceValidate(space *Space, s string) bool {
 		return false
 	case "anyString":
 		return true
+	case "slotTree":
+		kind, ok := slotKindOf(s)
+		return ok && (space.SlotKind == "" || kind == space.SlotKind)
 	default:
 		return false
 	}
+}
+
+// slotKindOf is the kind tag of a tree argument: ok when the string is a
+// well-formed wire document whose top level is an object with a string
+// "kind", and not ok for a scalar, a malformed document, or an object with no
+// string "kind". It decodes nothing below the tag — decoding the document into
+// a node is the host's business. Twin of the reference's `Space.slotKindOf`
+// (fuaran-core#229).
+func slotKindOf(s string) (string, bool) {
+	var doc any
+	if err := json.Unmarshal([]byte(s), &doc); err != nil {
+		return "", false
+	}
+	obj, ok := doc.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	kind, ok := obj["kind"].(string)
+	return kind, ok
 }
 
 // ValidateArgs checks typed args against a capability's signature BEFORE any
@@ -285,6 +360,14 @@ func ValidateArgs(c Capability, args []InvokeArg) *InvokeError {
 		if hole.Space == nil {
 			// A slot hole: tree-typed, so no scalar value-space to lie in.
 			return &InvokeError{Kind: ErrUninvocableArg, Addr: a.Addr}
+		}
+		if hole.Space.Kind == "slotTree" {
+			// A tree space: an argument that is no tree at all (a scalar, a
+			// malformed document) is uninvocable; a tree of the wrong kind is out
+			// of the space. The reference's order (fuaran-core#229).
+			if _, isTree := slotKindOf(a.Value); !isTree {
+				return &InvokeError{Kind: ErrUninvocableArg, Addr: a.Addr}
+			}
 		}
 		if !SpaceValidate(hole.Space, a.Value) {
 			return &InvokeError{Kind: ErrArgOutOfSpace, Addr: a.Addr, Got: a.Value}

@@ -119,6 +119,14 @@ func encodeSpaceDecl(s *Space) (string, error) {
 		), nil
 	case "anyString":
 		return jobj(jmember{"$type", jstr("anyString")}), nil
+	case "slotTree":
+		// The explicit tree space (fuaran-core#229): the reference writes one only
+		// when a slot's space disagrees with its constraint, or a non-slot hole
+		// ranges over trees. The constraint is omitted when there is none.
+		if s.SlotKind == "" {
+			return jobj(jmember{"$type", jstr("slotTree")}), nil
+		}
+		return jobj(jmember{"$type", jstr("slotTree")}, jmember{"slotKind", jstr(s.SlotKind)}), nil
 	default:
 		return "", errors.New("unknown value-space kind: " + s.Kind)
 	}
@@ -289,6 +297,16 @@ func decodeSpaceDecl(el map[string]any) (*Space, error) {
 		return &Space{Kind: "enum", Choices: choices}, nil
 	case "anyString":
 		return &Space{Kind: "anyString"}, nil
+	case "slotTree":
+		space := &Space{Kind: "slotTree"}
+		if raw, present := el["slotKind"]; present {
+			k, ok := raw.(string)
+			if !ok {
+				return nil, errors.New("field is not a string: slotKind")
+			}
+			space.SlotKind = k
+		}
+		return space, nil
 	default:
 		return nil, errors.New("unknown value-space kind: " + tag)
 	}
