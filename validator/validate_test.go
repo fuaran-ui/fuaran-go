@@ -449,6 +449,9 @@ func TestFilterEdgeCorpusPairs(t *testing.T) {
 // and the reference-family port in fuaran-py reports this same set at these
 // same paths (measured 2026-09-23, Phase 1835). The list is pinned so a corpus
 // addition that trips the rule is a visible, named change, never a silent one.
+// Phase 1892 added `grid-windowed`: a host-windowed grid's Query names its
+// `windowStateKey` in `dependsOn`, a State key rather than a chip, so the
+// reference's rule (which reads only `Filters` declarations) fires on it too.
 func TestFilterEdgeFiresOnlyWhereTheReferenceFamilyDoes(t *testing.T) {
 	dir := corpusNodesDir(t)
 	entries, err := os.ReadDir(dir)
@@ -483,6 +486,7 @@ func TestFilterEdgeFiresOnlyWhereTheReferenceFamilyDoes(t *testing.T) {
 		"form-combobox-query.json $.kind.fields.0.kind.options.dependsOn.0",
 		"form-tokens-query.json $.kind.fields.0.kind.suggestions.dependsOn.0",
 		"grid-transform-param.json $.kind.source.params.0.from",
+		"grid-windowed.json $.kind.source.dependsOn.0",
 		"multiselect-chip-list-param.json $.kind.children.1.kind.source.params.0.from",
 		"query-dependson.json $.kind.value.dependsOn.0",
 		"query-dependson.json $.kind.value.dependsOn.1",

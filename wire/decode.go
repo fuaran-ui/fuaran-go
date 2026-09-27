@@ -4182,6 +4182,14 @@ func init() {
 			// without giving up its own.
 			s.opt("transferInKey", decodeString)
 			s.opt("transferOutKey", decodeString)
+			// Phase 1892 — the row window and the declared total. `windowStateKey`
+			// names the State key carrying the window descriptor
+			// `{"offset": N, "count": M}`; `rowTotal` is an int Binding decoded
+			// exactly as the other int Binding slots (Tabs.activeIndex /
+			// Stepper.activeStep). Both are encode-omitted when absent. This host
+			// is codec only: the window function is not implemented here.
+			s.opt("rowTotal", decodeBindingInt)
+			s.opt("windowStateKey", decodeString)
 			return s.build("DataGrid")
 		},
 		// Phase 1585 — `stacked` is OMITTED-WHEN-FALSE on both boundaries. It
