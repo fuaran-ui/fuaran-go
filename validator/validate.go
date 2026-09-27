@@ -536,12 +536,45 @@ func declaredFilterNames(value wire.Value, out map[string]bool) {
 	}
 }
 
+// gridOwnStateKeys collects (gridNodeID, key) for every DataGrid's own
+// `pageStateKey` and `windowStateKey` (Phase 1892). The page rule (Phase 862)
+// and the window rule (Phase 1892) both have a host-slicing `Query` name that
+// key in `dependsOn`, so an entry naming the READING grid's own key is that
+// re-run edge and not a filter reference.
+func gridOwnStateKeys(value wire.Value, out map[[2]string]bool) {
+	switch t := value.(type) {
+	case wire.Node:
+		if t.Kind.Tag == "DataGrid" {
+			for _, field := range []string{"pageStateKey", "windowStateKey"} {
+				if key, ok := t.Kind.Fields[field].(wire.Str); ok {
+					out[[2]string{t.ID, string(key)}] = true
+				}
+			}
+		}
+		gridOwnStateKeys(t.Kind, out)
+		for _, k := range sortedKeys(t.Extras) {
+			gridOwnStateKeys(t.Extras[k], out)
+		}
+	case wire.Arr:
+		for _, item := range t {
+			gridOwnStateKeys(item, out)
+		}
+	case wire.Obj:
+		for _, k := range sortedKeys(t.Fields) {
+			gridOwnStateKeys(t.Fields[k], out)
+		}
+	}
+}
+
 // filterEdge is one declared filter edge: the reading node, the filter it
 // names, and the $-rooted path of the name.
 type filterEdge struct {
 	reader string
 	name   string
 	path   string
+	// dependsOn marks a `Query.dependsOn` entry, the only edge shape a grid's
+	// own page / window key can exempt.
+	dependsOn bool
 }
 
 // filterEdgeUses collects every declared filter edge in document order.
@@ -561,7 +594,7 @@ func filterEdgeUses(value wire.Value, reader, path string, out *[]filterEdge) {
 			if dependsOn, ok := t.Fields["dependsOn"].(wire.Arr); ok {
 				for i, entry := range dependsOn {
 					if name, ok := entry.(wire.Str); ok {
-						*out = append(*out, filterEdge{reader, string(name), path + ".dependsOn." + strconv.Itoa(i)})
+						*out = append(*out, filterEdge{reader, string(name), path + ".dependsOn." + strconv.Itoa(i), true})
 					}
 				}
 			}
@@ -577,7 +610,7 @@ func filterEdgeUses(value wire.Value, reader, path string, out *[]filterEdge) {
 					// `Filter` binding elsewhere is an ordinary value read.
 					if source, ok := p.Fields["from"].(wire.Obj); ok && source.Tag == "Filter" {
 						if name, ok := source.Fields["name"].(wire.Str); ok {
-							*out = append(*out, filterEdge{reader, string(name), path + ".params." + strconv.Itoa(i) + ".from"})
+							*out = append(*out, filterEdge{reader, string(name), path + ".params." + strconv.Itoa(i) + ".from", false})
 						}
 					}
 				}
@@ -595,10 +628,16 @@ func checkFilterEdges(root wire.Node, findings *[]Finding) {
 	declared := map[string]bool{}
 	declaredFilterNames(root, declared)
 
+	ownKeys := map[[2]string]bool{}
+	gridOwnStateKeys(root, ownKeys)
+
 	var uses []filterEdge
 	filterEdgeUses(root, root.ID, "$", &uses)
 
 	for _, use := range uses {
+		if use.dependsOn && ownKeys[[2]string{use.reader, use.name}] {
+			continue
+		}
 		if !declared[use.name] {
 			*findings = append(*findings, Finding{
 				Code: "FUARAN075", Path: use.path,

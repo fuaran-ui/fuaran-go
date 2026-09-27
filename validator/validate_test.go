@@ -449,9 +449,27 @@ func TestFilterEdgeCorpusPairs(t *testing.T) {
 // and the reference-family port in fuaran-py reports this same set at these
 // same paths (measured 2026-09-23, Phase 1835). The list is pinned so a corpus
 // addition that trips the rule is a visible, named change, never a silent one.
-// Phase 1892 added `grid-windowed`: a host-windowed grid's Query names its
-// `windowStateKey` in `dependsOn`, a State key rather than a chip, so the
-// reference's rule (which reads only `Filters` declarations) fires on it too.
+// Phase 1892 — a host-slicing grid's Query names the grid's OWN page and
+// window State keys in `dependsOn` (the page rule and the window rule both put
+// the key there). Those entries are the re-run edge, not filter references;
+// any other undeclared name on the same Query still fires.
+func TestFilterEdgeExemptsTheGridsOwnPageAndWindowKey(t *testing.T) {
+	node := mustDecode(t, `{"id":"orders-grid","kind":{"$type":"DataGrid",`+
+		`"columns":[{"field":"reference","kind":{"$type":"Text"},"label":"Reference"}],`+
+		`"pageSize":20,"pageStateKey":"orders-page",`+
+		`"source":{"$type":"Query","dependsOn":["orders-window","orders-page","region"],"name":"orders"},`+
+		`"windowStateKey":"orders-window"}}`)
+	findings := ValidateNode(node)
+	if got := dangling(findings); len(got) != 1 || got[0] != "orders-grid→region" {
+		t.Fatalf("dangling %v; want [orders-grid→region] (findings %v)", got, findings)
+	}
+	for _, f := range findings {
+		if f.Code == "FUARAN075" && f.Path != "$.kind.source.dependsOn.2" {
+			t.Errorf("path = %q; want $.kind.source.dependsOn.2", f.Path)
+		}
+	}
+}
+
 func TestFilterEdgeFiresOnlyWhereTheReferenceFamilyDoes(t *testing.T) {
 	dir := corpusNodesDir(t)
 	entries, err := os.ReadDir(dir)
@@ -486,7 +504,6 @@ func TestFilterEdgeFiresOnlyWhereTheReferenceFamilyDoes(t *testing.T) {
 		"form-combobox-query.json $.kind.fields.0.kind.options.dependsOn.0",
 		"form-tokens-query.json $.kind.fields.0.kind.suggestions.dependsOn.0",
 		"grid-transform-param.json $.kind.source.params.0.from",
-		"grid-windowed.json $.kind.source.dependsOn.0",
 		"multiselect-chip-list-param.json $.kind.children.1.kind.source.params.0.from",
 		"query-dependson.json $.kind.value.dependsOn.0",
 		"query-dependson.json $.kind.value.dependsOn.1",
