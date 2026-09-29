@@ -22,6 +22,7 @@
 package renderer
 
 import (
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -2248,17 +2249,22 @@ func gridCellText(column wire.Obj, row wire.Obj) string {
 // Rich cell kinds (TonedPill, Checkbox, Link, Progress, …) render their TEXT
 // projection here — this host's inert server semantics for every interactive
 // node, not a special case for grids.
-func boundGrid(columns []wire.Obj, rows wire.Arr, hasRowAction bool) string {
+//
+// Phase 1912 — a windowed grid (a non-nil window in effect) presents the
+// window's rows, each carrying its aria-rowindex in the whole range, and the
+// table its aria-rowcount; with a nil window the markup is exactly the pre-1892
+// form.
+func boundGrid(columns []wire.Obj, rows wire.Arr, hasRowAction bool, window *presentedWindow) string {
 	var headerCells strings.Builder
 	for _, col := range columns {
 		headerCells.WriteString(textElement("th", []attr{{"class", "fuaran-grid-header"}}, strValue(col.Fields["label"])))
 	}
+	presented := gridObjRows(rows)
+	if window != nil {
+		presented = window.rows
+	}
 	var bodyRows strings.Builder
-	for _, rowValue := range rows {
-		row, ok := rowValue.(wire.Obj)
-		if !ok {
-			continue
-		}
+	for rowIndex, row := range presented {
 		var cells strings.Builder
 		for _, col := range columns {
 			cells.WriteString(element("td", []attr{{"class", "fuaran-grid-cell"}},
@@ -2268,12 +2274,375 @@ func boundGrid(columns []wire.Obj, rows wire.Arr, hasRowAction bool) string {
 		// This host wires no click, but the class states what the DOCUMENT
 		// declared, and the row it marks is the seed a hydrating client takes
 		// over: a marked row here is a row that is about to become clickable.
-		bodyRows.WriteString(element("tr",
-			[]attr{{"class", "fuaran-grid-row" + gridRowInteractiveClass(hasRowAction)}}, cells.String()))
+		rowAttrs := []attr{{"class", "fuaran-grid-row" + gridRowInteractiveClass(hasRowAction)}}
+		if index, ok := window.rowIndex(rowIndex); ok {
+			rowAttrs = append(rowAttrs, attr{"aria-rowindex", strconv.Itoa(index)})
+		}
+		bodyRows.WriteString(element("tr", rowAttrs, cells.String()))
 	}
 	thead := element("thead", nil, element("tr", nil, headerCells.String()))
 	tbody := element("tbody", nil, bodyRows.String())
-	return element("table", []attr{{"class", "fuaran-grid"}}, thead+tbody)
+	tableAttrs := []attr{{"class", "fuaran-grid"}}
+	if count, ok := window.rowCount(); ok {
+		tableAttrs = append(tableAttrs, attr{"aria-rowcount", strconv.Itoa(count)})
+	}
+	return element("table", tableAttrs, thead+tbody)
+}
+
+// ─── The row window (Phase 1892 contract; this host's adoption, Phase 1912) ──
+//
+// WIRE_FORMAT.md, "Row window and declared total". A DataGrid naming a
+// windowStateKey presents a WINDOW of its rows; the pieces below decide which,
+// in the fixed order sort → page → window, transcribed from the specification
+// (and from the reference host's gridWindow / presentWindow / gridPage) so the
+// corpus's grid-window/ behaviour vectors run through exactly the functions the
+// renderer calls. This host is a static renderer: it performs the slice the
+// seeded State determines and writes nothing back.
+
+// gridObjRows is the resolved rows as row objects (non-objects dropped).
+func gridObjRows(rows wire.Arr) []wire.Obj {
+	out := make([]wire.Obj, 0, len(rows))
+	for _, v := range rows {
+		if row, ok := v.(wire.Obj); ok {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// gridJSONInt reads a JSON integer from either spelling a store holds: an Int,
+// or a finite Float with no fractional part (2.0 is 2).
+func gridJSONInt(v wire.Value) (int, bool) {
+	switch n := v.(type) {
+	case wire.Int:
+		if int64(n) <= math.MaxInt32 && int64(n) >= math.MinInt32 {
+			return int(n), true
+		}
+	case wire.Float:
+		f := float64(n)
+		if !math.IsInf(f, 0) && !math.IsNaN(f) && f == math.Trunc(f) && math.Abs(f) <= math.MaxInt32 {
+			return int(f), true
+		}
+	}
+	return 0, false
+}
+
+// gridSortDescriptor validates a {column, direction} descriptor: a column
+// index >= 0 and a direction of asc / desc. Anything else is no sort.
+func gridSortDescriptor(v wire.Value) (int, string, bool) {
+	obj, ok := v.(wire.Obj)
+	if !ok {
+		return 0, "", false
+	}
+	column, colOK := gridJSONInt(obj.Fields["column"])
+	direction, _ := obj.Fields["direction"].(wire.Str)
+	if colOK && column >= 0 && (direction == "asc" || direction == "desc") {
+		return column, string(direction), true
+	}
+	return 0, "", false
+}
+
+// effectiveGridSort is the grid's order: the sortStateKey slot decides, and a
+// declared defaultSort fills only the not-yet-sorted case (nothing held at the
+// key). A key holding something that is not a usable descriptor is the
+// AUTHORED order.
+func (r *renderer) effectiveGridSort(fields map[string]wire.Value) (int, string, bool) {
+	column, direction, declared := gridSortDescriptor(fields["defaultSort"])
+	key, ok := fields["sortStateKey"].(wire.Str)
+	if !ok {
+		return column, direction, declared
+	}
+	held, present := r.sources.Values[string(key)]
+	if !present {
+		return column, direction, declared
+	}
+	return gridSortDescriptor(held)
+}
+
+// gridCellRank orders cell kinds: numbers, booleans, text; anything else
+// (absent, null, a structure) is EMPTY and sorts last in both directions.
+func gridCellRank(v wire.Value) int {
+	switch v.(type) {
+	case wire.Int, wire.Float:
+		return 0
+	case wire.Bool:
+		return 1
+	case wire.Str:
+		return 3
+	}
+	return 4
+}
+
+func gridCellNumber(v wire.Value) float64 {
+	switch n := v.(type) {
+	case wire.Int:
+		return float64(n)
+	case wire.Float:
+		return float64(n)
+	case wire.Bool:
+		if n {
+			return 1
+		}
+	}
+	return 0
+}
+
+func gridCompareCells(a, b wire.Value) int {
+	ra, rb := gridCellRank(a), gridCellRank(b)
+	if ra != rb {
+		if ra < rb {
+			return -1
+		}
+		return 1
+	}
+	switch ra {
+	case 3:
+		return strings.Compare(strings.ToLower(string(a.(wire.Str))), strings.ToLower(string(b.(wire.Str))))
+	case 0, 1:
+		na, nb := gridCellNumber(a), gridCellNumber(b)
+		switch {
+		case na < nb:
+			return -1
+		case na > nb:
+			return 1
+		}
+	}
+	return 0
+}
+
+// sortGridRows sorts rows STABLY by a descriptor over the columns' field names.
+// A column index outside the set, or a column with no field, leaves the
+// authored order standing; empty cells sort last in both directions.
+func sortGridRows(columns []wire.Obj, column int, direction string, rows []wire.Obj) []wire.Obj {
+	out := append([]wire.Obj(nil), rows...)
+	if column >= len(columns) {
+		return out
+	}
+	field, ok := columns[column].Fields["field"].(wire.Str)
+	if !ok {
+		return out
+	}
+	sign := 1
+	if direction == "desc" {
+		sign = -1
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i].Fields[string(field)], out[j].Fields[string(field)]
+		emptyA, emptyB := gridCellRank(a) == 4, gridCellRank(b) == 4
+		if emptyA || emptyB {
+			return !emptyA && emptyB
+		}
+		return sign*gridCompareCells(a, b) < 0
+	})
+	return out
+}
+
+// sourceHostSlicesOn reports whether this source slices HOST-side on key: a
+// Query whose dependsOn names it re-runs on a change and returns the slice (the
+// page rule, and the window rule on the other key).
+func sourceHostSlicesOn(source wire.Value, key string) bool {
+	query, ok := source.(wire.Obj)
+	if !ok || query.Tag != "Query" {
+		return false
+	}
+	deps, _ := query.Fields["dependsOn"].(wire.Arr)
+	for _, d := range deps {
+		if s, ok := d.(wire.Str); ok && string(s) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// gridPageCountOf is how many pages a row count divides into — at least one.
+func gridPageCountOf(pageSize, rowCount int) int {
+	if pageSize <= 0 {
+		return 1
+	}
+	return max(1, (rowCount+pageSize-1)/pageSize)
+}
+
+// sliceGridRowsToPage is the rows on page (1-based) at pageSize, after
+// clamping to the last page.
+func sliceGridRowsToPage(pageSize, page int, rows []wire.Obj) []wire.Obj {
+	if pageSize <= 0 {
+		return rows
+	}
+	clamped := min(max(1, page), gridPageCountOf(pageSize, len(rows)))
+	start := min(len(rows), (clamped-1)*pageSize)
+	end := min(len(rows), start+pageSize)
+	return rows[start:end]
+}
+
+// gridPageState is the page a paged grid shows and the last page it can name
+// (hasLast false where a host-paged grid declares no total, so its pager keeps
+// to previous/next).
+type gridPageState struct {
+	size, page int
+	hostPages  bool
+	lastPage   int
+	hasLast    bool
+}
+
+// gridPage is the page rule plus the declared total. A client-paged grid
+// counts its own rows; a host-paged grid clamps and states a page count only
+// when the document declares rowTotal. ok is false for a grid that does not
+// page.
+func (r *renderer) gridPage(fields map[string]wire.Value, rowCount int) (gridPageState, bool) {
+	key, keyOK := fields["pageStateKey"].(wire.Str)
+	size, sizeOK := gridJSONInt(fields["pageSize"])
+	if !keyOK || !sizeOK || size <= 0 {
+		return gridPageState{}, false
+	}
+	requested := 1
+	if held, ok := r.sources.Values[string(key)].(wire.Obj); ok {
+		if p, ok := gridJSONInt(held.Fields["page"]); ok && p >= 1 {
+			requested = p
+		}
+	}
+	st := gridPageState{size: size, hostPages: sourceHostSlicesOn(fields["source"], string(key))}
+	if st.hostPages {
+		if total, ok := r.resolveRowTotal(fields["rowTotal"]); ok {
+			st.lastPage, st.hasLast = gridPageCountOf(size, total), true
+		}
+	} else {
+		st.lastPage, st.hasLast = gridPageCountOf(size, rowCount), true
+	}
+	st.page = max(1, requested)
+	if st.hasLast {
+		st.page = min(st.page, st.lastPage)
+	}
+	return st, true
+}
+
+// gridRowWindow is a validated window descriptor.
+type gridRowWindow struct{ offset, count int }
+
+// gridWindowOfValue validates a window descriptor: usable only as an object
+// whose offset is an integer >= 0 and whose count an integer >= 1. Every other
+// shape is NO window, so no malformed value can hide a row.
+func gridWindowOfValue(v wire.Value) (gridRowWindow, bool) {
+	obj, ok := v.(wire.Obj)
+	if !ok {
+		return gridRowWindow{}, false
+	}
+	offset, offOK := gridJSONInt(obj.Fields["offset"])
+	count, countOK := gridJSONInt(obj.Fields["count"])
+	if offOK && countOK && offset >= 0 && count >= 1 {
+		return gridRowWindow{offset, count}, true
+	}
+	return gridRowWindow{}, false
+}
+
+// resolveRowTotal resolves a declared rowTotal: an integer >= 0, or ok false —
+// no declared total, so the total is unknown rather than guessed. A fractional
+// or negative value is refused.
+func (r *renderer) resolveRowTotal(binding wire.Value) (int, bool) {
+	if binding == nil {
+		return 0, false
+	}
+	n, ok := gridJSONInt(r.scalarNumber(binding))
+	if !ok || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// presentedWindow is the window a grid presents: its rows, the index of the
+// first in the range, the range's size (hasTotal false where it is unknown),
+// and whether a window is in effect at all.
+type presentedWindow struct {
+	rows     []wire.Obj
+	offset   int
+	total    int
+	hasTotal bool
+	windowed bool
+}
+
+// presentGridWindow is the window a grid presents over rows (the range it
+// holds after sort and page). A host-windowed grid slices nothing: the rows ARE
+// the window, its position is the descriptor's offset (0 where there is none
+// yet) and its total the declared one. Otherwise the offset clamps to
+// min(offset, max(0, n - count)) — a window past the end presents the last
+// full window — and the total is the range's own row count.
+func presentGridWindow(hostWindows bool, total int, hasTotal bool, window gridRowWindow, hasWindow bool, rows []wire.Obj) presentedWindow {
+	if hostWindows {
+		offset := 0
+		if hasWindow {
+			offset = window.offset
+		}
+		return presentedWindow{rows: rows, offset: offset, total: total, hasTotal: hasTotal, windowed: true}
+	}
+	n := len(rows)
+	if !hasWindow {
+		return presentedWindow{rows: rows, total: n, hasTotal: true}
+	}
+	offset := min(window.offset, max(0, n-window.count))
+	end := min(n, offset+window.count)
+	return presentedWindow{rows: rows[offset:end], offset: offset, total: n, hasTotal: true, windowed: true}
+}
+
+// rowCount is the table's aria-rowcount: the total plus the header row, -1
+// where the total is unknown; ok false where no window is in effect.
+func (w *presentedWindow) rowCount() (int, bool) {
+	if w == nil || !w.windowed {
+		return 0, false
+	}
+	if !w.hasTotal {
+		return -1, true
+	}
+	return w.total + 1, true
+}
+
+// rowIndex is a presented row's aria-rowindex (its 0-based index in the range
+// plus 2, the header being row 1); ok false where no window is in effect.
+func (w *presentedWindow) rowIndex(i int) (int, bool) {
+	if w == nil || !w.windowed {
+		return 0, false
+	}
+	return w.offset + i + 2, true
+}
+
+// windowedGrid renders a grid naming a windowStateKey: sort, then page (only
+// where the grid holds its whole set), then window, all from the seeded State.
+// The pager of a paged grid is inert here (this host writes nothing back); a
+// host-paged grid states its page count only when the document declares
+// rowTotal. A grid naming no window key never reaches this and renders exactly
+// as it did before Phase 1892.
+func (r *renderer) windowedGrid(columns []wire.Obj, rows wire.Arr, fields map[string]wire.Value, hasRowAction bool) string {
+	windowKey, _ := fields["windowStateKey"].(wire.Str)
+	ordered := gridObjRows(rows)
+	if column, direction, ok := r.effectiveGridSort(fields); ok {
+		ordered = sortGridRows(columns, column, direction, ordered)
+	}
+	hostWindows := sourceHostSlicesOn(fields["source"], string(windowKey))
+	page, paged := r.gridPage(fields, len(ordered))
+	pageRows := ordered
+	if paged && !page.hostPages && !hostWindows {
+		pageRows = sliceGridRowsToPage(page.size, page.page, ordered)
+	}
+	total, hasTotal := 0, false
+	if hostWindows {
+		total, hasTotal = r.resolveRowTotal(fields["rowTotal"])
+	}
+	descriptor, hasWindow := gridWindowOfValue(r.sources.Values[string(windowKey)])
+	window := presentGridWindow(hostWindows, total, hasTotal, descriptor, hasWindow, pageRows)
+	table := boundGrid(columns, rows, hasRowAction, &window)
+	if !paged {
+		return table
+	}
+	status := "Page " + strconv.Itoa(page.page)
+	if page.hasLast {
+		status += " of " + strconv.Itoa(page.lastPage)
+	}
+	step := func(label string) string {
+		return textElement("button", []attr{{"class", "fuaran-grid-pager-step"}, {"type", "button"}, {"disabled", ""}}, label)
+	}
+	pager := element("nav", []attr{{"class", "fuaran-grid-pager"}, {"aria-label", "Pagination"}},
+		step("Previous")+
+			textElement("span", []attr{{"class", "fuaran-grid-pager-status"}, {"aria-live", "polite"}}, status)+
+			step("Next"))
+	return element("div", []attr{{"class", "fuaran-grid-paged"}}, table+pager)
 }
 
 // dataGrid: a static read-only grid renders the semantic <table>.
@@ -2309,7 +2678,12 @@ func (r *renderer) dataGrid(fields map[string]wire.Value) string {
 	columns := gridColumns(fields["columns"])
 	if rows, ok := resolved.(wire.Arr); ok && anyFieldProjected(columns) {
 		_, hasRowAction := fields["onRowClick"]
-		return boundGrid(columns, rows, hasRowAction)
+		// Phase 1912 — a grid naming a windowStateKey presents its window
+		// (sort → page → window); every other grid is byte-identical.
+		if _, windowed := fields["windowStateKey"].(wire.Str); windowed {
+			return r.windowedGrid(columns, rows, fields, hasRowAction)
+		}
+		return boundGrid(columns, rows, hasRowAction, nil)
 	}
 	count := seqLen(resolved)
 	return textElement("div", []attr{

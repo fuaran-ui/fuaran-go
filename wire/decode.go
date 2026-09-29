@@ -4186,8 +4186,8 @@ func init() {
 			// names the State key carrying the window descriptor
 			// `{"offset": N, "count": M}`; `rowTotal` is an int Binding decoded
 			// exactly as the other int Binding slots (Tabs.activeIndex /
-			// Stepper.activeStep). Both are encode-omitted when absent. This host
-			// is codec only: the window function is not implemented here.
+			// Stepper.activeStep). Both are encode-omitted when absent. The
+			// renderer applies the window (Phase 1912: renderer.windowedGrid).
 			s.opt("rowTotal", decodeBindingInt)
 			s.opt("windowStateKey", decodeString)
 			return s.build("DataGrid")
