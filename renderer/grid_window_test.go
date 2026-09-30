@@ -10,6 +10,15 @@ package renderer
 // and window function, exactly as the family's description prescribes. The
 // render half pins what the vectors cannot reach: the ARIA annotations, the
 // declared-total pager, and that a grid naming no window key is unchanged.
+//
+// Why the render half lives HERE and not in render-fidelity.json (decided in
+// Phase 1919): the shared fidelity table's DataGrid entry carries no window
+// obligation, deliberately. The specification states the annotations as a
+// SHOULD, and the table's obligations are closed-vocabulary claims every host
+// that renders the kind must assert or be red over; the rows and the total —
+// the part every host MUST agree on — are already certified cross-host by the
+// grid-window/ vectors above. Promoting the annotations to an obligation is a
+// specification change first (SHOULD to MUST), not a table edit.
 
 import (
 	"bytes"
