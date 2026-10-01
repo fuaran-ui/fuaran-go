@@ -24,10 +24,10 @@ package fuarango
 // 0.0.6-alpha also carries the Phase 1962 WIRE-BREAKING change to the Select
 // `value` rule: a multi-select (`"multiple":true`) carries its selection in
 // `values` and NO `value`; a single-select still requires `value`. The decoder
-// drops a multi-select's empty-Static placeholder `value` (a §16 lenient accept,
-// so every earlier document still reads, re-encoding one member shorter), refuses
-// any other multi-select `value` WRONG_TYPE at `<select>.value`, and still
-// refuses a single-select without `value` MISSING_FIELD. A reader behind this
+// decodes a multi-select's `value` (a malformed binding still refuses) and then
+// drops it (a §16 lenient accept, so every earlier document still reads,
+// re-encoding one member shorter), and still refuses a single-select without
+// `value` MISSING_FIELD. A reader behind this
 // change refuses a new multi-select with MISSING_FIELD. No Go signature moves.
 // It rides 0.0.6-alpha because that draft is untagged and already carries a
 // breaking class.

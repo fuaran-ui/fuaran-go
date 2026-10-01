@@ -1894,10 +1894,10 @@ func refuseNestedConfirm(action Value, path string) {
 // decodeSelectValue applies the Phase 1962 `value` rule (WIRE_FORMAT.md, "Select
 // multi-select"): a single-select (`multiple` absent or false) REQUIRES `value`;
 // a multi-select carries its selection in `values` and no `value`. On a
-// multi-select a present `value` that is the empty-Static placeholder
-// (`{"$type":"Static"}` / `{"$type":"Static","value":null}`) is a §16 lenient
-// accept and is dropped; any other `value` is a second selection the control
-// never reads, refused WRONG_TYPE at `<path>.value`. A malformed `multiple` is
+// multi-select a present `value` is decoded exactly as before — so a malformed
+// binding still refuses as any malformed binding does — and then DROPPED (a §16
+// lenient accept: the control never reads it, and earlier documents carrying a
+// placeholder or a real binding there keep reading). A malformed `multiple` is
 // its own defect (reported when `multiple` itself decodes), so the presence rule
 // is not applied: `value` decodes if present and is not demanded. The raw
 // `multiple` is peeked rather than decoded here so the field decode order — and
@@ -1920,12 +1920,8 @@ func decodeSelectValue(s *spec) {
 		if !ok {
 			return
 		}
-		path := s.path + ".value"
-		if v := decodeBindingStringOpt(s.w, raw, path); isTagOnly(v, "Static") {
-			return
-		}
-		fail(CodeWrongType, path,
-			"a multi-select Select (multiple: true) carries its selection in 'values' and no 'value' (WIRE_FORMAT.md, Select multi-select, Phase 1962)")
+		// Decode for its defects, then drop: the value is never stored.
+		decodeBindingStringOpt(s.w, raw, s.path+".value")
 	}
 }
 
