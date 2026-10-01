@@ -41,6 +41,18 @@ import (
 	"unicode/utf16"
 )
 
+// MirroredCoreVersion is the Fuaran.Core version whose capability semantics
+// this twin mirrors — declared once, here, beside the twin.
+//
+// The corpus's capability-law vectors (`laws/capability-laws.json`) are emitted
+// by Core and stamped with the Core version that emitted them (`kitVersion`).
+// This twin certifies against the vectors of the Core it mirrors; a copy
+// stamped for any other Core is the cut-to-raise window, and the capability
+// leg reports it by name rather than asserting it. Raised to the Core version
+// the twin is brought up to: fuaran#1966 raises it to 0.33.0 when it moves
+// determinism to the factor set (fuaran-core Phase 319).
+const MirroredCoreVersion = "0.32.0"
+
 // EffectClass is the total two-axis effect declaration: what host state a body
 // touches, and what makes it non-reproducible. The wire spellings are the
 // canonical ones (`pure` / `readsHost` / `writesHost`, and `deterministic` /
