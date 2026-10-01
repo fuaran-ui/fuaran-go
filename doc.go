@@ -21,6 +21,17 @@ package fuarango
 
 // Version is the pre-release version of the fuaran-go host.
 //
+// 0.0.6-alpha also carries the Phase 1962 WIRE-BREAKING change to the Select
+// `value` rule: a multi-select (`"multiple":true`) carries its selection in
+// `values` and NO `value`; a single-select still requires `value`. The decoder
+// drops a multi-select's empty-Static placeholder `value` (a §16 lenient accept,
+// so every earlier document still reads, re-encoding one member shorter), refuses
+// any other multi-select `value` WRONG_TYPE at `<select>.value`, and still
+// refuses a single-select without `value` MISSING_FIELD. A reader behind this
+// change refuses a new multi-select with MISSING_FIELD. No Go signature moves.
+// It rides 0.0.6-alpha because that draft is untagged and already carries a
+// breaking class.
+//
 // 0.0.6-alpha also carries the Phase 1663 COMPILE-BREAKING change to
 // renderer.BindingSources: the bare map[string]wire.Value becomes a STRUCT whose
 // Values member is that map, beside two host members the type had nowhere to

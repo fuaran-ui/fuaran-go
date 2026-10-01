@@ -1891,6 +1891,44 @@ func refuseNestedConfirm(action Value, path string) {
 	}
 }
 
+// decodeSelectValue applies the Phase 1962 `value` rule (WIRE_FORMAT.md, "Select
+// multi-select"): a single-select (`multiple` absent or false) REQUIRES `value`;
+// a multi-select carries its selection in `values` and no `value`. On a
+// multi-select a present `value` that is the empty-Static placeholder
+// (`{"$type":"Static"}` / `{"$type":"Static","value":null}`) is a §16 lenient
+// accept and is dropped; any other `value` is a second selection the control
+// never reads, refused WRONG_TYPE at `<path>.value`. A malformed `multiple` is
+// its own defect (reported when `multiple` itself decodes), so the presence rule
+// is not applied: `value` decodes if present and is not demanded. The raw
+// `multiple` is peeked rather than decoded here so the field decode order — and
+// with it which defect surfaces first — is unchanged.
+func decodeSelectValue(s *spec) {
+	rawMultiple, hasMultiple := s.obj["multiple"]
+	isBoolMultiple := false
+	multiple := false
+	if hasMultiple {
+		// The same unwrap decodeBool applies (a Static-wrapped bool is a bool).
+		multiple, isBoolMultiple = unwrapStaticAny(rawMultiple).(bool)
+	}
+	switch {
+	case !hasMultiple || (isBoolMultiple && !multiple):
+		s.req("value", decodeBindingStringOpt)
+	case !isBoolMultiple:
+		s.opt("value", decodeBindingStringOpt)
+	default:
+		raw, ok := s.take("value")
+		if !ok {
+			return
+		}
+		path := s.path + ".value"
+		if v := decodeBindingStringOpt(s.w, raw, path); isTagOnly(v, "Static") {
+			return
+		}
+		fail(CodeWrongType, path,
+			"a multi-select Select (multiple: true) carries its selection in 'values' and no 'value' (WIRE_FORMAT.md, Select multi-select, Phase 1962)")
+	}
+}
+
 // ── Spec builder ────────────────────────────────────────────────────────────
 
 type fieldDecoder func(w *walkState, raw any, path string) Value
@@ -3729,12 +3767,14 @@ var requiredKindFields = map[string][]string{
 	"Embed": {"src", "title"},
 	// Phase 1120 — the rows. Both State keys are optional (a tree naming no
 	// `expandedStateKey` renders fully expanded and does not toggle).
-	"Tree":       {"items"},
-	"List":       {"items", "ordered"},
-	"Toast":      {"message", "open"},
-	"CodeBlock":  {"code", "copyable", "highlightLines", "language", "lineNumbers"},
-	"Math":       {"display", "source"},
-	"Drawing":    {"shapes", "style", "viewBox"},
+	"Tree":      {"items"},
+	"List":      {"items", "ordered"},
+	"Toast":     {"message", "open"},
+	"CodeBlock": {"code", "copyable", "highlightLines", "language", "lineNumbers"},
+	"Math":      {"display", "source"},
+	"Drawing":   {"shapes", "style", "viewBox"},
+	// Phase 1962 — `value` is required only on a single-select; the validator
+	// exempts a multi-select (`multiple: true`), which carries `values` instead.
 	"Select":     {"label", "source", "value"},
 	"Modal":      {"children", "dismissable", "open"},
 	"ScrollArea": {"children", "orientation"},
@@ -4043,7 +4083,7 @@ func init() {
 			s.req("label", decodeTextSource)
 			s.sentinel("onChange")
 			s.req("source", decodeBindingSelectOptions, "options", "data")
-			s.req("value", decodeBindingStringOpt)
+			decodeSelectValue(s)
 			s.opt("disabled", decodeBindingBool)
 			s.opt("placeholder", decodeTextSource)
 			s.optDrop("multiple", decodeBool, isFalseValue)

@@ -60,6 +60,33 @@ func TestDuplicateChildIDIsFlagged(t *testing.T) {
 	}
 }
 
+// Phase 1962 — `value` is required on a single-select only: a multi-select
+// carries its selection in `values` and no `value`.
+func TestSelectValueRequiredOnlyOnSingleSelect(t *testing.T) {
+	missingValue := func(multiple bool) bool {
+		fields := map[string]wire.Value{
+			"label":  wire.Obj{Tag: "Literal", Fields: map[string]wire.Value{"text": wire.Str("Tags")}},
+			"source": wire.Obj{Tag: "Static", Fields: map[string]wire.Value{"value": wire.Arr{}}},
+		}
+		if multiple {
+			fields["multiple"] = wire.Bool(true)
+			fields["values"] = wire.Obj{Tag: "State", Fields: map[string]wire.Value{"key": wire.Str("tags")}}
+		}
+		for _, f := range ValidateNode(wire.Node{ID: "s", Kind: wire.Obj{Tag: "Select", Fields: fields}}) {
+			if f.Code == "MISSING_REQUIRED_FIELD" && f.Path == "$.kind.value" {
+				return true
+			}
+		}
+		return false
+	}
+	if !missingValue(false) {
+		t.Error("a single-select without value must report MISSING_REQUIRED_FIELD at $.kind.value")
+	}
+	if missingValue(true) {
+		t.Error("a multi-select without value must not report MISSING_REQUIRED_FIELD at $.kind.value")
+	}
+}
+
 func TestUnknownKindIsFlagged(t *testing.T) {
 	node := wire.Node{ID: "a", Kind: wire.Obj{Tag: "Sparkler", Fields: map[string]wire.Value{}}}
 	findings := ValidateNode(node)

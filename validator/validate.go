@@ -83,6 +83,12 @@ func walk(node wire.Node, path string, findings *[]Finding, seen map[string]bool
 		// field would fail decode on every conformant host — surface it
 		// before emit instead.
 		for _, field := range required {
+			// Phase 1962 — a multi-select Select carries its selection in
+			// `values` and no `value`; `value` is required only on a
+			// single-select (WIRE_FORMAT.md, "Select multi-select").
+			if field == "value" && isMultiSelect(node.Kind) {
+				continue
+			}
 			if _, present := node.Kind.Fields[field]; !present {
 				*findings = append(*findings, Finding{
 					Code: "MISSING_REQUIRED_FIELD", Path: kindPath + "." + field,
@@ -647,4 +653,13 @@ func checkFilterEdges(root wire.Node, findings *[]Finding) {
 			})
 		}
 	}
+}
+
+// isMultiSelect reports a Select whose `multiple` is true.
+func isMultiSelect(kind wire.Obj) bool {
+	if kind.Tag != "Select" {
+		return false
+	}
+	multiple, ok := kind.Fields["multiple"].(wire.Bool)
+	return ok && bool(multiple)
 }
