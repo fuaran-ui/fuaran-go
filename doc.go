@@ -30,7 +30,10 @@ package fuarango
 // `value` MISSING_FIELD. A reader behind this
 // change refuses a new multi-select with MISSING_FIELD. No Go signature moves.
 // It rides 0.0.6-alpha because that draft is untagged and already carries a
-// breaking class.
+// breaking class. Amendment (operator ruling 2026-10-01): `multiple` is now kept
+// AS AUTHORED, so an explicit `"multiple":false` re-encodes as written instead of
+// being dropped (WIRE_FORMAT §3.2: not omit-at-default; corpus fixture
+// nodes/select-multiple-false.json); an absent one stays absent.
 //
 // 0.0.6-alpha also carries the Phase 1663 COMPILE-BREAKING change to
 // renderer.BindingSources: the bare map[string]wire.Value becomes a STRUCT whose

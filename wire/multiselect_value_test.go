@@ -48,3 +48,30 @@ func TestMultiSelectMalformedValueStillRefuses(t *testing.T) {
 		t.Errorf("path = %q, want it under $.kind.value", derr.Path)
 	}
 }
+
+// Phase 1962 amendment — `multiple` is emitted AS AUTHORED, never
+// omit-at-default: an absent `multiple` stays absent, and an explicit false or
+// true re-encodes as written (nodes/select-multiple-false.json in the corpus).
+func TestSelectMultipleRoundTripsAsAuthored(t *testing.T) {
+	const src = `"source":{"$type":"Static","value":[{"label":"Red","value":"red"}]},`
+	for _, tc := range []struct{ name, wire string }{
+		{"absent", `{"id":"s","kind":{"$type":"Select","label":"Tags",` + src +
+			`"value":{"$type":"Static","value":"red"}}}`},
+		{"false", `{"id":"s","kind":{"$type":"Select","label":"Tags","multiple":false,` + src +
+			`"value":{"$type":"Static","value":"red"}}}`},
+		{"true", `{"id":"s","kind":{"$type":"Select","label":"Tags","multiple":true,` + src +
+			`"values":{"$type":"State","key":"tags"}}}`},
+	} {
+		node, err := DecodeNode(tc.wire)
+		if err != nil {
+			t.Fatalf("%s: DecodeNode: %v", tc.name, err)
+		}
+		got, err := EncodeNode(node)
+		if err != nil {
+			t.Fatalf("%s: EncodeNode: %v", tc.name, err)
+		}
+		if got != tc.wire {
+			t.Errorf("%s: not re-encoded as authored:\n got %s\nwant %s", tc.name, got, tc.wire)
+		}
+	}
+}

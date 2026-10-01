@@ -4073,7 +4073,9 @@ func init() {
 		// The handler fields are OPTIONAL: omitted on the wire when the
 		// control is declarative; present as the "<closure>" sentinel when
 		// closure-authored. `options` / `data` alias `source`. Phase 291 —
-		// multiple omitted-when-false; values omitted when absent.
+		// values omitted when absent. Phase 1962 — `multiple` is an ordinary
+		// optional field kept AS AUTHORED: an explicit false survives the round
+		// trip (it is not omit-at-default; nodes/select-multiple-false.json).
 		"Select": func(w *walkState, obj map[string]any, path string) Obj {
 			s := newSpec(w, obj, path)
 			s.req("label", decodeTextSource)
@@ -4082,7 +4084,7 @@ func init() {
 			decodeSelectValue(s)
 			s.opt("disabled", decodeBindingBool)
 			s.opt("placeholder", decodeTextSource)
-			s.optDrop("multiple", decodeBool, isFalseValue)
+			s.opt("multiple", decodeBool)
 			s.opt("values", decodeBindingStringList)
 			s.sentinel("onChangeMulti")
 			return s.build("Select")
