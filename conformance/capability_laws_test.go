@@ -29,6 +29,17 @@
 // here: a count in prose drifts the first time the sample is regenerated, and a
 // harness that pins its own copy of a number the corpus owns would then fail
 // for the wrong reason.
+//
+// THE CUT-TO-RAISE WINDOW. Core emits this file and stamps it with the Core
+// version that emitted it (`kitVersion`); this host's twin declares the Core
+// version it mirrors (MirroredCoreVersion, beside the twin in
+// internal/core/function). Core re-emits the corpus copy when it cuts, which
+// is before any twin is raised to match. A copy stamped for another Core is
+// therefore REPORTED — skipped by name with the reason — and never asserted,
+// and never read as a pass; the window closes when the twin is raised. A corpus
+// that carries no capability family, no vector file or no stamp is a FAILURE,
+// never a skip: only a checkout with no corpus (or no laws/ family index)
+// beside it skips.
 package conformance
 
 import (
@@ -38,6 +49,7 @@ import (
 	"testing"
 
 	"github.com/fuaran-ui/fuaran-go/function"
+	twin "github.com/fuaran-ui/fuaran-go/internal/core/function"
 )
 
 type lawFamily struct {
@@ -89,7 +101,9 @@ type capabilityLawFile struct {
 
 // loadCapabilityLaws locates the `laws/` family beside the wire corpus and
 // returns its manifest record together with the vector file. Skips on a
-// standalone checkout, matching every other corpus leg in this package.
+// standalone checkout, matching every other corpus leg in this package, and
+// skips — loudly, by name — inside the cut-to-raise window (see the file
+// header); a missing vector file or stamp fails.
 func loadCapabilityLaws(t *testing.T) (lawFamily, capabilityLawFile) {
 	t.Helper()
 	corpus := findCorpus()
@@ -128,6 +142,9 @@ func loadCapabilityLaws(t *testing.T) (lawFamily, capabilityLawFile) {
 	if err := json.Unmarshal(vectorRaw, &file); err != nil {
 		t.Fatalf("%s is not valid JSON: %v", family.File, err)
 	}
+	if file.KitVersion == "" {
+		t.Fatalf("%s carries no kitVersion — it is Core's; re-emit it", family.File)
+	}
 
 	// The manifest and the file each declare the sample. They are written by
 	// one emitter, so a disagreement means the corpus was edited by hand —
@@ -142,6 +159,15 @@ func loadCapabilityLaws(t *testing.T) (lawFamily, capabilityLawFile) {
 	}
 	if len(file.Vectors) != family.Vectors {
 		t.Fatalf("%s carries %d vectors, manifest says %d", family.File, len(file.Vectors), family.Vectors)
+	}
+
+	// The cut-to-raise window: the copy describes a Core this twin does not
+	// mirror yet. The twin is certified only against the Core it mirrors, so
+	// the gap is reported, loudly and by name, never read as a pass — and it
+	// closes when the twin is raised.
+	if file.KitVersion != twin.MirroredCoreVersion {
+		t.Skipf("CAPABILITY VECTORS NOT CERTIFIED: the corpus copy is stamped for Core %s and this twin mirrors Core %s — raise the twin to certify against it",
+			file.KitVersion, twin.MirroredCoreVersion)
 	}
 	return family, file
 }
