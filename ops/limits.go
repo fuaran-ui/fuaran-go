@@ -20,16 +20,18 @@ import (
 // finished. Checking here names the op that crossed the line, at the moment it
 // crossed it.
 //
-// ONLY THE THREE GROWING OPS ARE CHECKED — InsertChild, ReplaceRoot, and Batch
-// (which can contain either). The other seven cannot increase depth or count:
-// UpdateProp, ReplaceBinding, UpdateStyle, UpdateState and EditNode rewrite a
-// node in place, and RemoveNode and MoveNode shrink or reshape. Checking them
-// would cost a full tree walk per op on the hot path to establish something
-// their own semantics already guarantee. MoveNode is the one worth naming
-// explicitly: it relocates a subtree, so it CAN deepen the tree — but only
-// within a total node count that cannot change, and the depth it can reach is
-// bounded by the tree that already passed. A tree that is already over the
-// limit got there through an insert.
+// WHICH OPS ARE CHECKED IS DERIVED FROM WHAT THEY CARRY, not listed. An op that
+// puts nodes into the tree (insertedNodes non-empty) is checked: InsertChild,
+// ReplaceRoot, an EditNode whose new kind holds children, an UpdateState that
+// attaches onLoading / onEmpty. The derivation reads NODES, never ids, because
+// a payload whose ids repeat has fewer ids than nodes. MoveNode is checked as
+// well: it adds no node, but moving one legal branch under the leaf of another
+// stacks two depths that each passed. A Batch is checked when any member is.
+//
+// The rest cannot grow the tree and are not charged a walk: UpdateProp,
+// ReplaceBinding and UpdateStyle carry no node, RemoveNode shrinks, and
+// ReorderChildren permutes. They still apply to a tree that is already over a
+// limit, which they did not put there.
 
 // CodeLimitExceeded — the applied tree breaches a §21 wire limit. Named the
 // same on every host, because a client that recovers from it must not have to
@@ -73,11 +75,60 @@ func checkTreeLimits(tree wire.Node) *ApplyError {
 	return nil
 }
 
+// insertedNodes returns the subtree roots op puts INTO the tree, in the order
+// it names them: an inserted child, a replacement root, the nodes a new kind
+// holds (EditNode), a new state block's onLoading / onEmpty (UpdateState), and
+// a Batch's members' insertions. Every other op carries no node.
+func insertedNodes(op wire.Obj) []wire.Node {
+	switch op.Tag {
+	case "InsertChild":
+		if child, ok := op.Fields["child"].(wire.Node); ok {
+			return []wire.Node{child}
+		}
+	case "ReplaceRoot":
+		if node, ok := op.Fields["node"].(wire.Node); ok {
+			return []wire.Node{node}
+		}
+	case "EditNode":
+		if kind, ok := op.Fields["newKind"].(wire.Obj); ok {
+			// An envelope-free carrier, so only the kind's own positions are
+			// enumerated: the edited node keeps its existing state block.
+			var held []wire.Node
+			for _, slot := range childSlots(wire.Node{Kind: kind}) {
+				held = append(held, slot.child)
+			}
+			return held
+		}
+	case "UpdateState":
+		if state, ok := op.Fields["state"].(wire.Obj); ok {
+			var held []wire.Node
+			for _, key := range []string{"onLoading", "onEmpty"} {
+				if n, ok := state.Fields[key].(wire.Node); ok {
+					held = append(held, n)
+				}
+			}
+			return held
+		}
+	case "Batch":
+		if inner, ok := op.Fields["ops"].(wire.Arr); ok {
+			var held []wire.Node
+			for _, item := range inner {
+				if innerOp, ok := item.(wire.Obj); ok {
+					held = append(held, insertedNodes(innerOp)...)
+				}
+			}
+			return held
+		}
+	}
+	return nil
+}
+
 // opCanGrow reports whether an op can increase the tree's depth or node count,
-// and therefore whether the result needs checking.
+// and therefore whether the result needs checking: MoveNode, any op that puts
+// nodes in, or a Batch containing either.
 func opCanGrow(op wire.Obj) bool {
 	switch op.Tag {
-	case "InsertChild", "ReplaceRoot":
+	case "MoveNode":
 		return true
 	case "Batch":
 		inner, ok := op.Fields["ops"].(wire.Arr)
@@ -91,7 +142,7 @@ func opCanGrow(op wire.Obj) bool {
 		}
 		return false
 	default:
-		return false
+		return len(insertedNodes(op)) > 0
 	}
 }
 
