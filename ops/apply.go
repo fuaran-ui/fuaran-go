@@ -73,7 +73,54 @@ func Apply(op wire.Obj, tree wire.Node) (wire.Node, error) {
 			return tree, limitErr
 		}
 	}
+	// The §8.1 id-uniqueness guard, AFTER the limits: an op breaching both
+	// reports LimitExceeded (the limitsApply corpus pins that order).
+	if dupErr := checkInstalledIDs(insertedNodes(op), result); dupErr != nil {
+		return tree, dupErr
+	}
 	return result, nil
+}
+
+// checkInstalledIDs refuses a result in which an id the op installed is held
+// by more than one node (WIRE_FORMAT §8.1).
+//
+// Every op addresses its target by id alone, so a tree that repeats one makes
+// every later id-addressed op ambiguous. The decoder accepts a repeated id, and
+// an apply could BUILD one from parts that each decoded cleanly: a ReplaceRoot
+// whose payload repeats an id, an EditNode or UpdateState whose new nodes
+// collide with the rest of the tree, an InsertChild whose subtree repeats one
+// (Phase 2172).
+//
+// It reads the RESULT and charges the op only for the ids it installed. That
+// is what lets an EditNode restate the children it replaces and an UpdateState
+// replace an alternative with one of the same id: the old node leaves as the
+// new one arrives. A duplicate already present before the op is not the op's
+// to refuse - the decoder admits such a tree, and refusing every later edit to
+// it would strand a document the op did not break, the posture the limits
+// guard takes toward a tree already over a limit. A Batch is checked once, on
+// the tree it produces.
+//
+// Cost: one walk of the result to count ids and one of the installed subtrees,
+// paid only by an op that installs nodes. This host keeps no id index, so the
+// rest of the tree must be walked to know what an installed id could collide
+// with.
+func checkInstalledIDs(installed []wire.Node, result wire.Node) *ApplyError {
+	if len(installed) == 0 {
+		return nil
+	}
+	counts := make(map[string]int)
+	for _, id := range allIDs(result) {
+		counts[id]++
+	}
+	for _, n := range installed {
+		for _, id := range allIDs(n) {
+			if counts[id] > 1 {
+				return apErr(CodeDuplicateNodeID, fmt.Sprintf(
+					"NodeId '%s' is already present in the tree; ids must be unique.", id))
+			}
+		}
+	}
+	return nil
 }
 
 // CanApply is the dry-run: it reports whether op would apply cleanly to tree,

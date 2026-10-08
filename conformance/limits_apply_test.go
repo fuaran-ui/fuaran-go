@@ -13,7 +13,8 @@ import (
 
 // Certifies the apply engine against the shared apply/limits-apply.json family
 // (Phase 2141): an op that can grow the tree is checked on its result, and one
-// that takes the tree past a wire limit is refused with LimitExceeded. Each
+// that takes the tree past a wire limit is refused with LimitExceeded. The same
+// runner certifies apply/duplicate-ids-apply.json (Phase 2172). Each
 // vector's tree and op are decoded by this host's own decoder and applied.
 
 const limitsCorpusEnvVar = "FUARAN_WIRE_FIXTURES"
@@ -43,7 +44,15 @@ type limitsVector struct {
 	} `json:"expected"`
 }
 
-func TestLimitsApplyCorpus(t *testing.T) {
+func TestLimitsApplyCorpus(t *testing.T) { certifyApplyFamily(t, "limitsApply") }
+
+// TestDuplicateIdsApplyCorpus certifies the apply/duplicate-ids-apply.json
+// family (Phase 2172): an op that leaves an id it installed held twice is
+// refused with DuplicateNodeId.
+func TestDuplicateIdsApplyCorpus(t *testing.T) { certifyApplyFamily(t, "duplicateIdsApply") }
+
+// certifyApplyFamily decodes and applies every vector of one apply/ family.
+func certifyApplyFamily(t *testing.T, familyID string) {
 	root := limitsCorpusRoot(t)
 	if root == "" {
 		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
@@ -60,12 +69,12 @@ func TestLimitsApplyCorpus(t *testing.T) {
 
 	file, declared := "", -1
 	for _, f := range manifest.Families {
-		if f.ID == "limitsApply" {
+		if f.ID == familyID {
 			file, declared = f.File, f.Vectors
 		}
 	}
 	if file == "" {
-		t.Fatal("apply/manifest.json declares no limitsApply family")
+		t.Fatalf("apply/manifest.json declares no %s family", familyID)
 	}
 
 	var family struct {
@@ -73,7 +82,7 @@ func TestLimitsApplyCorpus(t *testing.T) {
 	}
 	readJSON(t, filepath.Join(root, "apply", file), &family)
 	if len(family.Vectors) != declared {
-		t.Fatalf("limitsApply holds %d vectors, the manifest declares %d", len(family.Vectors), declared)
+		t.Fatalf("%s holds %d vectors, the manifest declares %d", familyID, len(family.Vectors), declared)
 	}
 
 	for _, v := range family.Vectors {

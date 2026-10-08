@@ -21,6 +21,19 @@ package fuarango
 
 // Version is the pre-release version of the fuaran-go host.
 //
+// 0.0.6-alpha also carries the Phase 2172 BEHAVIOUR change to ops.Apply: an op
+// whose result holds an id the op installed more than once is refused with
+// DuplicateNodeId. A ReplaceRoot whose payload repeats an id, an EditNode or
+// UpdateState whose new nodes collide with the tree, and an InsertChild whose
+// subtree repeats an id within itself were each accepted before, leaving every
+// later id-addressed op ambiguous. The check reads the result and charges the op
+// only for what it installed, so restating a node the op replaces still applies
+// and a duplicate already in the tree is not the op's; LimitExceeded takes
+// precedence, and a Batch is checked once, on its result. Conformance is the
+// corpus's apply/duplicate-ids-apply.json family. It rides the untagged draft:
+// the draft already carries a compile-breaking class, and no exported signature
+// moves.
+//
 // 0.0.6-alpha also carries the Phase 1663 COMPILE-BREAKING change to
 // renderer.BindingSources: the bare map[string]wire.Value becomes a STRUCT whose
 // Values member is that map, beside two host members the type had nowhere to
