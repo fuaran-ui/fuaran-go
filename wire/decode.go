@@ -2804,7 +2804,8 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 	case "Checkbox", "Toggle":
 		// Phase 766 — Toggle is Checkbox's data twin (a boolean with the same
 		// write-back) under a distinct control / a11y contract (role="switch").
-		handler("onToggle")
+		// Phase 2177 — its change handler is `onChange`, as on every form-field kind.
+		handler("onChange")
 		valueSlot(decodeBindingBool)
 	case "Choice":
 		handler("onChange")
