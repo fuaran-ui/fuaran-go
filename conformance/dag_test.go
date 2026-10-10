@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/fuaran-ui/fuaran-go/dag"
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 )
 
 // The DAG-record conformance leg: decode each dag/ fixture, re-encode, and
@@ -14,7 +15,7 @@ import (
 // (What-If / Counterfactual / Git-for-Interfaces branch model).
 
 func TestDagCorpus(t *testing.T) {
-	corpus := findCorpus()
+	corpus := corpusroot.ForTest(t)
 	if corpus == "" {
 		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
 	}

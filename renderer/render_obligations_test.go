@@ -43,6 +43,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -107,28 +108,22 @@ type renderFidelityManifest struct {
 const renderFidelityEnvVar = "FUARAN_RENDER_FIDELITY"
 
 // findRenderFidelityArtifact resolves the generated manifest: the environment
-// override if set, else a walk up from the working directory to the shared
-// corpus beside the repo. Returns "" when absent, so the repo stays
+// override if set, else render-fidelity.json in the shared corpus (resolved by
+// internal/corpusroot). Returns "" when absent, so the repo stays
 // standalone-testable (the posture every other corpus-reading test here takes).
 func findRenderFidelityArtifact() string {
 	if override := os.Getenv(renderFidelityEnvVar); override != "" {
 		return override
 	}
-	dir, err := os.Getwd()
-	if err != nil {
+	corpus := corpusroot.MustFind()
+	if corpus == "" {
 		return ""
 	}
-	for {
-		candidate := filepath.Join(dir, "wire-format-fixtures", "render-fidelity.json")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
+	candidate := filepath.Join(corpus, "render-fidelity.json")
+	if _, err := os.Stat(candidate); err != nil {
+		return ""
 	}
+	return candidate
 }
 
 // loadRenderFidelityManifest reads the artefact, skipping on a standalone

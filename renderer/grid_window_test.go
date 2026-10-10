@@ -30,39 +30,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
-// gridWindowCorpusEnvVar redirects the corpus root, the name every host's
-// suite honours; unset, the corpus is found by a walk up from the package.
-const gridWindowCorpusEnvVar = "FUARAN_WIRE_FIXTURES"
-
-// findGridWindowCorpus returns the corpus root, or "" when there is none (a
-// standalone checkout, where the leg skips). A declared root that holds no
-// manifest is a misconfiguration and fails rather than skipping.
+// findGridWindowCorpus returns the corpus root (internal/corpusroot), or ""
+// when there is none (a standalone checkout, where the leg skips). A declared
+// root that holds no manifest is a misconfiguration and fails rather than
+// skipping.
 func findGridWindowCorpus(t *testing.T) string {
 	t.Helper()
-	if declared := os.Getenv(gridWindowCorpusEnvVar); declared != "" {
-		if _, err := os.Stat(filepath.Join(declared, "manifest.json")); err != nil {
-			t.Fatalf("%s=%q does not name a conformance corpus (no manifest.json under it)", gridWindowCorpusEnvVar, declared)
-		}
-		return declared
-	}
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	for {
-		candidate := filepath.Join(dir, "wire-format-fixtures")
-		if _, err := os.Stat(filepath.Join(candidate, "manifest.json")); err == nil {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
-	}
+	return corpusroot.ForTest(t)
 }
 
 // vectorValue lifts a JSON value into the wire model the way a host store
@@ -162,7 +140,7 @@ func TestGridWindowVectorsAgreeWithThisHostsWindowFunction(t *testing.T) {
 	corpus := findGridWindowCorpus(t)
 	if corpus == "" {
 		t.Skipf("wire-format-fixtures corpus not found and %s is unset; "+
-			"NO grid-window vector was certified in this run (standalone checkout)", gridWindowCorpusEnvVar)
+			"NO grid-window vector was certified in this run (standalone checkout)", corpusroot.EnvVar)
 	}
 	raw, err := os.ReadFile(filepath.Join(corpus, "grid-window", "grid-window-vectors.json"))
 	if err != nil {

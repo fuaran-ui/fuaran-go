@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/fuaran-ui/fuaran-go/diff"
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
@@ -178,7 +179,7 @@ func firstLayoutChildID(n wire.Node) (string, bool) {
 // break the canonical re-encode). Skips on a standalone checkout.
 func loadDiffGoldens(t *testing.T) map[string]any {
 	t.Helper()
-	corpus := findCorpus()
+	corpus := corpusroot.ForTest(t)
 	if corpus == "" {
 		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
 	}

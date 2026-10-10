@@ -17,30 +17,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
-
-// findCorpus walks up from the working directory looking for the shared
-// wire-format-fixtures corpus (a sibling of the fuaran-go repo). Returns ""
-// when absent, so the repo stays standalone-testable — the corpus legs skip
-// rather than fail when the repo is checked out alone.
-func findCorpus() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	for {
-		manifest := filepath.Join(dir, "wire-format-fixtures", "manifest.json")
-		if _, err := os.Stat(manifest); err == nil {
-			return filepath.Dir(manifest)
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
-	}
-}
 
 type manifestFixture struct {
 	ID                string `json:"id"`
@@ -64,7 +43,7 @@ type corpusManifest struct {
 // test on a standalone checkout.
 func loadCorpus(t *testing.T) (string, corpusManifest) {
 	t.Helper()
-	corpus := findCorpus()
+	corpus := corpusroot.ForTest(t)
 	if corpus == "" {
 		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
 	}

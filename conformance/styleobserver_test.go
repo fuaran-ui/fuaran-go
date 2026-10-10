@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/styleobserver"
 	tm "github.com/fuaran-ui/fuaran-go/thememanifest"
 )
@@ -33,7 +34,7 @@ type a11yContract struct {
 }
 
 func TestA11yContract(t *testing.T) {
-	corpus := findCorpus()
+	corpus := corpusroot.ForTest(t)
 	if corpus == "" {
 		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
 	}

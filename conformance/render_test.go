@@ -265,7 +265,9 @@ var referenceHostNames = []string{"fuaran-dotnet", "fuaran"}
 // standalone clone. Deliberately excludes this host and the reference host.
 var otherHostNames = []string{"fuaran-ts", "fuaran-py", "fuaran-rs", "fuaran-kt", "fuaran-swift"}
 
-// referenceHostRoot locates the F# reference host beside the corpus.
+// referenceHostRoot locates the F# reference host beside THIS repository — not
+// beside the corpus, which FUARAN_WIRE_FIXTURES may place anywhere (a scratch
+// copy, a spec worktree) without moving the hosts.
 //
 // The skip below is correct for someone who genuinely cloned this repo (plus the
 // corpus) alone — that is why it exists, and why nobody noticed it firing
@@ -273,9 +275,14 @@ var otherHostNames = []string{"fuaran-ts", "fuaran-py", "fuaran-rs", "fuaran-kt"
 // where a missing reference host means the oracle has been silently disabled.
 // So the two cases are separated: any other host present ⇒ hard failure naming
 // what was tried; nothing else present ⇒ the honest standalone skip.
-func referenceHostRoot(t *testing.T, corpus string) string {
+func referenceHostRoot(t *testing.T) string {
 	t.Helper()
-	estate := filepath.Dir(corpus)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	// go test runs in the package directory: conformance → this repo → the estate.
+	estate := filepath.Dir(filepath.Dir(wd))
 	for _, name := range referenceHostNames {
 		if _, err := os.Stat(filepath.Join(estate, name, "src")); err == nil {
 			return filepath.Join(estate, name)
@@ -358,9 +365,9 @@ func fsSourcesUnder(dir string) []string {
 // PROJECTS; explainAbsentClass below searches the whole reference src/ tree for
 // an offending class and names the file that spells it, so a failure says which
 // of the two defects it is.
-func referenceRendererFiles(t *testing.T, corpus string) []string {
+func referenceRendererFiles(t *testing.T) []string {
 	t.Helper()
-	root := referenceHostRoot(t, corpus)
+	root := referenceHostRoot(t)
 	src := filepath.Join(root, "src")
 
 	entries, err := os.ReadDir(src)
@@ -479,11 +486,11 @@ const classPrefixNamespace = "fuaran-"
 // referenceVocabulary returns (exact, prefixes): a token ending in '-' is a
 // composition prefix (fuaran-metric- styles fuaran-metric-brand); the rest
 // are exact class literals.
-func referenceVocabulary(t *testing.T, corpus string) (map[string]bool, []string) {
+func referenceVocabulary(t *testing.T) (map[string]bool, []string) {
 	t.Helper()
 	exact := make(map[string]bool)
 	var prefixes []string
-	for _, path := range referenceRendererFiles(t, corpus) {
+	for _, path := range referenceRendererFiles(t) {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			// NOT a skip: referenceHostRoot already established the reference
@@ -532,7 +539,7 @@ func emittedClasses(html string) map[string]bool {
 // the cross-host parity lock, the rendering analogue of the wire corpus.
 func TestClassVocabularyParity(t *testing.T) {
 	corpus, m := loadCorpus(t)
-	exact, prefixes := referenceVocabulary(t, corpus)
+	exact, prefixes := referenceVocabulary(t)
 	// Guard against an extraction regression silently emptying the oracle.
 	if len(exact) <= 50 || !exact["fuaran-node"] {
 		t.Fatalf("reference vocabulary extraction looks broken: %d exact classes", len(exact))
@@ -565,7 +572,7 @@ func TestClassVocabularyParity(t *testing.T) {
 			for cls := range emittedClasses(html) {
 				checked++
 				if !inVocab(cls) {
-					t.Error(describeOffender(corpus, referenceHostRoot(t, corpus), cls))
+					t.Error(describeOffender(corpus, referenceHostRoot(t), cls))
 				}
 			}
 		})
@@ -584,10 +591,9 @@ func TestClassVocabularyParity(t *testing.T) {
 // passed while the list was two files short) but "does the derivation reach past
 // the list at all, and does it reach the files the drift was hiding in".
 func TestReferenceSourceSetIsDerivedRatherThanListed(t *testing.T) {
-	corpus, _ := loadCorpus(t)
-	root := referenceHostRoot(t, corpus)
+	root := referenceHostRoot(t)
 	src := filepath.Join(root, "src")
-	files := referenceRendererFiles(t, corpus)
+	files := referenceRendererFiles(t)
 
 	var relative []string
 	for _, f := range files {
@@ -624,7 +630,7 @@ func TestReferenceSourceSetIsDerivedRatherThanListed(t *testing.T) {
 // branches apart, and both are unreachable in a green run.
 func TestOffenderExplanationDistinguishesItsTwoBranches(t *testing.T) {
 	corpus, _ := loadCorpus(t)
-	root := referenceHostRoot(t, corpus)
+	root := referenceHostRoot(t)
 
 	// A class the reference spells OUTSIDE the renderer projects
 	// (Fuaran.UI/Defaults.fs): the derivation-gap branch.
@@ -644,8 +650,7 @@ func TestOffenderExplanationDistinguishesItsTwoBranches(t *testing.T) {
 // byte-copy of the canonical artefact (skips only on a genuine standalone
 // checkout — see referenceHostRoot).
 func TestReferenceCSSByteParity(t *testing.T) {
-	corpus, _ := loadCorpus(t)
-	canonical := filepath.Join(referenceHostRoot(t, corpus),
+	canonical := filepath.Join(referenceHostRoot(t),
 		"src", "Fuaran.UI.Renderer", "content", "fuaran-reference.css")
 	raw, err := os.ReadFile(canonical)
 	if err != nil {

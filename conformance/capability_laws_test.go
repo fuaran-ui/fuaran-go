@@ -50,6 +50,7 @@ import (
 
 	"github.com/fuaran-ui/fuaran-go/function"
 	twin "github.com/fuaran-ui/fuaran-go/internal/core/function"
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 )
 
 type lawFamily struct {
@@ -106,7 +107,7 @@ type capabilityLawFile struct {
 // header); a missing vector file or stamp fails.
 func loadCapabilityLaws(t *testing.T) (lawFamily, capabilityLawFile) {
 	t.Helper()
-	corpus := findCorpus()
+	corpus := corpusroot.ForTest(t)
 	if corpus == "" {
 		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
 	}

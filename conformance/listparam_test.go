@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/renderer"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
@@ -41,7 +42,7 @@ const listParamFixture = "multiselect-chip-list-param"
 // standalone checkout (the corpus is a sibling repo, not vendored).
 func loadListParamFixture(t *testing.T) wire.Node {
 	t.Helper()
-	corpus := findCorpus()
+	corpus := corpusroot.ForTest(t)
 	if corpus == "" {
 		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
 	}

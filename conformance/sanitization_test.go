@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/renderer"
 )
 
@@ -53,29 +54,23 @@ type sanitizationManifest struct {
 
 func loadSanitizationManifest(t *testing.T) *sanitizationManifest {
 	t.Helper()
-	dir, err := os.Getwd()
+	corpus := corpusroot.ForTest(t)
+	if corpus == "" {
+		return nil
+	}
+	candidate := filepath.Join(corpus, "sanitization", "manifest.json")
+	if _, err := os.Stat(candidate); err != nil {
+		return nil
+	}
+	raw, err := os.ReadFile(candidate)
 	if err != nil {
-		t.Fatalf("getwd: %v", err)
+		t.Fatalf("read %s: %v", candidate, err)
 	}
-	for {
-		candidate := filepath.Join(dir, "wire-format-fixtures", "sanitization", "manifest.json")
-		if _, err := os.Stat(candidate); err == nil {
-			raw, err := os.ReadFile(candidate)
-			if err != nil {
-				t.Fatalf("read %s: %v", candidate, err)
-			}
-			var m sanitizationManifest
-			if err := json.Unmarshal(raw, &m); err != nil {
-				t.Fatalf("parse %s: %v", candidate, err)
-			}
-			return &m
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return nil
-		}
-		dir = parent
+	var m sanitizationManifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("parse %s: %v", candidate, err)
 	}
+	return &m
 }
 
 func sanitizationCases(m *sanitizationManifest, id string) []sanitizationCase {

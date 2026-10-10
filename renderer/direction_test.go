@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -35,21 +36,11 @@ import (
 // over bound display leaves.
 func findCorpusDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
+	corpus := corpusroot.ForTest(t)
+	if corpus == "" {
+		t.Skip("wire-format-fixtures corpus not found; skipping (standalone checkout)")
 	}
-	for {
-		candidate := filepath.Join(dir, "wire-format-fixtures")
-		if _, err := os.Stat(filepath.Join(candidate, "manifest.json")); err == nil {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Skip("wire-format-fixtures corpus not found; skipping (standalone checkout)")
-		}
-		dir = parent
-	}
+	return corpus
 }
 
 func renderCorpusNode(t *testing.T, id string) string {

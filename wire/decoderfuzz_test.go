@@ -53,6 +53,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 )
 
 // ─── Deterministic PRNG ─────────────────────────────────────────────────────
@@ -113,25 +115,11 @@ var fuzzBuiltinSeeds = []string{
 	"",
 }
 
-// fuzzCorpusRoot walks up from the working directory looking for the shared
-// corpus. "" keeps the repo standalone-testable: a corpus-less checkout gets a
+// fuzzCorpusRoot is the shared corpus root, resolved by internal/corpusroot.
+// "" keeps the repo standalone-testable: a corpus-less checkout gets a
 // working harness with a narrower seed pool, never a failure.
 func fuzzCorpusRoot() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	for {
-		manifest := filepath.Join(dir, "wire-format-fixtures", "manifest.json")
-		if _, err := os.Stat(manifest); err == nil {
-			return filepath.Dir(manifest)
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
-	}
+	return corpusroot.MustFind()
 }
 
 // loadFuzzSeeds returns every corpus payload the harness can find, as raw text.

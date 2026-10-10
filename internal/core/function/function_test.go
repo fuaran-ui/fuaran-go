@@ -15,26 +15,22 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 )
 
-// findGoldens walks up from the working directory looking for the shared corpus
-// (a sibling of the fuaran-go repo), returning the goldens path or "".
+// findGoldens returns the shared corpus's function-registry goldens path, or ""
+// on a standalone checkout. The corpus is resolved by internal/corpusroot.
 func findGoldens() string {
-	dir, err := os.Getwd()
-	if err != nil {
+	corpus := corpusroot.MustFind()
+	if corpus == "" {
 		return ""
 	}
-	for {
-		g := filepath.Join(dir, "wire-format-fixtures", "function-registry", "goldens.json")
-		if _, err := os.Stat(g); err == nil {
-			return g
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
+	g := filepath.Join(corpus, "function-registry", "goldens.json")
+	if _, err := os.Stat(g); err != nil {
+		return ""
 	}
+	return g
 }
 
 type goldens struct {

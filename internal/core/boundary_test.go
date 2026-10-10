@@ -27,6 +27,11 @@ import (
 const (
 	modulePath = "github.com/fuaran-ui/fuaran-go"
 	corePath   = modulePath + "/internal/core"
+	// corpusRootPath is the module's one corpus-root resolver (Phase 2204). A
+	// core TEST may import it to find the shared corpus; production core code
+	// may not, and the resolver itself must stay standard-library-only, so the
+	// boundary's closure is still internal/core plus the standard library.
+	corpusRootPath = modulePath + "/internal/corpusroot"
 )
 
 // listedPackage is the subset of `go list -json` output the test reads.
@@ -113,11 +118,20 @@ func TestCoreImportsNothingOutsideTheBoundary(t *testing.T) {
 
 	var violations []string
 	for _, p := range pkgs {
+		if basePath(p.ImportPath) == corpusRootPath {
+			for _, imp := range p.Imports {
+				if !standard[basePath(imp)] {
+					violations = append(violations, corpusRootPath+" imports "+basePath(imp)+" (the corpus-root resolver must stay standard-library-only)")
+				}
+			}
+			continue
+		}
 		if !insideCore(p.ImportPath) {
 			continue
 		}
+		isTest := p.ForTest != "" || strings.HasSuffix(p.ImportPath, "_test") || strings.Contains(p.ImportPath, " [")
 		for _, imp := range p.Imports {
-			if insideCore(imp) || standard[basePath(imp)] {
+			if insideCore(imp) || standard[basePath(imp)] || (isTest && basePath(imp) == corpusRootPath) {
 				continue
 			}
 			kind := "a package outside the standard library"

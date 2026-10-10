@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -352,25 +353,16 @@ func TestUnhonourableRuleSlot(t *testing.T) {
 // so the round-trip family certifies the codec and says nothing about this; these
 // are the assertions that make the pairs load-bearing on this host.
 
-// corpusNodesDir locates the shared corpus's `nodes/` directory by walking up to
-// the sibling clone. Skips when the corpus is absent (standalone checkout).
+// corpusNodesDir locates the shared corpus's `nodes/` directory in the corpus
+// internal/corpusroot resolves. Skips when the corpus is absent (standalone checkout).
 func corpusNodesDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
+	corpus := corpusroot.ForTest(t)
+	candidate := filepath.Join(corpus, "nodes")
+	if info, err := os.Stat(candidate); corpus == "" || err != nil || !info.IsDir() {
+		t.Skip("wire-format-fixtures/nodes not found")
 	}
-	for {
-		candidate := filepath.Join(dir, "wire-format-fixtures", "nodes")
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Skip("wire-format-fixtures/nodes not found")
-		}
-		dir = parent
-	}
+	return candidate
 }
 
 func decodeCorpusNode(t *testing.T, dir, file string) wire.Node {

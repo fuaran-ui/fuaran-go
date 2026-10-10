@@ -33,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -65,25 +66,6 @@ type report struct {
 	Cases  []caseReport `json:"cases"`
 }
 
-// findCorpus walks up from the working directory looking for the shared corpus.
-func findCorpus() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	for {
-		manifest := filepath.Join(dir, "wire-format-fixtures", "manifest.json")
-		if _, err := os.Stat(manifest); err == nil {
-			return filepath.Dir(manifest)
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
-	}
-}
-
 // decodeOne returns this host's answer for one payload under one decoder. A
 // panic is recovered and reported as the answer it is: a host that panicked where
 // the contract says it returns has failed the totality claim, and saying so in the
@@ -111,16 +93,22 @@ func decodeOne(decoder, text string) (refused bool, code, path, message string) 
 }
 
 func main() {
-	corpusFlag := flag.String("corpus", "", "the shared wire-format corpus root")
+	corpusFlag := flag.String("corpus", "", "the shared wire-format corpus root (default: FUARAN_WIRE_FIXTURES, else the sibling clone)")
 	outFlag := flag.String("out", "", "write the report here instead of stdout")
 	flag.Parse()
 
-	corpus := *corpusFlag
-	if corpus == "" {
-		corpus = findCorpus()
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: reading the working directory: %v\n", host, err)
+		os.Exit(2)
+	}
+	corpus, err := corpusroot.Resolve(*corpusFlag, os.Getenv, wd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", host, err)
+		os.Exit(2)
 	}
 	if corpus == "" {
-		fmt.Fprintf(os.Stderr, "%s: the wire-format corpus was not found. Pass -corpus, or check the repo out beside the corpus.\n", host)
+		fmt.Fprintf(os.Stderr, "%s: the wire-format corpus was not found. Pass -corpus, set %s, or check the repo out beside the corpus.\n", host, corpusroot.EnvVar)
 		os.Exit(2)
 	}
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/fuaran-ui/fuaran-go/canonical"
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/merge"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
@@ -88,7 +89,7 @@ type mergeManifest struct {
 }
 
 func TestMergeCorpus(t *testing.T) {
-	corpus := findCorpus()
+	corpus := corpusroot.ForTest(t)
 	if corpus == "" {
 		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
 	}
@@ -157,7 +158,7 @@ func TestMergeCorpus(t *testing.T) {
 // were transpositions of each other would pin the same fact in a form a host
 // could satisfy by emitting both from one side.
 func TestMergeRefusalCorpus(t *testing.T) {
-	corpus := findCorpus()
+	corpus := corpusroot.ForTest(t)
 	if corpus == "" {
 		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
 	}
@@ -351,7 +352,7 @@ func encodeVerdict(defects []mergeDefect) string {
 // matches). A host that refused both, or merged both, fails one half of every
 // pair — which is the property the separate key exists to buy.
 func TestMergeTotalityCorpus(t *testing.T) {
-	corpus := findCorpus()
+	corpus := corpusroot.ForTest(t)
 	if corpus == "" {
 		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
 	}

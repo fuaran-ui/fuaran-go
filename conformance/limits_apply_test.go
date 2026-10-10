@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
@@ -16,21 +17,6 @@ import (
 // that takes the tree past a wire limit is refused with LimitExceeded. The same
 // runner certifies apply/duplicate-ids-apply.json (Phase 2172). Each
 // vector's tree and op are decoded by this host's own decoder and applied.
-
-const limitsCorpusEnvVar = "FUARAN_WIRE_FIXTURES"
-
-// limitsCorpusRoot honours FUARAN_WIRE_FIXTURES (a declared root holding no
-// manifest fails rather than skipping), else walks up from the package.
-func limitsCorpusRoot(t *testing.T) string {
-	t.Helper()
-	if declared := os.Getenv(limitsCorpusEnvVar); declared != "" {
-		if _, err := os.Stat(filepath.Join(declared, "manifest.json")); err != nil {
-			t.Fatalf("%s=%q does not name a conformance corpus (no manifest.json under it)", limitsCorpusEnvVar, declared)
-		}
-		return declared
-	}
-	return findCorpus()
-}
 
 type limitsVector struct {
 	ID    string `json:"id"`
@@ -53,7 +39,7 @@ func TestDuplicateIdsApplyCorpus(t *testing.T) { certifyApplyFamily(t, "duplicat
 
 // certifyApplyFamily decodes and applies every vector of one apply/ family.
 func certifyApplyFamily(t *testing.T, familyID string) {
-	root := limitsCorpusRoot(t)
+	root := corpusroot.ForTest(t)
 	if root == "" {
 		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
 	}

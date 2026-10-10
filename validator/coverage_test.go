@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 )
 
 // The declaration in validator-coverage.json against what the validator raises.
@@ -111,26 +113,14 @@ func TestEveryDeclaredCodeIsRaised(t *testing.T) {
 	}
 }
 
-// canonicalVocabulary is the shared defect vocabulary, located by walking up to
-// the corpus clone. Skips when the corpus is absent (standalone checkout).
+// canonicalVocabulary is the shared defect vocabulary, in the corpus
+// internal/corpusroot resolves. Skips when the corpus is absent (standalone checkout).
 func canonicalVocabulary(t *testing.T) map[string]bool {
 	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	var vocabPath string
-	for {
-		candidate := filepath.Join(dir, "wire-format-fixtures", "validator", "defect-vocabulary.json")
-		if _, err := os.Stat(candidate); err == nil {
-			vocabPath = candidate
-			break
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Skip("wire-format-fixtures/validator not found")
-		}
-		dir = parent
+	corpus := corpusroot.ForTest(t)
+	vocabPath := filepath.Join(corpus, "validator", "defect-vocabulary.json")
+	if _, err := os.Stat(vocabPath); corpus == "" || err != nil {
+		t.Skip("wire-format-fixtures/validator not found")
 	}
 	raw, err := os.ReadFile(vocabPath)
 	if err != nil {

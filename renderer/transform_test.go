@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -15,25 +16,11 @@ import (
 // The assertions are strict — a regression to the pre-651 unresolved placeholder
 // (an em-dash, an empty slot, or a zero row-count) fails loudly.
 
-// findFixtureCorpus walks up from the working directory to the shared
-// wire-format-fixtures corpus (a sibling of the repo). Returns "" when absent,
-// so the repo stays standalone-testable.
+// findFixtureCorpus returns the shared wire-format-fixtures corpus root,
+// resolved by internal/corpusroot. Returns "" when absent, so the repo stays
+// standalone-testable.
 func findFixtureCorpus() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	for {
-		manifest := filepath.Join(dir, "wire-format-fixtures", "manifest.json")
-		if _, err := os.Stat(manifest); err == nil {
-			return filepath.Dir(manifest)
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
-	}
+	return corpusroot.MustFind()
 }
 
 // loadFixtureNode reads and decodes a nodes/<id>.json corpus fixture, skipping
