@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -102,15 +103,140 @@ func isoOfEpochSeconds(secs int64) string {
 	return fmt.Sprintf("%04d-%02d-%02dT%02d:%02d:%02dZ", year, month, day, sod/3600, sod%3600/60, sod%60)
 }
 
-// epochToIso maps an epoch number to the canonical ISO instant — unit by
-// magnitude: >= 1e11 means milliseconds, else seconds (epoch-seconds stay
-// below 1e11 until year 5138).
-func epochToIso(i int64) Cell {
-	secs := i
-	if i >= 100_000_000_000 || i <= -100_000_000_000 {
-		secs = i / 1000
+// The epoch seconds the canonical instant text spells: 0000-01-01T00:00:00Z
+// and 9999-12-31T23:59:59Z.
+const (
+	minEpochSecond int64 = -62_167_219_200
+	maxEpochSecond int64 = 253_402_300_799
+)
+
+func timestampTagOfDigits(d int) string {
+	switch {
+	case d == 0:
+		return TypeTimestamp
+	case d <= 3:
+		return TypeTimestampMs
+	case d <= 6:
+		return TypeTimestampUs
 	}
-	return CellTimestamp(isoOfEpochSeconds(secs))
+	return TypeTimestampNs
+}
+
+func daysInMonth(y, m int) int {
+	switch m {
+	case 2:
+		if y%4 == 0 && (y%100 != 0 || y%400 == 0) {
+			return 29
+		}
+		return 28
+	case 4, 6, 9, 11:
+		return 30
+	}
+	return 31
+}
+
+// instantFractionDigits answers the fraction digits of a CANONICAL instant text
+// (YYYY-MM-DDThh:mm:ssZ, or YYYY-MM-DDThh:mm:ss.FZ with one to nine digits and
+// no trailing zero, naming a moment that exists), or -1 for any other text.
+func instantFractionDigits(s string) int {
+	if len(s) < 20 || s[4] != '-' || s[7] != '-' || s[10] != 'T' || s[13] != ':' || s[16] != ':' {
+		return -1
+	}
+	num := func(at, n int) int {
+		acc := 0
+		for k := at; k < at+n; k++ {
+			if s[k] < '0' || s[k] > '9' {
+				return -1
+			}
+			acc = acc*10 + int(s[k]-'0')
+		}
+		return acc
+	}
+	y, mo, d := num(0, 4), num(5, 2), num(8, 2)
+	h, mi, se := num(11, 2), num(14, 2), num(17, 2)
+	if y < 0 || mo < 1 || mo > 12 || d < 1 || d > daysInMonth(y, mo) ||
+		h < 0 || h > 23 || mi < 0 || mi > 59 || se < 0 || se > 59 {
+		return -1
+	}
+	if len(s) == 20 {
+		if s[19] == 'Z' {
+			return 0
+		}
+		return -1
+	}
+	if len(s) > 30 || s[19] != '.' || s[len(s)-1] != 'Z' || s[len(s)-2] == '0' {
+		return -1
+	}
+	if num(20, len(s)-21) < 0 {
+		return -1
+	}
+	return len(s) - 21
+}
+
+// ReadInstant reads one present value of a timestamp column of type ty (any
+// unit; WIRE_FORMAT §3.6.25, fuaran-core#422). TEXT is read only in its
+// canonical form, with a fraction no finer than the unit — a coarser instant
+// widens in unchanged, since one instant has one text. An EPOCH NUMBER
+// (whole-valued, |x| < 9e15) is read in a "timestamp" column by magnitude, as
+// fuaran-core#94 pinned it (>= 1e11 means milliseconds, truncated to the
+// second), and in a sub-second column in its own unit with no guess; either way
+// it must name an instant in the years 0000-9999. It answers the canonical text,
+// or a non-empty malformed reason, or mismatch for a value of another JSON kind.
+func ReadInstant(col, ty string, v any) (text, malformed string, mismatch bool) {
+	digits := TimestampUnitDigits[ty]
+	if s, ok := v.(string); ok {
+		n := instantFractionDigits(s)
+		if n < 0 {
+			return "", col + ": a " + ty + " value must be canonical ISO-8601 text, " +
+				"YYYY-MM-DDThh:mm:ssZ or YYYY-MM-DDThh:mm:ss.FZ, naming a moment that exists", false
+		}
+		if n > digits {
+			return "", col + ": a " + ty + " value's fraction is finer than the column's unit holds: " +
+				timestampTagOfDigits(n) + " or finer is needed", false
+		}
+		return s, "", false
+	}
+	num, ok := v.(json.Number)
+	if !ok {
+		return "", "", true
+	}
+	f, err := num.Float64()
+	if err != nil || f != math.Floor(f) || math.Abs(f) >= 9e15 {
+		return "", "", true
+	}
+	i := int64(f)
+	if isIntToken(num) {
+		// An integer token is read exactly; within the 9e15 guard it agrees with f.
+		if exact, convErr := num.Int64(); convErr == nil {
+			i = exact
+		}
+	}
+	second, fraction := i, int64(0)
+	if digits == 0 {
+		if i >= 100_000_000_000 || i <= -100_000_000_000 {
+			second = i / 1000
+		}
+	} else {
+		scale := int64(1)
+		for k := 0; k < digits; k++ {
+			scale *= 10
+		}
+		second = i / scale
+		if i%scale < 0 {
+			second--
+		}
+		fraction = i - second*scale
+	}
+	if second < minEpochSecond || second > maxEpochSecond {
+		return "", col + ": the epoch " + strconv.FormatInt(i, 10) +
+			" names an instant outside the years 0000-9999 the canonical timestamp spells", false
+	}
+	text = isoOfEpochSeconds(second)
+	if fraction != 0 {
+		frac := strings.TrimRight(fmt.Sprintf("%0*d", digits, fraction), "0")
+		text = text[:19] + "." + frac + "Z"
+	}
+	return text, "", false
 }
 
 func decodeCellValue(col, ty string, v any) (Cell, *ColumnError) {
@@ -146,20 +272,13 @@ func decodeCellValue(col, ty string, v any) (Cell, *ColumnError) {
 		if s, ok := v.(string); ok {
 			return CellDate(s), nil
 		}
-	case TypeTimestamp:
-		if s, ok := v.(string); ok {
-			return CellTimestamp(s), nil
+	case TypeTimestamp, TypeTimestampMs, TypeTimestampUs, TypeTimestampNs:
+		text, malformed, mismatch := ReadInstant(col, ty, v)
+		if malformed != "" {
+			return Cell{}, cerr(MalformedShape, malformed)
 		}
-		// Lenient-ingest: a timestamp column accepts an epoch number (models
-		// emit epoch instants against their own correct "timestamp" schema).
-		if n, ok := v.(json.Number); ok {
-			if isIntToken(n) {
-				i, _ := n.Int64()
-				return epochToIso(i), nil
-			}
-			if f, err := n.Float64(); err == nil && f == math.Floor(f) && math.Abs(f) < 9e15 {
-				return epochToIso(int64(f)), nil
-			}
+		if !mismatch {
+			return CellTimestamp(text), nil
 		}
 	}
 	return Cell{}, cerr(TypeMismatch, "column '"+col+"': expected "+ty+" value")

@@ -32,6 +32,10 @@ const (
 	TypeString    = core.TypeString
 	TypeDate      = core.TypeDate
 	TypeTimestamp = core.TypeTimestamp
+	// The three sub-second timestamp units (Phase 2206, fuaran-core#422).
+	TypeTimestampMs = core.TypeTimestampMs
+	TypeTimestampUs = core.TypeTimestampUs
+	TypeTimestampNs = core.TypeTimestampNs
 )
 
 // Error codes: the ColumnError decode codes and the EvalError evaluation codes.

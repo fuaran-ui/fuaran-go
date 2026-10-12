@@ -403,14 +403,16 @@ func castCell(ty string, c Cell) (Cell, *EvalError) {
 			return CellDate(c.Value.(string)), nil
 		}
 		return Cell{}, evalErr(TypeError, "cannot cast to date")
-	case TypeTimestamp:
+	case TypeTimestamp, TypeTimestampMs, TypeTimestampUs, TypeTimestampNs:
+		// Phase 2206 — a cast to any unit keeps the instant's one canonical text;
+		// the unit is a statement about the column, not the cell.
 		if c.Kind == TypeTimestamp {
 			return c, nil
 		}
 		if c.Kind == TypeString {
 			return CellTimestamp(c.Value.(string)), nil
 		}
-		return Cell{}, evalErr(TypeError, "cannot cast to timestamp")
+		return Cell{}, evalErr(TypeError, "cannot cast to "+ty)
 	}
 	return Cell{}, evalErr(TypeError, "unknown cast type "+ty)
 }
