@@ -42,10 +42,6 @@ func decodeKindField(w *walkState, raw any, path string) Value {
 	return decodeKind(w, raw, path)
 }
 
-func decodeNodeField(w *walkState, raw any, path string) Value {
-	return decodeNodeValue(w, raw, path)
-}
-
 func decodeStyleField(w *walkState, raw any, path string) Value {
 	return decodeStyle(w, raw, path)
 }
@@ -76,65 +72,47 @@ func decodeOpList(w *walkState, raw any, path string) Value {
 	return out
 }
 
-// opSchemas drives per-op field validation, walked in declaration order.
-// UpdateProp's path is a plain string at codec level — the nested-addressing
-// grammar is validated at APPLY time, never at decode time.
+// opFields is each op's field table, read from the generated idl.json row: the
+// fields, their order (which defect surfaces first is therefore fixed) and
+// which are required all come from the IDL. Each field is read by the decoder
+// its declared type implies, except the three below whose reading carries
+// behaviour this host owns. UpdateProp's path is a plain string at codec level
+// — the nested-addressing grammar is validated at APPLY time, never at decode.
 //
 // Populated in init(): Batch recurses through decodeOpValue, which a
 // package-level composite literal would report as an initialization cycle.
-var opSchemas map[string][]fieldSpec
+var opFields map[string][]opField
+
+type opField struct {
+	name     string
+	required bool
+	dec      fieldDecoder
+}
+
+// opFieldOverrides are the hand readings, keyed "<op>.<field>".
+var opFieldOverrides = map[string]fieldDecoder{
+	// The reserved in-process sentinels are refused by name (opJSONValue).
+	"UpdateProp.value": opJSONValue,
+	// An id list names its offending element by index.
+	"ReorderChildren.newOrder": decodeIDList,
+}
 
 func init() {
-	opSchemas = map[string][]fieldSpec{
-		"EditNode": {
-			{"newKind", true, decodeKindField},
-			{"target", true, decodeString},
-		},
-		"UpdateProp": {
-			{"path", true, decodeString},
-			{"target", true, decodeString},
-			{"value", true, opJSONValue},
-		},
-		"ReplaceBinding": {
-			{"binding", true, decodeBinding},
-			{"slot", true, decodeString},
-			{"target", true, decodeString},
-		},
-		"UpdateStyle": {
-			{"style", true, decodeStyleField},
-			{"target", true, decodeString},
-		},
-		// Phase 2291 — the field-level style edit: UpdateStyle's shape, whose
-		// style is a StyleDelta (absent member = leave the field as it is).
-		"PatchStyle": {
-			{"style", true, decodeStyleDeltaField},
-			{"target", true, decodeString},
-		},
-		"UpdateState": {
-			{"state", true, decodeStateField},
-			{"target", true, decodeString},
-		},
-		"InsertChild": {
-			{"child", true, decodeNodeField},
-			{"parentId", true, decodeString},
-		},
-		"RemoveNode": {
-			{"target", true, decodeString},
-		},
-		"MoveNode": {
-			{"newParentId", true, decodeString},
-			{"target", true, decodeString},
-		},
-		"ReorderChildren": {
-			{"newOrder", true, decodeIDList},
-			{"parentId", true, decodeString},
-		},
-		"ReplaceRoot": {
-			{"node", true, decodeNodeField},
-		},
-		"Batch": {
-			{"ops", true, decodeOpList},
-		},
+	opFieldOverrides["Batch.ops"] = decodeOpList
+	opFields = make(map[string][]opField, len(idl.Ops))
+	for _, op := range idl.Ops {
+		fields := make([]opField, 0, len(op.Fields))
+		for _, f := range op.Fields {
+			if f.Optionality == idl.HostOnly {
+				continue
+			}
+			dec, ok := opFieldOverrides[op.Tag+"."+f.Name]
+			if !ok {
+				dec = typeDecoder(f.Type)
+			}
+			fields = append(fields, opField{f.Name, f.Optionality == idl.Required, dec})
+		}
+		opFields[op.Tag] = fields
 	}
 }
 
@@ -187,11 +165,11 @@ func decodeOpValue(w *walkState, raw any, path string) Obj {
 	tag := dispatch(obj, path, opCases, CodeUnknownDUCase)
 	checkRetiredPositional(obj, tag, path)
 	fields := make(map[string]Value)
-	for _, fs := range opSchemas[tag] {
-		if raw, ok := obj[fs.name]; ok {
-			fields[fs.name] = fs.dec(w, raw, path+"."+fs.name)
-		} else if fs.required {
-			fail(CodeMissingField, path+"."+fs.name, "missing required field '"+fs.name+"'")
+	for _, f := range opFields[tag] {
+		if raw, ok := obj[f.name]; ok {
+			fields[f.name] = f.dec(w, raw, path+"."+f.name)
+		} else if f.required {
+			fail(CodeMissingField, path+"."+f.name, "missing required field '"+f.name+"'")
 		}
 	}
 	return Obj{Tag: tag, Fields: fields}

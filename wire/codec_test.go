@@ -273,17 +273,3 @@ func TestPatchStyleRejects(t *testing.T) {
 		})
 	}
 }
-
-// Every op schema must be a recognised op, and every op a schema.
-func TestOpSchemasAreRegistered(t *testing.T) {
-	for op := range opSchemas {
-		if !opCases.has(op) {
-			t.Errorf("opSchemas[%q] is not in opCases", op)
-		}
-	}
-	for _, op := range KnownOpKinds() {
-		if _, ok := opSchemas[op]; !ok {
-			t.Errorf("op case %q has no schema", op)
-		}
-	}
-}

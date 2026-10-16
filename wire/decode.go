@@ -1866,15 +1866,6 @@ func refuseNestedConfirm(action Value, path string) {
 
 type fieldDecoder func(w *walkState, raw any, path string) Value
 
-// fieldSpec drives simple table-driven decode (the TreeOp schemas): (field,
-// required, decoder), walked in declaration order so which defect surfaces
-// first is deterministic.
-type fieldSpec struct {
-	name     string
-	required bool
-	dec      fieldDecoder
-}
-
 // spec accumulates one kind object's decoded fields, tracking which input
 // keys were consumed so the unconsumed remainder can be preserved
 // structurally (§2 rule 2 tolerance) without resurrecting renamed aliases.
