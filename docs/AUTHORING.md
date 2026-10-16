@@ -64,8 +64,9 @@ have no representation here at all; a conformant host never reads or writes them
 
 The cost of the structural model is that a mistyped kind name or a missing slot is
 not a compile error. The compensation is deliberate and it is in the repo: the
-conformance corpus, plus a corpus-driven discriminator exhaustiveness guard in
-`conformance/`, and the pre-emit validator described below. Use the validator; it
+decoder's vocabulary is generated from the corpus's `idl.json` (`wire/idl`), so
+every kind has a typed decoder arm by construction, plus the conformance corpus
+and the pre-emit validator described below. Use the validator; it
 is the substitute for the compiler that the other hosts get for free.
 
 ## Building a tree
@@ -156,8 +157,9 @@ and the closed discriminator sets slot by slot — `wire.TextSourceCases()`,
 enums: `ToneVariants()`, `StyleWeights()`, `EmphasisLevels()`, `Orientations()`,
 `BadgeVariants()`, `HeadingVariants()`, `IconSizes()`, `TrendPolarities()`.
 
-Every one of these is derived from the decoder's own private tables, and the
-validator builds its checks from the same two calls at init. So an answer you get
+Every one of these is derived from the decoder's own tables — themselves generated
+from the corpus's `idl.json` — and the validator builds its checks from the same
+two calls at init. So an answer you get
 here cannot disagree with the gate — which is the closest this host comes to the
 compile-time exhaustiveness the sum-type hosts enjoy.
 
