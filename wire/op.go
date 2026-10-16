@@ -1,6 +1,10 @@
 package wire
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/fuaran-ui/fuaran-go/wire/idl"
+)
 
 // The TreeOp codec (WIRE_FORMAT.md §3.4). A TreeOp is, on the wire, a
 // top-level "$type"-discriminated object, so a decoded op is a tagged Obj
@@ -8,10 +12,7 @@ import "strconv"
 // op's required fields, reusing the node / kind / binding / style / state
 // decoders.
 
-var opCases = newCaseSet(
-	"EditNode", "UpdateProp", "ReplaceBinding", "UpdateStyle", "PatchStyle", "UpdateState",
-	"InsertChild", "RemoveNode", "MoveNode", "ReorderChildren", "ReplaceRoot", "Batch",
-)
+var opCases = newCaseSet(idl.OpTags()...)
 
 // KnownOpKinds returns the sorted set of recognised TreeOp discriminators
 // (the conformance exhaustiveness guard keys off it).

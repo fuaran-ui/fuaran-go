@@ -158,6 +158,15 @@ func decodeRowsByTable(w *walkState, obj map[string]any, path string, rows []idl
 	return s.build(tag)
 }
 
+// tableCase decodes a union case a hand decoder has no arm for — one idl.json
+// added after the hand decoder was written — from its table row. Without it a
+// generated case set would admit the new discriminator into a switch whose last
+// arm reads some OTHER case's fields, or whose strict build drops them all.
+func tableCase(w *walkState, obj map[string]any, path string, u *idl.Union, tag string) Value {
+	c, _ := u.Case(tag)
+	return decodeRowsByTable(w, obj, path, c.Fields, tag)
+}
+
 // typeDecoder is the decoder a row's declared type implies. Where this host
 // already reads a type through a hand decoder (TextSource's bare-string
 // canonical form, a Binding's lenient shapes, the Action vocabulary) the table

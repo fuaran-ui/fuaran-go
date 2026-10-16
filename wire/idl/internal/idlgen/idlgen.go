@@ -200,7 +200,7 @@ func (g *gen) typeLit(t *rawType) string {
 	if len(t.Args) > 0 {
 		args := make([]string, len(t.Args))
 		for i, a := range t.Args {
-			args[i] = g.typeLit(a)
+			args[i] = strings.TrimPrefix(g.typeLit(a), "Type") // element type elided
 		}
 		parts = append(parts, "Args: []Type{"+strings.Join(args, ", ")+"}")
 	}

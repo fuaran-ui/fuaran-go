@@ -28,7 +28,7 @@ var (
 		{Name: "variant", Optionality: Required, Type: Type{Kind: TEnum, Name: "ButtonVariant"}},
 		{Name: "icon", Optionality: Optional, Type: Type{Kind: TStr}},
 		{Name: "tooltip", Optionality: HostOnly, Type: Type{Kind: TFn, Wire: "<closure>"}},
-		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TBool}}}},
+		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
 	}}
 	KindCallout = Kind{Tag: "Callout", Category: "Display", Fields: []Field{
 		{Name: "body", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
@@ -39,7 +39,7 @@ var (
 	}}
 	KindChart = Kind{Tag: "Chart", Category: "Visualisation", Fields: []Field{
 		{Name: "kind", Optionality: Required, Type: Type{Kind: TEnum, Name: "ChartKind"}},
-		{Name: "source", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: THosted, Wire: "json"}}}},
+		{Name: "source", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: THosted, Wire: "json"}}}},
 		{Name: "stacked", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
 		{Name: "xField", Optionality: Required, Type: Type{Kind: TStr}},
 		{Name: "yFields", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TStr}}},
@@ -85,8 +85,8 @@ var (
 		{Name: "repeatHeader", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
 		{Name: "exportable", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
 		{Name: "windowStateKey", Optionality: Optional, Type: Type{Kind: TStr}},
-		{Name: "rowTotal", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TInt}}}},
-		{Name: "source", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: THosted, Wire: "json"}}}},
+		{Name: "rowTotal", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TInt}}}},
+		{Name: "source", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: THosted, Wire: "json"}}}},
 		{Name: "staticRows", Optionality: Optional, Type: Type{Kind: TRecord, Name: "StaticRows"}},
 		{Name: "onRowClick", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 	}}
@@ -95,7 +95,7 @@ var (
 		{Name: "defaultOpen", Optionality: Required, Type: Type{Kind: TBool}},
 		{Name: "heading", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "onToggle", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
-		{Name: "open", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TBool}}}},
+		{Name: "open", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
 	}}
 	KindDrawing = Kind{Tag: "Drawing", Category: "Display", Fields: []Field{
 		{Name: "description", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
@@ -107,7 +107,7 @@ var (
 	KindEmbed = Kind{Tag: "Embed", Category: "Display", Fields: []Field{
 		{Name: "aspectRatio", Optionality: OmitDefault, Default: "\"Natural\"", Type: Type{Kind: TEnum, Name: "ImageAspect"}},
 		{Name: "permissions", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TEnum, Name: "EmbedPermission"}}},
-		{Name: "src", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
+		{Name: "src", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 		{Name: "title", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 	}}
 	KindErrorBoundary = Kind{Tag: "ErrorBoundary", Category: "Meta", Fields: []Field{
@@ -127,7 +127,7 @@ var (
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "multiple", Optionality: Required, Type: Type{Kind: TBool}},
 		{Name: "onSelect", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
-		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TBool}}}},
+		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
 		{Name: "acceptPaste", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
 		{Name: "dropTarget", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
 		{Name: "capture", Optionality: Optional, Type: Type{Kind: TEnum, Name: "CaptureSource"}},
@@ -142,7 +142,7 @@ var (
 		{Name: "fields", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "FormField"}}},
 		{Name: "onSubmit", Optionality: Required, Type: Type{Kind: TUnion, Name: "Action"}},
 		{Name: "submitLabel", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
-		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TBool}}}},
+		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
 	}}
 	KindFragmentDecl = Kind{Tag: "FragmentDecl", Category: "Meta", Fields: []Field{
 		{Name: "body", Optionality: Required, Type: Type{Kind: TNode}},
@@ -167,7 +167,7 @@ var (
 	}}
 	KindImage = Kind{Tag: "Image", Category: "Display", Fields: []Field{
 		{Name: "alt", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
-		{Name: "src", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
+		{Name: "src", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 		{Name: "variant", Optionality: Required, Type: Type{Kind: TEnum, Name: "ImageVariant"}},
 		{Name: "fit", Optionality: OmitDefault, Default: "\"Natural\"", Type: Type{Kind: TEnum, Name: "ImageFit"}},
 		{Name: "aspectRatio", Optionality: OmitDefault, Default: "\"Natural\"", Type: Type{Kind: TEnum, Name: "ImageAspect"}},
@@ -180,11 +180,11 @@ var (
 		{Name: "emphasis", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
 		{Name: "format", Optionality: OmitDefault, Default: "{\"$type\":\"None\"}", Type: Type{Kind: TUnion, Name: "CellFormat"}},
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
-		{Name: "value", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TFloat}}}},
+		{Name: "value", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}},
 		{Name: "help", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
 	}}
 	KindLink = Kind{Tag: "Link", Category: "Display", Fields: []Field{
-		{Name: "href", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
+		{Name: "href", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "download", Optionality: Required, Type: Type{Kind: TBool}},
 		{Name: "rel", Optionality: Optional, Type: Type{Kind: TStr}},
@@ -198,7 +198,7 @@ var (
 	KindMap = Kind{Tag: "Map", Category: "Visualisation", Fields: []Field{
 		{Name: "centreLatitude", Optionality: Required, Type: Type{Kind: TFloat}},
 		{Name: "centreLongitude", Optionality: Required, Type: Type{Kind: TFloat}},
-		{Name: "source", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "MapMarker"}}}}},
+		{Name: "source", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TList, Elem: &Type{Kind: TRecord, Name: "MapMarker"}}}}},
 		{Name: "zoom", Optionality: Required, Type: Type{Kind: TInt}},
 		{Name: "onMarkerClick", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 	}}
@@ -214,18 +214,18 @@ var (
 		{Name: "kind", Optionality: Required, Type: Type{Kind: TUnion, Name: "MediaKind"}},
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "loop", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
-		{Name: "src", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
+		{Name: "src", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 		{Name: "tracks", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "TrackEntry"}}},
 		{Name: "transcript", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
 	}}
 	KindMetric = Kind{Tag: "Metric", Category: "Display", Fields: []Field{
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
-		{Name: "value", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TFloat}}}},
+		{Name: "value", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}},
 		{Name: "format", Optionality: OmitDefault, Default: "{\"$type\":\"None\"}", Type: Type{Kind: TUnion, Name: "CellFormat"}},
 		{Name: "tone", Optionality: OmitDefault, Default: "\"Default\"", Type: Type{Kind: TEnum, Name: "ToneVariant"}},
 		{Name: "weight", Optionality: OmitDefault, Default: "\"Standard\"", Type: Type{Kind: TEnum, Name: "StyleWeight"}},
 		{Name: "emphasis", Optionality: OmitDefault, Default: "\"Normal\"", Type: Type{Kind: TEnum, Name: "Emphasis"}},
-		{Name: "trend", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TFloat}}}},
+		{Name: "trend", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}},
 		{Name: "trendFormat", Optionality: Optional, Type: Type{Kind: TUnion, Name: "CellFormat"}},
 		{Name: "trendPolarity", Optionality: OmitDefault, Default: "\"HigherIsBetter\"", Type: Type{Kind: TEnum, Name: "TrendPolarity"}},
 		{Name: "icon", Optionality: Optional, Type: Type{Kind: TStr}},
@@ -235,7 +235,7 @@ var (
 		{Name: "children", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TNode}}},
 		{Name: "dismissable", Optionality: Required, Type: Type{Kind: TBool}},
 		{Name: "onDismiss", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Action"}},
-		{Name: "open", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TBool}}}},
+		{Name: "open", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
 		{Name: "heading", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "modality", Optionality: OmitDefault, Default: "\"Modal\"", Type: Type{Kind: TEnum, Name: "ModalityKind"}},
 		{Name: "anchor", Optionality: Optional, Type: Type{Kind: TStr}},
@@ -248,7 +248,7 @@ var (
 		{Name: "scopeId", Optionality: Required, Type: Type{Kind: TStr}},
 	}}
 	KindProgress = Kind{Tag: "Progress", Category: "Display", Fields: []Field{
-		{Name: "fraction", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TFloat}}}},
+		{Name: "fraction", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}},
 		{Name: "indeterminate", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
 		{Name: "tone", Optionality: OmitDefault, Default: "\"Default\"", Type: Type{Kind: TEnum, Name: "ToneVariant"}},
 		{Name: "label", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
@@ -264,25 +264,25 @@ var (
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 		{Name: "onChangeMulti", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
-		{Name: "source", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "SelectOption"}}}}},
-		{Name: "value", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
+		{Name: "source", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TList, Elem: &Type{Kind: TRecord, Name: "SelectOption"}}}}},
+		{Name: "value", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 		{Name: "placeholder", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
-		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TBool}}}},
+		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
 		{Name: "multiple", Optionality: Optional, Type: Type{Kind: TBool}},
-		{Name: "values", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TList, Elem: &Type{Kind: TStr}}}}},
+		{Name: "values", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TList, Elem: &Type{Kind: TStr}}}}},
 	}}
 	KindSkeleton = Kind{Tag: "Skeleton", Category: "Display", Fields: []Field{
 		{Name: "rows", Optionality: Required, Type: Type{Kind: TInt}},
 	}}
 	KindSparkline = Kind{Tag: "Sparkline", Category: "Display", Fields: []Field{
-		{Name: "source", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TList, Elem: &Type{Kind: TFloat}}}}},
+		{Name: "source", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TList, Elem: &Type{Kind: TFloat}}}}},
 	}}
 	KindSplitPanel = Kind{Tag: "SplitPanel", Category: "Layout", Fields: []Field{
 		{Name: "children", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TNode}}},
 		{Name: "weight", Optionality: Required, Type: Type{Kind: TFloat}},
 	}}
 	KindStepper = Kind{Tag: "Stepper", Category: "Layout", Fields: []Field{
-		{Name: "activeStep", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TInt}}}},
+		{Name: "activeStep", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TInt}}}},
 		{Name: "children", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TNode}}},
 		{Name: "onSelect", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 	}}
@@ -294,23 +294,23 @@ var (
 		{Name: "autoAdvanceMs", Optionality: Optional, Type: Type{Kind: TInt}},
 		{Name: "cases", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "SwitchCase"}}},
 		{Name: "default", Optionality: Required, Type: Type{Kind: TNode}},
-		{Name: "on", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
+		{Name: "on", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 		{Name: "stateKey", Optionality: Optional, Type: Type{Kind: TStr}},
 	}}
 	KindTabs = Kind{Tag: "Tabs", Category: "Layout", Fields: []Field{
-		{Name: "activeIndex", Optionality: OmitDefault, Default: "{\"$type\":\"Static\",\"value\":0}", Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TInt}}}},
+		{Name: "activeIndex", Optionality: OmitDefault, Default: "{\"$type\":\"Static\",\"value\":0}", Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TInt}}}},
 		{Name: "children", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TNode}}},
 		{Name: "orientation", Optionality: OmitDefault, Default: "\"Horizontal\"", Type: Type{Kind: TEnum, Name: "Orientation"}},
 		{Name: "onSelect", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 		{Name: "onSelectTag", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 		{Name: "tabHeaders", Optionality: Optional, Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "TabHeader"}}},
 		{Name: "tabTags", Optionality: Optional, Type: Type{Kind: TList, Elem: &Type{Kind: TStr}}},
-		{Name: "activeTag", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
+		{Name: "activeTag", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 	}}
 	KindToast = Kind{Tag: "Toast", Category: "Display", Fields: []Field{
 		{Name: "dismissable", Optionality: OmitDefault, Default: "true", Type: Type{Kind: TBool}},
 		{Name: "message", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
-		{Name: "open", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TBool}}}},
+		{Name: "open", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
 		{Name: "tone", Optionality: OmitDefault, Default: "\"Default\"", Type: Type{Kind: TEnum, Name: "ToneVariant"}},
 	}}
 	KindTree = Kind{Tag: "Tree", Category: "Display", Fields: []Field{
@@ -413,7 +413,7 @@ var (
 		{Tag: "SetState", Fields: []Field{
 			{Name: "key", Optionality: Required, Type: Type{Kind: TStr}},
 			{Name: "value", Optionality: Optional, Type: Type{Kind: TJSON}},
-			{Name: "valueFrom", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TJSON}}}},
+			{Name: "valueFrom", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TJSON}}}},
 		}},
 		{Tag: "AiTool", Fields: []Field{
 			{Name: "toolName", Optionality: Required, Type: Type{Kind: TStr}},
@@ -462,20 +462,20 @@ var (
 		{Tag: "Local", Fields: []Field{
 			{Name: "flushOn", Optionality: Required, Type: Type{Kind: TUnion, Name: "LocalFlushTrigger"}},
 			{Name: "format", Optionality: Required, Type: Type{Kind: TFn, Wire: "<closure>"}},
-			{Name: "initialFrom", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TVar, Name: "T"}}}},
+			{Name: "initialFrom", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TVar, Name: "T"}}}},
 			{Name: "onCommit", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 			{Name: "parse", Optionality: Required, Type: Type{Kind: TFn, Wire: "<closure>"}},
 			{Name: "codec", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Format"}},
 			{Name: "commitTo", Optionality: Optional, Type: Type{Kind: TStr}},
 		}},
 		{Tag: "Format", Fields: []Field{
-			{Name: "source", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TFloat}}}},
+			{Name: "source", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}},
 			{Name: "format", Optionality: Required, Type: Type{Kind: TUnion, Name: "Format"}},
 			{Name: "locale", Optionality: Required, Type: Type{Kind: TUnion, Name: "LocaleSource"}},
 		}},
 		{Tag: "I18n", Fields: []Field{
 			{Name: "key", Optionality: Required, Type: Type{Kind: TStr}},
-			{Name: "args", Optionality: Optional, Type: Type{Kind: TMap, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TJSON}}}}},
+			{Name: "args", Optionality: Optional, Type: Type{Kind: TMap, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TJSON}}}}},
 		}},
 		{Tag: "Transform", Fields: []Field{
 			{Name: "source", Optionality: Required, Type: Type{Kind: THosted, Wire: "json"}},
@@ -644,33 +644,33 @@ var (
 	}}
 	UnionFormFieldKind = Union{Name: "FormFieldKind", Cases: []Case{
 		{Tag: "Text", Fields: []Field{
-			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}}},
+			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}}},
 			{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 		}},
 		{Tag: "Number", Fields: []Field{
-			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TFloat}}}}},
+			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}}},
 			{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 		}},
 		{Tag: "Checkbox", Fields: []Field{
-			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TBool}}}}},
+			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}}},
 			{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 		}},
 		{Tag: "Toggle", Fields: []Field{
-			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TBool}}}}},
+			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}}},
 			{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 		}},
 		{Tag: "Choice", Fields: []Field{
-			{Name: "options", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "SelectOption"}}}}},
-			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}}},
+			{Name: "options", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TList, Elem: &Type{Kind: TRecord, Name: "SelectOption"}}}}},
+			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}}},
 			{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 		}},
 		{Tag: "TextArea", Fields: []Field{
-			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}}},
+			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}}},
 			{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 			{Name: "rows", Optionality: Required, Type: Type{Kind: TInt}},
 		}},
 		{Tag: "RangedNumber", Fields: []Field{
-			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TFloat}}}}},
+			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}}},
 			{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 			{Name: "min", Optionality: Optional, Type: Type{Kind: TFloat}},
 			{Name: "max", Optionality: Optional, Type: Type{Kind: TFloat}},
@@ -684,13 +684,13 @@ var (
 			{Name: "step", Optionality: Optional, Type: Type{Kind: TFloat}},
 		}},
 		{Tag: "SegmentedChoice", Fields: []Field{
-			{Name: "options", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "SelectOption"}}}}},
-			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}}},
+			{Name: "options", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TList, Elem: &Type{Kind: TRecord, Name: "SelectOption"}}}}},
+			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}}},
 			{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 			{Name: "orientation", Optionality: Required, Type: Type{Kind: TEnum, Name: "Orientation"}},
 		}},
 		{Tag: "DateTime", Fields: []Field{
-			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}}},
+			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}}},
 			{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 			{Name: "variant", Optionality: Required, Type: Type{Kind: TEnum, Name: "DateTimeVariant"}},
 			{Name: "min", Optionality: Optional, Type: Type{Kind: TStr}},
@@ -708,24 +708,24 @@ var (
 		{Tag: "Combobox", Fields: []Field{
 			{Name: "allowFreeText", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
 			{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
-			{Name: "options", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "SelectOption"}}}}},
-			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}}},
+			{Name: "options", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TList, Elem: &Type{Kind: TRecord, Name: "SelectOption"}}}}},
+			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}}},
 		}},
 		{Tag: "Rating", Fields: []Field{
 			{Name: "allowHalf", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
 			{Name: "max", Optionality: Required, Type: Type{Kind: TInt}},
 			{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
-			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TFloat}}}}},
+			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}}},
 		}},
 		{Tag: "Color", Fields: []Field{
 			{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
-			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}}},
+			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}}},
 		}},
 		{Tag: "Tokens", Fields: []Field{
 			{Name: "allowFreeText", Optionality: OmitDefault, Default: "true", Type: Type{Kind: TBool}},
 			{Name: "onChange", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
-			{Name: "suggestions", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "SelectOption"}}}}},
-			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TList, Elem: &Type{Kind: TStr}}}}}},
+			{Name: "suggestions", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TList, Elem: &Type{Kind: TRecord, Name: "SelectOption"}}}}},
+			{Name: "value", Optionality: Optional, Type: Type{Kind: THosted, Elem: &Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TList, Elem: &Type{Kind: TStr}}}}}},
 		}},
 	}}
 	UnionFormat = Union{Name: "Format", Cases: []Case{
@@ -820,7 +820,7 @@ var (
 	UnionMediaKind = Union{Name: "MediaKind", Cases: []Case{
 		{Tag: "Video", Fields: []Field{
 			{Name: "autoplay", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
-			{Name: "poster", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
+			{Name: "poster", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 		}},
 		{Tag: "Audio", Fields: []Field{}},
 	}}
@@ -895,7 +895,7 @@ var (
 			{Name: "text", Optionality: Required, Type: Type{Kind: TStr}},
 		}},
 		{Tag: "Bound", Fields: []Field{
-			{Name: "binding", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
+			{Name: "binding", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 		}},
 		{Tag: "I18n", Fields: []Field{
 			{Name: "key", Optionality: Required, Type: Type{Kind: TStr}},
@@ -908,8 +908,8 @@ var (
 var (
 	RecordAccessibility = Record{Name: "Accessibility", Fields: []Field{
 		{Name: "describedBy", Optionality: Optional, Type: Type{Kind: TStr}},
-		{Name: "hidden", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TBool}}}},
-		{Name: "label", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
+		{Name: "hidden", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
+		{Name: "label", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 		{Name: "labelledBy", Optionality: Optional, Type: Type{Kind: TStr}},
 		{Name: "liveRegion", Optionality: Optional, Type: Type{Kind: TEnum, Name: "LiveRegionKind"}},
 		{Name: "role", Optionality: Optional, Type: Type{Kind: THosted, Wire: "json"}},
@@ -930,7 +930,7 @@ var (
 		{Name: "width", Optionality: OmitDefault, Default: "{\"$type\":\"Auto\"}", Type: Type{Kind: TUnion, Name: "ColumnWidth"}},
 	}}
 	RecordCompareRule = Record{Name: "CompareRule", Fields: []Field{
-		{Name: "against", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TJSON}}}},
+		{Name: "against", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TJSON}}}},
 		{Name: "op", Optionality: Required, Type: Type{Kind: TEnum, Name: "CompareOp"}},
 	}}
 	RecordContentHash = Record{Name: "ContentHash", Fields: []Field{
@@ -952,14 +952,14 @@ var (
 	}}
 	RecordDrawStyle = Record{Name: "DrawStyle", Fields: []Field{
 		{Name: "emphasis", Optionality: Optional, Type: Type{Kind: TEnum, Name: "Emphasis"}},
-		{Name: "fill", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
+		{Name: "fill", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 		{Name: "fontFamily", Optionality: Optional, Type: Type{Kind: TStr}},
 		{Name: "fontSize", Optionality: Optional, Type: Type{Kind: TFloat}},
 		{Name: "markId", Optionality: Optional, Type: Type{Kind: TStr}},
-		{Name: "opacity", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TFloat}}}},
+		{Name: "opacity", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}},
 		{Name: "rotation", Optionality: Optional, Type: Type{Kind: TFloat}},
-		{Name: "stroke", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
-		{Name: "strokeWidth", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TFloat}}}},
+		{Name: "stroke", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
+		{Name: "strokeWidth", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}},
 		{Name: "textAnchor", Optionality: Optional, Type: Type{Kind: TEnum, Name: "TextAnchor"}},
 		{Name: "tip", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
 	}}
@@ -1018,7 +1018,7 @@ var (
 		{Name: "weight", Optionality: OmitDefault, Default: "\"Standard\"", Type: Type{Kind: TEnum, Name: "StyleWeight"}},
 	}}
 	RecordSrcSetEntry = Record{Name: "SrcSetEntry", Fields: []Field{
-		{Name: "src", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
+		{Name: "src", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 		{Name: "width", Optionality: Required, Type: Type{Kind: TInt}},
 	}}
 	RecordStateBehaviour = Record{Name: "StateBehaviour", Fields: []Field{
@@ -1043,22 +1043,22 @@ var (
 	RecordSwitchCase = Record{Name: "SwitchCase", Fields: []Field{
 		{Name: "child", Optionality: Required, Type: Type{Kind: TNode}},
 		{Name: "match", Optionality: Optional, Type: Type{Kind: TStr}},
-		{Name: "when", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TBool}}}},
+		{Name: "when", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
 	}}
 	RecordTabHeader = Record{Name: "TabHeader", Fields: []Field{
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "icon", Optionality: Optional, Type: Type{Kind: TStr}},
-		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TBool}}}},
+		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
 	}}
 	RecordTrackEntry = Record{Name: "TrackEntry", Fields: []Field{
 		{Name: "default", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
 		{Name: "kind", Optionality: Required, Type: Type{Kind: TEnum, Name: "TrackKind"}},
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
-		{Name: "src", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TStr}}}},
+		{Name: "src", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 		{Name: "srcLang", Optionality: Required, Type: Type{Kind: TStr}},
 	}}
 	RecordTransformParam = Record{Name: "TransformParam", Fields: []Field{
-		{Name: "from", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TJSON}}}},
+		{Name: "from", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TJSON}}}},
 		{Name: "name", Optionality: Required, Type: Type{Kind: TStr}},
 	}}
 	RecordTreeItem = Record{Name: "TreeItem", Fields: []Field{
@@ -1104,7 +1104,7 @@ var (
 		{Name: "parentId", Optionality: Required, Type: Type{Kind: TStr}},
 	}}
 	OpReplaceBinding = Op{Tag: "ReplaceBinding", Fields: []Field{
-		{Name: "binding", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TJSON}}}},
+		{Name: "binding", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TJSON}}}},
 		{Name: "slot", Optionality: Required, Type: Type{Kind: TStr}},
 		{Name: "target", Optionality: Required, Type: Type{Kind: TStr}},
 	}}
@@ -1135,7 +1135,7 @@ var NodeFields = []Field{
 	{Name: "state", Optionality: Optional, Type: Type{Kind: TRecord, Name: "StateBehaviour"}},
 	{Name: "style", Optionality: Optional, Type: Type{Kind: TRecord, Name: "SemanticStyle"}},
 	{Name: "tooltip", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
-	{Name: "visible", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{Type{Kind: TBool}}}},
+	{Name: "visible", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
 }
 
 // Kinds is every NodeKind row, in idl.json order.

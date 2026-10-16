@@ -557,36 +557,41 @@ func fromJSONStrict(w *walkState, raw any, path string) Value {
 }
 
 // ── Bare-string enum vocabularies (WIRE_FORMAT.md §3.5) ─────────────────────
+//
+// Every set below is a generated idl.json row (wire/idl), so a case added to
+// the IDL reaches this decoder by regeneration alone. The two sets carrying a
+// spelling the IDL does not declare say so where they are built: Binding's
+// lenient "Bound" unwrap and CellFormat's pre-rename "Date" alias.
 
 var (
-	toneCases           = newCaseSet("Default", "Subdued", "Brand", "Success", "Warning", "Critical", "Info")
-	weightCases         = newCaseSet("Compact", "Standard", "Spacious")
-	emphasisCases       = newCaseSet("Quiet", "Normal", "Loud")
-	orientationCases    = newCaseSet("Vertical", "Horizontal")
-	badgeVariantCases   = newCaseSet("Neutral", "Brand", "Success", "Warning", "Critical", "Info")
-	buttonVariantCases  = newCaseSet("Primary", "Secondary", "Tertiary", "Destructive")
-	headingVariantCases = newCaseSet("Standard", "Eyebrow", "Caption", "Lead")
+	toneCases           = newCaseSet(idl.EnumToneVariant.Cases...)
+	weightCases         = newCaseSet(idl.EnumStyleWeight.Cases...)
+	emphasisCases       = newCaseSet(idl.EnumEmphasis.Cases...)
+	orientationCases    = newCaseSet(idl.EnumOrientation.Cases...)
+	badgeVariantCases   = newCaseSet(idl.EnumBadgeVariant.Cases...)
+	buttonVariantCases  = newCaseSet(idl.EnumButtonVariant.Cases...)
+	headingVariantCases = newCaseSet(idl.EnumHeadingVariant.Cases...)
 	// Phase 1811 — DateTimeVariant (was DateVariant); the three cases did not move.
-	dateTimeVariantCases = newCaseSet("Date", "Time", "DateTime")
-	styleRoleCases       = newCaseSet("None", "Eyebrow", "Data", "Lede", "Caption")
-	fontVoiceCases       = newCaseSet("Default", "Display", "Structural")
-	liveRegionCases      = newCaseSet("polite", "assertive", "off")
-	imageVariantCases    = newCaseSet("Default", "Avatar", "Rounded")
+	dateTimeVariantCases = newCaseSet(idl.EnumDateTimeVariant.Cases...)
+	styleRoleCases       = newCaseSet(idl.EnumStyleRole.Cases...)
+	fontVoiceCases       = newCaseSet(idl.EnumFontVoice.Cases...)
+	liveRegionCases      = newCaseSet(idl.EnumLiveRegionKind.Cases...)
+	imageVariantCases    = newCaseSet(idl.EnumImageVariant.Cases...)
 	// Phase 1077 — §3.6.2. Three closed TOKEN vocabularies, never CSS values:
 	// `aspectRatio` names one of four ratios and can never carry "16 / 9",
 	// "16:9" or 1.7778, which is the free-form escape the tokens exist to
 	// close. Each is omitted-when-default on BOTH boundaries, so a pre-phase
 	// document decodes to today's behaviour and re-encodes to the bytes it
 	// already had.
-	imageFitCases     = newCaseSet("Natural", "Cover", "Contain")
-	imageAspectCases  = newCaseSet("Natural", "Square", "FourThree", "ThreeTwo", "SixteenNine")
-	imageLoadingCases = newCaseSet("Eager", "Lazy")
+	imageFitCases     = newCaseSet(idl.EnumImageFit.Cases...)
+	imageAspectCases  = newCaseSet(idl.EnumImageAspect.Cases...)
+	imageLoadingCases = newCaseSet(idl.EnumImageLoading.Cases...)
 	// Phase 1110 — §3.6.6's `TrackKind`, a BARE enum (§3.5), so an unrecognised
 	// token reports at the array element's own path with no `.$type` suffix.
 	// Closed at four: `metadata` is deliberately NOT admitted, because its cues
 	// are rendered by no user agent and read only by script, so a declarative
 	// document naming it would state an intent no conformant host could honour.
-	trackKindCases = newCaseSet("Subtitles", "Captions", "Descriptions", "Chapters")
+	trackKindCases = newCaseSet(idl.EnumTrackKind.Cases...)
 	// Phase 1111 — §3.6.8's `EmbedPermission`, likewise a BARE enum. Closed at
 	// four, and the two omissions are DESIGN rather than reservation: a
 	// top-level-navigation relaxation is the drive-by redirect, and a downloads
@@ -594,30 +599,30 @@ var (
 	// MUST NOT silently drop an unrecognised token — that would turn a document
 	// asking for something this vocabulary cannot name into one asking for
 	// LESS, which reads as success.
-	embedPermissionCases = newCaseSet("AllowScripts", "AllowSameOrigin", "AllowForms", "AllowFullscreen")
+	embedPermissionCases = newCaseSet(idl.EnumEmbedPermission.Cases...)
 	// Phase 1076 — §3.6.6. ONE kind, two variants: everything a video surface
 	// and an audio surface share is stated once on the record, and only the
 	// slots that genuinely differ live in the variant. Discriminated by
 	// `$type`, so an unknown case reports at `$.kind.kind.$type` — the
 	// Binding / TextSource position, not the bare-enum one (§6).
-	mediaKindCases         = newCaseSet("Video", "Audio")
-	linkProtectionCases    = newCaseSet("email") // Phase 812 — anti-scraper render strategy
-	scrollOrientationCases = newCaseSet("Vertical", "Horizontal", "Both")
-	mathDisplayCases       = newCaseSet("Inline", "Block")
-	chartKindCases         = newCaseSet("Line", "Bar", "Area", "Pie", "Scatter", "Heatmap")
-	boxRoleCases           = newCaseSet("Group", "Card", "Dashboard", "Separator")
-	boxLayoutCases         = newCaseSet("Flex", "Grid", "Masonry", "Auto")
-	channelDirectionCases  = newCaseSet("OutOnly", "TwoWay")
-	textAnchorCases        = newCaseSet("Start", "Middle", "End")
+	mediaKindCases         = newCaseSet(idl.UnionMediaKind.CaseTags()...)
+	linkProtectionCases    = newCaseSet(idl.EnumLinkProtection.Cases...) // Phase 812 — anti-scraper render strategy
+	scrollOrientationCases = newCaseSet(idl.EnumScrollOrientation.Cases...)
+	mathDisplayCases       = newCaseSet(idl.EnumMathDisplay.Cases...)
+	chartKindCases         = newCaseSet(idl.EnumChartKind.Cases...)
+	boxRoleCases           = newCaseSet(idl.EnumBoxRole.Cases...)
+	boxLayoutCases         = newCaseSet(idl.UnionBoxLayout.CaseTags()...)
+	channelDirectionCases  = newCaseSet(idl.EnumChannelDirection.Cases...)
+	textAnchorCases        = newCaseSet(idl.EnumTextAnchor.Cases...)
 	// Phase 801 — the closed two-value sort direction on staticRows.defaultSort.
 	// Lower-case on the wire, unlike most enums here.
-	sortDirectionCases = newCaseSet("asc", "desc")
+	sortDirectionCases = newCaseSet(idl.EnumSortDirection.Cases...)
 	// Phase 867 — Metric.trendPolarity: which way the measured quantity IMPROVES.
 	// TWO cases, and the absence of a third is deliberate: `Neutral` is RESERVED
 	// and is not admitted, which is the whole reason the slot is an enum rather
 	// than an `inverted: bool` — admitting it later is then a bare-string
 	// addition here, not a type replacement across every host.
-	trendPolarityCases = newCaseSet("HigherIsBetter", "LowerIsBetter")
+	trendPolarityCases = newCaseSet(idl.EnumTrendPolarity.Cases...)
 	// Phase 1472 — §3.1's `TextDirection`, the ONE `SemanticStyle` member that
 	// is not presentational: it declares one value's own base direction, which
 	// the bidirectional algorithm otherwise infers from the value's first
@@ -628,73 +633,65 @@ var (
 	// existed. An unrecognised token is REFUSED, never coerced to the default —
 	// a misspelled `"rtl"` would otherwise render as reordered digits with
 	// nothing said anywhere, which is the failure the member exists to prevent.
-	textDirectionCases = newCaseSet("auto", "ltr", "rtl")
+	textDirectionCases = newCaseSet(idl.EnumTextDirection.Cases...)
 	// Phase 1119 — §3.6.11's `Modality`, a closed PAIR. A sheet, a drawer and a
 	// menu are all PRESENTATIONS of one of the two rather than a third, so the
 	// answer to an unknown token is to say which of the two was meant, not to
 	// widen the enum. `Modal` is the identity and omits at it.
-	modalityCases = newCaseSet("Modal", "Popover")
+	modalityCases = newCaseSet(idl.EnumModalityKind.Cases...)
 	// Phase 1536 — which browsing context an `Action.Navigate` lands in. A bare
 	// enum (§3.5), omitted at `Self`. Two cases and NO lenient spelling: HTML's
 	// `_self` / `_blank` / `_parent` / `_top` are not accepted as aliases, because
 	// two of them are frame-busting gestures a hosted tree must not be able to ask
 	// for and accepting the two harmless ones would teach an emitter that the HTML
 	// vocabulary is the one in force here.
-	navigateTargetCases = newCaseSet("Self", "Blank")
+	navigateTargetCases = newCaseSet(idl.EnumNavigateTarget.Cases...)
 	// Phase 1116 — §3.6.10's `CaptureSource`, a closed pair. `Screen` is
 	// deliberately absent: the HTML capture attribute cannot ask for a display
 	// at all, and a screen capture is a standing grant reaching every window the
 	// reader has open rather than a third device behind the same picker
 	// permission. A later admission would be an ADDITION, never a re-meaning.
-	captureSourceCases = newCaseSet("Camera", "Microphone")
+	captureSourceCases = newCaseSet(idl.EnumCaptureSource.Cases...)
 
 	// Drawing (Phase 524) — the closed Shape / CurveCommand DUs. An unrecognised
 	// discriminator is UNKNOWN_DU_CASE (the typed-surface default-deny).
-	shapeCases        = newCaseSet("Group", "Rectangle", "Line", "Polyline", "Polygon", "Curve", "Circle", "Ellipse", "Label")
-	curveCommandCases = newCaseSet("MoveTo", "LineTo", "CubicTo", "QuadraticTo", "Close")
+	shapeCases        = newCaseSet(idl.UnionShape.CaseTags()...)
+	curveCommandCases = newCaseSet(idl.UnionCurveCommand.CaseTags()...)
 
-	textSourceCases = newCaseSet("Literal", "Bound", "I18n")
+	textSourceCases = newCaseSet(idl.UnionTextSource.CaseTags()...)
 	// The binding vocabulary includes the compute-layer cases (Transform /
 	// Invoke) plus "Bound" — the TextSource-wrapper convention transferred to
 	// a bare-Binding slot, accepted leniently and unwrapped in place.
-	bindingCases = newCaseSet(
-		"Static", "Query", "Filter", "Selection", "State", "Now", "Computed",
-		"I18n", "Local", "Format", "Data", "Transform", "Expr", "Invoke", "Bound",
-	)
+	bindingCases = newCaseSet(append(idl.UnionBinding.CaseTags(), "Bound")...)
 	// Phase 1811 — DateTime is canonical; Date is its section-16 lenient alias (the
 	// pre-rename spelling), admitted here and normalised in decodeCellFormat.
-	cellFormatCases = newCaseSet("None", "Number", "Currency", "Percent", "SignificantDigits", "DateTime", "Date", "Duration", "RelativeTime", "Custom")
+	cellFormatCases = newCaseSet(append(idl.UnionCellFormat.CaseTags(), "Date")...)
 	// Phase 819 — the Duration / RelativeTime format enums (shared by the
 	// CellFormat vocabulary; the binding-level Format object still decodes
 	// structurally).
-	durationUnitCases     = newCaseSet("Seconds", "Minutes", "Hours")
-	durationStyleCases    = newCaseSet("Compact", "Clock", "Long")
-	relativeTimeUnitCases = newCaseSet("Second", "Minute", "Hour", "Day", "Week", "Month", "Year")
+	durationUnitCases     = newCaseSet(idl.EnumDurationUnit.Cases...)
+	durationStyleCases    = newCaseSet(idl.EnumDurationStyle.Cases...)
+	relativeTimeUnitCases = newCaseSet(idl.EnumRelativeTimeUnit.Cases...)
 	// Phase 1533 — the resolution a `Binding.Now` declares for the
 	// host-furnished instant. A strict SUBSET of relativeTimeUnitCases: `Week`
 	// / `Month` / `Year` are refused rather than quietly accepted, because this
 	// is a truncation of a calendar instant and those three have no truncation
 	// every host agrees on (which weekday starts a week; which calendar).
-	timeGrainCases = newCaseSet("Second", "Minute", "Hour", "Day")
+	timeGrainCases = newCaseSet(idl.EnumTimeGrain.Cases...)
 	// Phase 821 — the standalone Icon display kind's size enum.
-	iconSizeCases    = newCaseSet("Small", "Medium", "Large")
-	columnWidthCases = newCaseSet("Auto", "Fixed", "Flex")
-	cellKindCases    = newCaseSet("Text", "Numeric", "Date", "Editable", "Checkbox", "Button", "ButtonGroup", "Link", "Pill", "TonedPill", "Progress", "Custom")
+	iconSizeCases    = newCaseSet(idl.EnumIconSize.Cases...)
+	columnWidthCases = newCaseSet(idl.UnionColumnWidth.CaseTags()...)
+	cellKindCases    = newCaseSet(idl.UnionCellKindErased.CaseTags()...)
 	// Phase 1113 — `Combobox` is the searchable form of `Choice`: a LARGE,
 	// searchable or asynchronous option set, or one that admits a value not on
 	// the list. Its `value` / `onChange` contract IS Choice's, deliberately, so
 	// a document migrating between the two changes its `$type` and nothing else.
 	//
 	// Phase 1121's `Tokens` and Phase 1130's `Rating` / `Color` join them.
-	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Toggle", "Choice", "SegmentedChoice", "Combobox", "TextArea", "Range", "DateTime", "DateTimeRange", "Tokens", "Rating", "Color")
-	flushTriggerCases = newCaseSet("OnBlur", "OnSubmit", "OnDebounce", "OnCommitAction")
-	actionCases       = newCaseSet(
-		"Chain", "Dispatch", "Navigate", "SetState", "Notify", "WriteToClipboard",
-		"ReadFileBody", "Call", "AiTool", "CommitLocal", "Invoke", "Print",
-		// Phase 1537 — the confirm-before-action dialogue and the focus move.
-		"Confirm", "Focus",
-	)
-	callTargetCases = newCaseSet("State", "Query")
+	formFieldCases    = newCaseSet(idl.UnionFormFieldKind.CaseTags()...)
+	flushTriggerCases = newCaseSet(idl.UnionLocalFlushTrigger.CaseTags()...)
+	actionCases       = newCaseSet(idl.UnionAction.CaseTags()...)
+	callTargetCases   = newCaseSet(idl.UnionCallResultTarget.CaseTags()...)
 )
 
 // Lenient-ingest enum-value aliases (§3.6, decode-only; never encoded —
@@ -722,30 +719,10 @@ var (
 	noAliases = map[string]string(nil)
 )
 
-// knownKinds is every recognised node-kind discriminator (WIRE_FORMAT.md §3.2),
-// including the retired legacy container tags that decode-upgrade on read
-// (they never re-encode to their old form). A kind not in this set is
-// WRONG_NODE_KIND; a kind in this set but absent from the typed decoders is
-// accepted structurally.
-var knownKinds = newCaseSet(
-	// Layout
-	"Box", "SplitPanel", "Tabs", "Stepper", "SummaryList", "Disclosure", "Modal", "ScrollArea",
-	// Display
-	"Heading", "Markdown", "Metric", "Fact", "Badge", "Sparkline", "Callout", "Progress", "Skeleton",
-	"Icon", "LabelValueRow", "Link", "Image", "Media", "List", "Toast", "CodeBlock", "Math", "Drawing",
-	// Phase 1111 / 1120 — the sandboxed third-party embed, and recursive
-	// disclosure with tree semantics. Both are Display kinds; `Tree` is the
-	// format's first self-referential shape (its rows are `TreeItem` records,
-	// not `Node`s, so the hierarchy costs no node depth and is bounded on its
-	// own axis — §21.5).
-	"Embed", "Tree",
-	// Input
-	"Form", "Button", "FileUpload", "Select", "Filters",
-	// Visualisation
-	"DataGrid", "Chart", "Map",
-	// Structural
-	"Custom", "ErrorBoundary", "Switch", "FragmentDecl", "FragmentRef", "Mount",
-)
+// knownKinds is every node-kind discriminator idl.json declares
+// (WIRE_FORMAT.md §3.2). A kind not in this set is WRONG_NODE_KIND; every kind
+// in it has a typed decoder arm (kindarms_gen.go).
+var knownKinds = newCaseSet(idl.KindTags()...)
 
 // KnownNodeKinds returns the sorted set of recognised kind.$type discriminators
 // (the conformance exhaustiveness guard keys off it).
@@ -816,9 +793,11 @@ func decodeTextSource(w *walkState, raw any, path string) Value {
 			args = decodeI18nArgs(w, raw, path+".args")
 		}
 		return Obj{Tag: "I18n", Fields: map[string]Value{"args": args, "key": Str(key)}}
-	default: // Bound
+	case "Bound":
 		binding := decodeBinding(w, require(obj, "binding", path), path+".binding")
 		return Obj{Tag: "Bound", Fields: map[string]Value{"binding": binding}}
+	default:
+		return tableCase(w, obj, path, &idl.UnionTextSource, tag)
 	}
 }
 
@@ -1063,11 +1042,14 @@ func rowSeqStatic(w *walkState, raw any, path string) Value {
 func decodeLocalFlushTrigger(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, flushTriggerCases, CodeUnknownDUCase)
-	if tag == "OnDebounce" {
+	switch tag {
+	case "OnDebounce":
 		ms := expectInt(require(obj, "milliseconds", path), path+".milliseconds")
 		return Obj{Tag: tag, Fields: map[string]Value{"milliseconds": Int(ms)}}
+	case "OnBlur", "OnSubmit", "OnCommitAction":
+		return Obj{Tag: tag, Fields: map[string]Value{}}
 	}
-	return Obj{Tag: tag, Fields: map[string]Value{}}
+	return tableCase(w, obj, path, &idl.UnionLocalFlushTrigger, tag)
 }
 
 // decodeInvokeArgs — the [{"addr","value"}] scalar pairs of Binding.Invoke /
@@ -1451,8 +1433,10 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		// slot: Bound carries exactly one payload field, so the unwrap is
 		// one-to-one — decode the inner binding in place. Decode-only.
 		return decodeBindingWith(w, require(obj, "binding", path), path+".binding", parse)
-	default: // "Data" — structural pass-through with a validated discriminator.
-		return fromJSON(raw)
+	default:
+		// A case idl.json declares that has no hand arm above: read from its
+		// table row, so a new Binding case decodes typed on regeneration.
+		return tableCase(w, obj, path, &idl.UnionBinding, tag)
 	}
 }
 
@@ -1835,16 +1819,18 @@ func decodeAction(w *walkState, raw any, path string) Value {
 	case "ReadFileBody":
 		fileRef := expectString(require(obj, "fileRef", path), path+".fileRef")
 		encoding := enumStr(require(obj, "encoding", path), path+".encoding",
-			newCaseSet("Text", "Base64", "DataUrl"), "encoding", noAliases)
+			enumCases(&idl.EnumFileReadEncoding), "encoding", noAliases)
 		return Obj{Tag: tag, Fields: map[string]Value{
 			"encoding": Str(encoding),
 			"fileRef":  Str(fileRef),
 			"onRead":   Str(closureSentinel),
 		}}
-	default: // Invoke
+	case "Invoke":
 		capabilityID := expectString(require(obj, "capabilityId", path), path+".capabilityId")
 		args := decodeInvokeArgs(w, require(obj, "args", path), path+".args")
 		return Obj{Tag: tag, Fields: map[string]Value{"args": args, "capabilityId": Str(capabilityID)}}
+	default:
+		return tableCase(w, obj, path, &idl.UnionAction, tag)
 	}
 }
 
@@ -2177,9 +2163,9 @@ func decodeSwitchCases(w *walkState, raw any, path string) Value {
 // ── Chart annotations (Phase 1490/1491/1492 — §4l) ──────────────────────────
 
 var (
-	chartAnnotationCases      = newCaseSet("ReferenceLine", "EventMarker", "RangeBand")
-	chartAnnotationXCases     = newCaseSet("Category", "Date")
-	chartAnnotationRangeCases = newCaseSet("ValueRange", "XRange")
+	chartAnnotationCases      = newCaseSet(idl.UnionChartAnnotation.CaseTags()...)
+	chartAnnotationXCases     = newCaseSet(idl.UnionChartAnnotationX.CaseTags()...)
+	chartAnnotationRangeCases = newCaseSet(idl.UnionChartAnnotationRange.CaseTags()...)
 )
 
 // isCanonicalISODay reports whether text is a canonical ISO-8601 date the
@@ -2364,9 +2350,11 @@ func decodeChartAnnotation(w *walkState, raw any, path string) Value {
 		s.take("at")
 		s.set("at", at)
 		return s.buildStrict("EventMarker")
-	default:
+	case "RangeBand":
 		s.req("range", decodeChartAnnotationRange)
 		return s.buildStrict("RangeBand")
+	default:
+		return tableCase(w, obj, path, &idl.UnionChartAnnotation, tag)
 	}
 }
 
@@ -2544,8 +2532,10 @@ func decodeCurveCommand(w *walkState, raw any, path string) Value {
 			"control": decodeDrawPoint(w, require(obj, "control", path), path+".control"),
 			"to":      decodeDrawPoint(w, require(obj, "to", path), path+".to"),
 		}}
-	default: // Close
+	case "Close":
 		return Obj{Tag: "Close", Fields: map[string]Value{}}
+	default:
+		return tableCase(w, obj, path, &idl.UnionCurveCommand, tag)
 	}
 }
 
@@ -2616,13 +2606,15 @@ func decodeShape(w *walkState, raw any, path string) Value {
 			"ry":    expectNumber(w, require(obj, "ry", path), path+".ry"),
 			"style": style,
 		}}
-	default: // Label
+	case "Label":
 		return Obj{Tag: tag, Fields: map[string]Value{
 			"style": style,
 			"text":  decodeTextSource(w, require(obj, "text", path), path+".text"),
 			"x":     expectNumber(w, require(obj, "x", path), path+".x"),
 			"y":     expectNumber(w, require(obj, "y", path), path+".y"),
 		}}
+	default:
+		return tableCase(w, obj, path, &idl.UnionShape, tag)
 	}
 }
 
@@ -2939,6 +2931,8 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 		s.opt("min", decodeString)
 		s.opt("max", decodeString)
 		s.opt("step", expectNumberField)
+	default:
+		return tableCase(w, obj, path, &idl.UnionFormFieldKind, tag)
 	}
 	return s.buildStrict(tag)
 }
@@ -2981,8 +2975,8 @@ func isHexColour(v Value) bool {
 // structural shape. Parity-locked with the reference host's `decodeFieldRule` /
 // `formFieldNearMisses` and with the TypeScript tier's.
 var (
-	textFormatCases = newCaseSet("email", "url", "tel")
-	compareOpCases  = newCaseSet("eq", "neq", "lt", "lte", "gt", "gte")
+	textFormatCases = newCaseSet(idl.EnumTextFormat.Cases...)
+	compareOpCases  = newCaseSet(idl.EnumCompareOp.Cases...)
 )
 
 func decodeTextFormat(w *walkState, raw any, path string) Value {
@@ -3251,8 +3245,10 @@ func decodeCellKindErased(w *walkState, raw any, path string) Value {
 		return Obj{Tag: tag, Fields: map[string]Value{"labelFn": Str(closureSentinel), "toneFn": Str(closureSentinel)}}
 	case "Progress":
 		return Obj{Tag: tag, Fields: map[string]Value{"fractionFn": Str(closureSentinel), "labelFn": Str(closureSentinel)}}
-	default: // Custom
+	case "Custom":
 		return Obj{Tag: tag, Fields: map[string]Value{"fn": Str(closureSentinel)}}
+	default:
+		return tableCase(w, obj, path, &idl.UnionCellKindErased, tag)
 	}
 }
 
@@ -3619,6 +3615,9 @@ func decodeUploadDestination(w *walkState, raw any, path string) Value {
 func decodeMediaKind(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, mediaKindCases, CodeUnknownDUCase)
+	if tag != "Video" && tag != "Audio" {
+		return tableCase(w, obj, path, &idl.UnionMediaKind, tag)
+	}
 	s := newSpec(w, obj, path)
 	if tag == "Video" {
 		// `autoplay` is a DECLARATION whose RENDERING is constrained (never
