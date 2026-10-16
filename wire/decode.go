@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
 
 // Decode canonical wire JSON into the structural model (WIRE_FORMAT.md §3,
@@ -769,23 +771,6 @@ func CanonicalFormFieldKinds() []string {
 }
 
 // ── Value-shape predicates (the omit-when-default seam, §3.6) ──────────────
-
-func isTagOnly(v Value, tag string) bool {
-	o, ok := v.(Obj)
-	return ok && o.Tag == tag && len(o.Fields) == 0
-}
-
-// isPureDeterministicEffect reports the identity `EffectClass` — the one
-// `FragmentDecl.effect` omits (Phase 1670). Both members are required by the
-// spec, so an object carrying anything else, or carrying a third key, is NOT the
-// identity and rides to the wire unchanged.
-func isPureDeterministicEffect(v Value) bool {
-	obj, ok := v.(Obj)
-	if !ok || obj.Tag != "" || len(obj.Fields) != 2 {
-		return false
-	}
-	return isStr(obj.Fields["determinism"], "Deterministic") && isStr(obj.Fields["hostEffect"], "Pure")
-}
 
 func isStr(v Value, s string) bool {
 	t, ok := v.(Str)
@@ -1916,6 +1901,9 @@ type spec struct {
 	path     string
 	fields   map[string]Value
 	consumed map[string]bool
+	// rows is the generated field table the object is decoded against (a
+	// kind's, a union case's or a record's), or nil for a hand-only shape.
+	rows []idl.Field
 }
 
 func newSpec(w *walkState, obj map[string]any, path string) *spec {
@@ -1980,8 +1968,11 @@ func (s *spec) sentinel(key string) {
 
 func (s *spec) set(key string, v Value) { s.fields[key] = v }
 
-// build finishes the kind object, preserving unconsumed keys structurally.
+// build finishes the object: every table row the hand arm did not read is
+// decoded by its declared type, and the keys no row names are preserved
+// structurally (rule 2 tolerance).
 func (s *spec) build(tag string) Obj {
+	s.decodeRemainingRows()
 	for k, v := range s.obj {
 		if !s.consumed[k] {
 			s.fields[k] = fromJSON(v)
@@ -2827,7 +2818,7 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 		handler("onChange")
 		s.req("options", decodeBindingSelectOptions)
 		valueSlot(decodeBindingStringOpt)
-		s.optDrop("allowFreeText", decodeBool, isFalseValue)
+		s.optDrop("allowFreeText", decodeBool, dropComboboxFreeText)
 	case "SegmentedChoice":
 		handler("onChange")
 		s.req("options", decodeBindingSelectOptions)
@@ -2885,7 +2876,7 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 		// Omits at `false`, and the polarity is load-bearing: the SHORTEST
 		// rating document is the whole-star one. It governs ENTRY, never
 		// DISPLAY.
-		s.optDrop("allowHalf", decodeBool, isFalseValue)
+		s.optDrop("allowHalf", decodeBool, dropRatingHalf)
 		valueSlot(decodeBindingFloat)
 	// Phase 1130 — `#rrggbb` and nothing else, because that is the one form a
 	// native colour input can hold or return. Only the `Static` case is judged
@@ -3174,9 +3165,9 @@ func hasAnyKey(obj map[string]any, keys []string) bool {
 func decodeToneMap(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	fields := make(map[string]Value, len(obj))
-	for key, v := range obj {
+	for _, key := range ordinalKeys(obj) {
 		entryPath := path + "." + key
-		fields[key] = reissueToneMapEntry(w, v, entryPath, key)
+		fields[key] = reissueToneMapEntry(w, obj[key], entryPath, key)
 	}
 	return Obj{Fields: fields}
 }
@@ -3213,7 +3204,7 @@ func decodeTonedPill(w *walkState, obj map[string]any, path string) Value {
 	// `default` is omitted-when-`Default` (the Phase 460 discipline); an absent key
 	// restores the identity, and an aliased `Neutral` normalises to `Default` and
 	// then omits — two rules composing, in that order.
-	s.optDrop("default", decodeTone, isDefaultTone)
+	s.optDrop("default", decodeTone, dropTonedPillDefault)
 	return s.buildStrict("TonedPill")
 }
 
@@ -3376,8 +3367,8 @@ func decodeColumnErased(w *walkState, raw any, path string) Value {
 	// format/width omitted-when-default.
 	s.req("kind", decodeCellKindErased, "type")
 	s.req("label", decodeString, "header", "title")
-	s.optDrop("format", decodeCellFormat, func(v Value) bool { return isTagOnly(v, "None") })
-	s.optDrop("width", decodeColumnWidth, func(v Value) bool { return isTagOnly(v, "Auto") })
+	s.optDrop("format", decodeCellFormat, dropColumnFormat)
+	s.optDrop("width", decodeColumnWidth, dropColumnWidth)
 	s.sentinel("value")
 	checkNearMisses(obj, path, columnNearMisses)
 	// Phase 861 / 863 — per-column sort and editability NARROWING; absent
@@ -3449,60 +3440,6 @@ func decodeStaticRows(w *walkState, raw any, path string) Value {
 
 // ── Per-kind typed decoders ─────────────────────────────────────────────────
 
-func isDefaultTone(v Value) bool    { return isStr(v, "Default") }
-func isMediumIconSize(v Value) bool { return isStr(v, "Medium") }
-func isStandardWeight(v Value) bool { return isStr(v, "Standard") }
-func isNormalEmphasis(v Value) bool { return isStr(v, "Normal") }
-func isFalseValue(v Value) bool     { return isBool(v, false) }
-func isTrueValue(v Value) bool      { return isBool(v, true) }
-func isNoneCellFormat(v Value) bool { return isTagOnly(v, "None") }
-
-// Phase 1585 — §3.6: `Tabs.activeIndex`'s identity is the `Static` binding
-// carrying the integer 0.
-//
-// The first `optDrop` predicate over a BINDING rather than a token, and the
-// difference is the point. A token identity has one inhabitant, so "is it the
-// default" and "which case is it" are the same question; a binding identity is
-// one inhabitant of a union whose payload domain is unbounded, so this tests the
-// CASE **and** its payload. A `Static` carrying any other index must survive,
-// and so must every `Query` / `Filter` / `Selection` / `State` binding —
-// dropping on the tag alone would discard a document's authored tab, and for a
-// writable binding its write-back destination with it.
-//
-// `Int` and not `Float`: `intStatic` yields `Int` for every accepted payload, so
-// a `Float` here is not a spelling this decoder produces.
-func isStaticIntZero(v Value) bool {
-	o, ok := v.(Obj)
-	if !ok || o.Tag != "Static" || len(o.Fields) != 1 {
-		return false
-	}
-	n, ok := o.Fields["value"].(Int)
-	return ok && n == 0
-}
-
-// Phase 867 — §3.6.1 clause 4: an absent `trendPolarity` IS `HigherIsBetter`.
-func isHigherIsBetter(v Value) bool { return isStr(v, "HigherIsBetter") }
-
-// Phase 1677 — §3.6: an absent `Tabs.orientation` IS `Horizontal`.
-func isHorizontal(v Value) bool { return isStr(v, "Horizontal") }
-
-// Phase 1077 — §3.6.2. `Natural` is the identity on BOTH the fit and the
-// aspect axis, so one predicate serves both slots.
-func isNaturalImageToken(v Value) bool { return isStr(v, "Natural") }
-
-// Phase 1077 — `Eager` is the identity, and it is not the "unoptimised" value:
-// deferring an above-the-fold image delays the largest contentful paint rather
-// than helping it, and only the author knows where the image sits, so the
-// format declines to guess and `Eager` emits no attribute at all.
-func isEagerLoading(v Value) bool { return isStr(v, "Eager") }
-
-// Phase 1080 — §3.6.4. The srcSet identity is the EMPTY LIST rather than a
-// token: absence and `[]` denote the same document.
-func isEmptyArr(v Value) bool {
-	a, ok := v.(Arr)
-	return ok && len(a) == 0
-}
-
 // decodeSrcSet — §3.6.4's candidate list. `null` never reaches here as an
 // empty list: `expectArray` refuses it with WRONG_TYPE at `$.kind.srcSet`,
 // which is the whole of the missing-list-field decode class on this slot.
@@ -3552,7 +3489,7 @@ func decodeTracks(w *walkState, raw any, path string) Value {
 		// Refused rather than coerced: two hosts ruling differently on
 		// truthiness would disagree about which caption track opens, which is a
 		// difference the reader meets on the first frame.
-		s.optDrop("default", decodeBool, isFalseValue)
+		s.optDrop("default", decodeBool, dropTrackDefault)
 		out[i] = s.buildStrict("")
 	}
 	return out
@@ -3636,7 +3573,7 @@ func decodeTreeItems(w *walkState, raw any, path string) Value {
 		// Recursion. The child walker is the SAME walker as the root one — a
 		// host whose child walk is looser than its root walk passes every
 		// top-level reject vector and fails `reject-tree-nested-item-missing-id`.
-		s.optDrop("children", decodeTreeItems, isEmptyArr)
+		s.optDrop("children", decodeTreeItems, dropTreeItemChildren)
 		s.opt("icon", decodeString)
 		out[i] = s.buildStrict("")
 		w.exitItem()
@@ -3688,7 +3625,7 @@ func decodeMediaKind(w *walkState, raw any, path string) Value {
 		// without `muted`) — the wire carries no separate muted slot to fall
 		// out of step with it. Omitted at false; refused rather than coerced
 		// when stringified.
-		s.optDrop("autoplay", decodeBool, isFalseValue)
+		s.optDrop("autoplay", decodeBool, dropVideoAutoplay)
 		s.opt("poster", decodeBindingString)
 	}
 	return s.buildStrict(tag)
@@ -3697,675 +3634,661 @@ func decodeMediaKind(w *walkState, raw any, path string) Value {
 // kindBuilders holds the typed per-kind decoders. Kinds absent here (and from
 // the dedicated Box / legacy handlers) decode structurally.
 //
-// Populated in init(): several builders recurse back through decodeNodeValue,
-// which a package-level composite literal would report as a cycle.
-var kindBuilders map[string]func(w *walkState, obj map[string]any, path string) Obj
+// handArms is this host's hand-written decoder arm set. It embeds the
+// generated table arm set, so every kind idl.json declares has an arm; a kind
+// listed here overrides its table arm because its reading carries behaviour
+// this host owns (an alias, a coercion, a relational check), and consults the
+// table for each field's optionality and omit-at-default value. The assertion
+// below is the reverse guard: an arm set that is not total does not compile.
+type handArms struct{ tableArms }
 
-// requiredKindFields mirrors the typed decoders' required sets for the
-// validator's constructed-tree checks (see RequiredKindFields).
-var requiredKindFields = map[string][]string{
-	"Heading":       {"level", "text", "variant"},
-	"Markdown":      {"text"},
-	"Metric":        {"label", "value"},
-	"Fact":          {"label", "value"},
-	"LabelValueRow": {"label", "value"},
-	"Badge":         {"label", "variant"},
-	"Callout":       {"body"},
-	"Progress":      {"fraction"},
-	"Skeleton":      {"rows"},
-	"Icon":          {"icon"},
-	"Sparkline":     {"source"},
-	"Map":           {"centreLatitude", "centreLongitude", "source", "zoom"},
-	"Link":          {"download", "href", "label"},
-	"Image":         {"alt", "src", "variant"},
-	// Phase 1076 — `label` is REQUIRED, and it is the one place the media
-	// contract differs from Image's: an image can honestly be decorative and
-	// say so with an empty `alt`, but a media element is a TRANSPORT and is
-	// never decorative. There is no value to default to that would not be a
-	// fabricated name for someone else's recording.
-	"Media": {"kind", "label", "src"},
-	// Phase 1111 — the accessible name is mandatory because a browsing context
-	// has no decorative case, and there is no value to default to that would not
-	// be a fabricated description of someone else's page.
-	"Embed": {"src", "title"},
-	// Phase 1120 — the rows. Both State keys are optional (a tree naming no
-	// `expandedStateKey` renders fully expanded and does not toggle).
-	"Tree":       {"items"},
-	"List":       {"items", "ordered"},
-	"Toast":      {"message", "open"},
-	"CodeBlock":  {"code", "copyable", "highlightLines", "language", "lineNumbers"},
-	"Math":       {"display", "source"},
-	"Drawing":    {"shapes", "style", "viewBox"},
-	"Select":     {"label", "source", "value"},
-	"Modal":      {"children", "dismissable", "open"},
-	"ScrollArea": {"children", "orientation"},
-	"Button":     {"label", "onClick", "variant"},
-	"Form":       {"fields", "onSubmit", "submitLabel"},
-	"Filters":    {"items"},
-	"FileUpload": {"accept", "label", "multiple"},
-	"DataGrid":   {"columns", "source"},
-	"Chart":      {"kind", "source", "xField", "yFields"},
-	"Custom":     {"moduleId", "componentId"},
-	// Switch's selector is one-of stateKey / on (Phase 768) — the validator's
-	// checkSwitch enforces the pair, so neither appears in the required set.
-	"Switch": {"cases", "default"},
-	"Mount":  {"scopeId", "channel", "capabilities", "onBubble"},
-	"Box":    {"children", "layout", "role"},
+var _ kindArms = handArms{}
+
+func (handArms) armHeading(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindHeading)
+	s.field("level", decodeInt)
+	s.field("text", decodeTextSource)
+	s.field("variant", enumDecoder(headingVariantCases, "variant", headingVariantAliases))
+	return s.build("Heading")
 }
 
-func init() {
-	kindBuilders = map[string]func(w *walkState, obj map[string]any, path string) Obj{
-		"Heading": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("level", decodeInt)
-			s.req("text", decodeTextSource)
-			s.req("variant", enumDecoder(headingVariantCases, "variant", headingVariantAliases))
-			return s.build("Heading")
-		},
-		"Markdown": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("text", decodeTextSource)
-			return s.build("Markdown")
-		},
-		// 0.2.0 rename law — the scalar displayed value is `value` (`source`
-		// is reserved for collection feeds and is NOT accepted here — clean
-		// break); `data` stays as the web-prior alias. Phase 460 — the
-		// stylistic fields are omitted-when-default on both boundaries.
-		"Metric": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("label", decodeTextSource)
-			s.req("value", decodeBindingFloat, "data")
-			s.optDrop("format", decodeCellFormat, isNoneCellFormat)
-			s.optDrop("tone", decodeTone, isDefaultTone)
-			s.optDrop("weight", decodeWeight, isStandardWeight)
-			s.optDrop("emphasis", decodeEmphasisEnum, isNormalEmphasis)
-			s.opt("trend", decodeBindingFloat)
-			s.opt("trendFormat", decodeCellFormat)
-			// Phase 867 — the direction-of-good declaration. Omitted-when-default
-			// on BOTH boundaries (§3.6.1 clause 4: an absent slot IS
-			// `HigherIsBetter`), so an explicitly-spelled default normalises away
-			// and a tree that never mentions polarity keeps its bytes.
-			//
-			// It is decoded rather than left to `build`'s structural passthrough,
-			// and that is the point of this arm: passthrough round-trips the key
-			// byte-for-byte while modelling nothing, so a misspelt case would ride
-			// through to the renderer and be read as an unrecognised polarity —
-			// green corpus, wrong tree. The closed set refuses it at the boundary
-			// the way every other bare enum here is refused.
-			s.optDrop("trendPolarity", enumDecoder(trendPolarityCases, "trendPolarity", noAliases), isHigherIsBetter)
-			s.opt("icon", decodeString)
-			s.opt("subtext", decodeTextSource)
-			return s.build("Metric")
-		},
-		// A labeled TEXT fact: `value` is a TextSource, so static / Bound /
-		// I18n values ride the label vocabulary. Only label + value required;
-		// tone / emphasis omitted-when-default on BOTH boundaries.
-		"Fact": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("label", decodeTextSource)
-			s.req("value", decodeTextSource)
-			s.optDrop("tone", decodeTone, isDefaultTone)
-			s.optDrop("emphasis", decodeEmphasisFlag, isFalseValue)
-			s.opt("help", decodeTextSource)
-			s.opt("icon", decodeString)
-			return s.build("Fact")
-		},
-		"LabelValueRow": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("label", decodeTextSource)
-			s.req("value", decodeBindingFloat, "data")
-			s.optDrop("format", decodeCellFormat, isNoneCellFormat)
-			// 0.2.2 — the behavioural bool, omitted-when-false (aligning with
-			// Fact's identical flag); the cross-vocabulary coercion accepts
-			// the Emphasis enum + its aliases.
-			s.optDrop("emphasis", decodeEmphasisFlag, isFalseValue)
-			s.opt("help", decodeTextSource)
-			return s.build("LabelValueRow")
-		},
-		"Badge": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("label", decodeTextSource)
-			s.req("variant", enumDecoder(badgeVariantCases, "variant", badgeVariantAliases))
-			return s.build("Badge")
-		},
-		"Callout": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("body", decodeTextSource)
-			// 0.2.0 — dismissable omitted-when-false; Phase 460 — tone
-			// omitted-when-default. `title` aliases `heading`.
-			s.optDrop("dismissable", decodeBool, isFalseValue)
-			s.optDrop("tone", decodeTone, isDefaultTone)
-			s.opt("heading", decodeTextSource, "title")
-			s.opt("icon", decodeString)
-			return s.build("Callout")
-		},
-		"Progress": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("fraction", decodeBindingFloat)
-			// 0.2.0 — indeterminate omitted-when-false.
-			s.optDrop("indeterminate", decodeBool, isFalseValue)
-			s.optDrop("tone", decodeTone, isDefaultTone)
-			s.opt("label", decodeTextSource)
-			s.opt("caveat", decodeTextSource)
-			return s.build("Progress")
-		},
-		"Toast": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			// 0.2.0 — the one omit-when-TRUE: a toast is dismissable unless
-			// said otherwise.
-			s.optDrop("dismissable", decodeBool, isTrueValue)
-			s.req("message", decodeTextSource)
-			s.req("open", decodeBindingBool)
-			s.optDrop("tone", decodeTone, isDefaultTone)
-			return s.build("Toast")
-		},
-		"Skeleton": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			// Phase 1666 — the §21.9 row bound rides the field's own decoder, so
-			// the spec table stays the single statement of a Skeleton's shape.
-			s.req("rows", decodeSkeletonRows)
-			return s.build("Skeleton")
-		},
-		// Phase 821 — the standalone icon-only display kind. `size`
-		// omitted-when-`Medium`; `tone` omitted-when-default (the Phase 460
-		// discipline); `label` omitted-when-decorative.
-		"Icon": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("icon", decodeString)
-			s.optDrop("size", enumDecoder(iconSizeCases, "size", noAliases), isMediumIconSize)
-			s.optDrop("tone", decodeTone, isDefaultTone)
-			s.opt("label", decodeString)
-			return s.build("Icon")
-		},
-		// source is a §5 typed Static float-series position; `data` aliases.
-		"Sparkline": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("source", decodeBindingFloatSeq, "data")
-			return s.build("Sparkline")
-		},
-		// source is a §5 typed Static marker-list position; `data` / `markers`
-		// alias.
-		"Map": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("centreLatitude", expectNumberField)
-			s.req("centreLongitude", expectNumberField)
-			s.req("source", decodeBindingMarkerSeq, "data", "markers")
-			s.req("zoom", decodeInt)
-			s.sentinel("onMarkerClick")
-			return s.build("Map")
-		},
-		"Link": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("download", decodeBool)
-			s.req("href", decodeBindingString)
-			s.req("label", decodeTextSource)
-			// Phase 812 — optional closed enumeration; an unknown case is
-			// UNKNOWN_DU_CASE at $.kind.protection.
-			s.opt("protection", enumDecoder(linkProtectionCases, "protection", noAliases))
-			s.opt("rel", decodeString)
-			s.opt("target", decodeString)
-			return s.build("Link")
-		},
-		// Phases 1077 / 1078 / 1079 / 1080 — §3.6.2–§3.6.5. Five optional
-		// slots beside `variant`, and they do NOT all take the same posture:
-		//
-		//   * fit / aspectRatio / loading are identity-default TOKENS, dropped
-		//     at their default on the decode boundary so an explicit `Natural`
-		//     / `Eager` canonicalises to the omitted form (§3.6's table).
-		//   * caption is CONTENT, not a presentation token — there is no
-		//     default caption the way there is a default fit — so it takes the
-		//     ordinary optional-field posture (rule 4). It is a full
-		//     `TextSource`, NOT a string: narrowing the slot costs nothing
-		//     until somebody needs a locale, which is why the enveloped
-		//     `{"$type":"Literal"}` form has its own lenient fixture here.
-		//   * srcSet IS an omit-at-default field whose identity is the EMPTY
-		//     LIST rather than a token. Absent and `[]` denote the same
-		//     document; a present `null` is refused, because absence already
-		//     has a spelling and a second one would let two conformant hosts
-		//     emit different canonical bytes for one document.
-		//   * expandable is a plain bool omitted at `false`, refused rather
-		//     than coerced when stringified — a truthiness rule would have to
-		//     rule on `"false"` and `""` too, and two hosts ruling differently
-		//     would disagree about whether the document declares an affordance
-		//     at all.
-		"Image": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("alt", decodeTextSource)
-			s.optDrop("aspectRatio", enumDecoder(imageAspectCases, "aspectRatio", noAliases), isNaturalImageToken)
-			s.opt("caption", decodeTextSource)
-			s.optDrop("expandable", decodeBool, isFalseValue)
-			s.optDrop("fit", enumDecoder(imageFitCases, "fit", noAliases), isNaturalImageToken)
-			s.optDrop("loading", enumDecoder(imageLoadingCases, "loading", noAliases), isEagerLoading)
-			s.req("src", decodeBindingString)
-			s.optDrop("srcSet", decodeSrcSet, isEmptyArr)
-			s.req("variant", enumDecoder(imageVariantCases, "variant", noAliases))
-			return s.build("Image")
-		},
-		// Phase 1076 — §3.6.6. The shared record carries the source, the
-		// mandatory accessible name, and the two shared declarations;
-		// `controls` is omitted at TRUE (the second such slot in the
-		// vocabulary after `Toast.dismissable`, and the polarity is
-		// deliberate — a media element without a transport cannot be paused,
-		// seeked or muted by a keyboard user at all, so the accessible setting
-		// is what a document gets for free and taking it away is the deviation
-		// that costs a key). `loop` takes the ordinary polarity.
-		"Media": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.optDrop("controls", decodeBool, isTrueValue)
-			s.req("kind", decodeMediaKind)
-			s.req("label", decodeTextSource)
-			s.optDrop("loop", decodeBool, isFalseValue)
-			s.req("src", decodeBindingString)
-			// Phase 1110 — both live on the SPEC rather than on
-			// `MediaKind.Video`, and the second placement is the one worth
-			// explaining: a transcript is the affordance an AUDIO surface needs
-			// most, because a recording with no visual channel has nowhere else
-			// to put its words.
-			//
-			// `tracks` is omitted when EMPTY — an absent list and an empty one
-			// denote the same document — so it drops rather than encoding `[]`.
-			// `transcript` is an ORDINARY optional: absent means the document
-			// offers no transcript, which is a different statement from
-			// offering an empty one, so it does not drop at "".
-			s.optDrop("tracks", decodeTracks, isEmptyArr)
-			s.opt("transcript", decodeTextSource)
-			return s.build("Media")
-		},
-		// Phase 1111 — §3.6.8. `title` is REQUIRED on `MediaSpec.label`'s
-		// argument one kind over: a frame is a focus container a reader tabs
-		// INTO, so there is no decorative embed, and a frame with no accessible
-		// name is announced as "frame" and nothing else.
-		//
-		// `permissions` omits at the EMPTY list and empty means TOTAL DENIAL —
-		// that polarity is the design rather than a consequence of the omit
-		// rule, so the wire-cheapest document is also the most locked-down one.
-		// `aspectRatio` REUSES `ImageAspect` (the cases are pure layout ratios
-		// with nothing image-specific in them) and omits at `Natural`.
-		"Embed": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.optDrop("aspectRatio", enumDecoder(imageAspectCases, "aspectRatio", noAliases), isNaturalImageToken)
-			s.optDrop("permissions", decodeEmbedPermissions, isEmptyArr)
-			s.req("src", decodeBindingString)
-			s.req("title", decodeTextSource)
-			return s.build("Embed")
-		},
-		// Phase 1120 — §3.6.12. Expansion and selection are named State keys and
-		// there is no `expandable` / `selectable` boolean: a behaviour the
-		// reader drives is declared as a key the host both writes and reads, and
-		// a flag with no key behind it is a decorative control writing state
-		// nothing reads.
-		"Tree": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.opt("expandedStateKey", decodeString)
-			s.req("items", decodeTreeItems)
-			s.sentinel("onSelect")
-			s.opt("selectionStateKey", decodeString)
-			return s.build("Tree")
-		},
-		"List": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("items", decodeTextSourceArray)
-			s.req("ordered", decodeBool)
-			return s.build("List")
-		},
-		"CodeBlock": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("code", decodeString)
-			s.req("copyable", decodeBool)
-			s.req("highlightLines", decodeIntArray)
-			s.req("language", decodeString)
-			s.req("lineNumbers", decodeBool)
-			return s.build("CodeBlock")
-		},
-		"Math": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("display", enumDecoder(mathDisplayCases, "display", noAliases))
-			s.req("source", decodeString)
-			return s.build("Math")
-		},
-		// Phases 524 / 642 — geometry static; the closed Shape / CurveCommand
-		// DUs default-deny an unknown discriminator; DrawStyle carries the
-		// bindings + the optional markId.
-		"Drawing": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.opt("description", decodeTextSource)
-			s.req("shapes", decodeShapeArray)
-			s.req("style", decodeDrawStyle)
-			s.opt("title", decodeTextSource)
-			s.req("viewBox", decodeViewBox)
-			return s.build("Drawing")
-		},
-		// The handler fields are OPTIONAL: omitted on the wire when the
-		// control is declarative; present as the "<closure>" sentinel when
-		// closure-authored. `options` / `data` alias `source`. Phase 291 —
-		// multiple omitted-when-false; values omitted when absent.
-		"Select": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("label", decodeTextSource)
-			s.sentinel("onChange")
-			s.req("source", decodeBindingSelectOptions, "options", "data")
-			s.req("value", decodeBindingStringOpt)
-			s.opt("disabled", decodeBindingBool)
-			s.opt("placeholder", decodeTextSource)
-			s.optDrop("multiple", decodeBool, isFalseValue)
-			s.opt("values", decodeBindingStringList)
-			s.sentinel("onChangeMulti")
-			return s.build("Select")
-		},
-		// onDismiss is optional and — unlike the closure-sentinel handlers — a
-		// genuine wire-survivable Action, so it decodes null-strict when
-		// present. `title` aliases `heading`.
-		"Modal": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("children", decodeChildren)
-			s.req("dismissable", decodeBool)
-			s.opt("onDismiss", decodeAction)
-			s.req("open", decodeBindingBool)
-			s.opt("heading", decodeTextSource, "title")
-			// Phase 1119 — the closed `Modal | Popover` pair, omitted at
-			// `Modal`. A bare enum (§3.5), so an unrecognised token reports at
-			// the slot's own path with no `.$type` suffix — there is no
-			// discriminator on the wire to name.
-			s.optDrop("modality", enumDecoder(modalityCases, "modality", noAliases),
-				func(v Value) bool { return isStr(v, "Modal") })
-			return s.build("Modal")
-		},
-		"ScrollArea": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("children", decodeChildren)
-			s.req("orientation", enumDecoder(scrollOrientationCases, "orientation", noAliases))
-			s.opt("maxHeight", decodeInt)
-			s.opt("maxWidth", decodeInt)
-			return s.build("ScrollArea")
-		},
-		"Button": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("label", decodeTextSource)
-			s.req("onClick", decodeAction)
-			s.req("variant", enumDecoder(buttonVariantCases, "variant", buttonVariantAliases))
-			s.opt("icon", decodeString)
-			s.opt("disabled", decodeBindingBool)
-			return s.build("Button")
-		},
-		"Form": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("fields", decodeFormFields)
-			s.req("onSubmit", decodeAction)
-			s.req("submitLabel", decodeTextSource)
-			s.opt("disabled", decodeBindingBool)
-			return s.build("Form")
-		},
-		"Filters": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("items", decodeFilterItems)
-			return s.build("Filters")
-		},
-		"FileUpload": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("accept", decodeStringArrayField)
-			s.req("label", decodeTextSource)
-			s.req("multiple", decodeBool)
-			// The select handler is a closure slot the canonical encoder
-			// always emits as the sentinel.
-			s.take("onSelect")
-			s.set("onSelect", Str(closureSentinel))
-			s.opt("disabled", decodeBindingBool)
-			// Phase 1115 — the two ADDITIONAL ingestion gestures, each omitted
-			// at `false`. Neither replaces the picker: the `<input type=file>`
-			// and its label are emitted whatever a document declares, which is
-			// what keeps the keyboard route intact and the no-script floor a
-			// working upload rather than an inert box.
-			s.optDrop("dropTarget", decodeBool, isFalseValue)
-			s.optDrop("acceptPaste", decodeBool, isFalseValue)
-			// Phase 1116 — the capture source, a closed `Camera | Microphone`
-			// pair (a bare enum, so the path carries no `.$type`).
-			s.opt("capture", enumDecoder(captureSourceCases, "capture", noAliases))
-			// Phase 1117 — the streamed upload's destination. A non-empty
-			// string: an empty one names no destination at all, so it is
-			// refused rather than read as "the default", which is what an
-			// absent member already means.
-			s.opt("destination", decodeUploadDestination)
-			// Phase 1548 — the two declared ceilings. Optional: absent declares
-			// no ceiling, which is the pre-1548 control and the wire identity.
-			// Both go through `decodePositiveInt`, so §7.1's slot rule decides
-			// the shape (a fractional value is not truncated, a value beyond the
-			// signed 32-bit slot is refused naming the slot's width) before the
-			// positive floor decides the sign. Zero is refused as firmly as a
-			// negative: a ceiling of zero is a control that can accept nothing,
-			// and the author who means "no ceiling" omits the member.
-			s.opt("maxBytes", decodePositiveInt)
-			s.opt("maxFiles", decodePositiveInt)
-			return s.build("FileUpload")
-		},
-		// 0.2.0 — editable omitted-when-false; `data` / `rows` alias `source`.
-		"DataGrid": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("columns", decodeColumns)
-			s.optDrop("editable", decodeBool, isFalseValue)
-			// Phase 934 — declarative row reorder; omitted-when-false, the same
-			// convention as `editable`.
-			s.optDrop("reorderable", decodeBool, isFalseValue)
-			s.req("source", decodeBindingRows, "data", "rows")
-			s.sentinel("onRowClick")
-			s.sentinel("rowKey")
-			s.opt("rowKeyField", decodeString)
-			// Phase 818 — the grid-sort header affordance: names the State key
-			// carrying the sort descriptor `{column, direction}` a data-bound
-			// grid's runtime sorts by (and whose headers write it). Typed as a
-			// string; encode-omitted when absent.
-			s.opt("sortStateKey", decodeString)
-			// Phase 862 — declarative pagination. `pageStateKey` names the State
-			// key carrying `{"page": N}` (1-based); `pageSize` is how many rows a
-			// page holds. A page of zero or fewer rows names no page at all, so
-			// it is WRONG_TYPE — which is also what schema.json's `minimum: 1`
-			// says. The pager that writes the key is renderer-owned, so nothing
-			// here decodes a control.
-			s.opt("pageSize", decodeGridPageSize)
-			// Phase 861 — the bound path's declared initial order, decoded by
-			// the SAME function the staticRows spelling uses: same record, same
-			// bound, same message at a different path.
-			s.opt("defaultSort", decodeDefaultSort)
-			checkNearMisses(obj, path, gridNearMisses)
-			// Phase 863 — the declared edit destination.
-			s.opt("editStateKey", decodeString)
-			s.opt("pageStateKey", decodeString)
-			s.opt("staticRows", decodeStaticRows)
-			// Phase 1125 — the CSV export affordance, omitted at `false`.
-			s.optDrop("exportable", decodeBool, isFalseValue)
-			// Phase 1473 — the grid's half of the print-break vocabulary. There
-			// is no `breakBefore` here (that is a wrapper's job); what survives
-			// on a grid is whether its rows may fragment and whether the header
-			// repeats on each page.
-			s.optDrop("keepRowsTogether", decodeBool, isFalseValue)
-			s.optDrop("repeatHeader", decodeBool, isFalseValue)
-			// Phase 1123 — cross-container drag. Two grids naming the same key
-			// exchange rows; a grid declaring only `transferInKey` receives
-			// without giving up its own.
-			s.opt("transferInKey", decodeString)
-			s.opt("transferOutKey", decodeString)
-			// Phase 1892 — the row window and the declared total. `windowStateKey`
-			// names the State key carrying the window descriptor
-			// `{"offset": N, "count": M}`; `rowTotal` is an int Binding decoded
-			// exactly as the other int Binding slots (Tabs.activeIndex /
-			// Stepper.activeStep). Both are encode-omitted when absent. The
-			// renderer applies the window (Phase 1912: renderer.windowedGrid).
-			s.opt("rowTotal", decodeBindingInt)
-			s.opt("windowStateKey", decodeString)
-			return s.build("DataGrid")
-		},
-		// Phase 1585 — `stacked` is OMITTED-WHEN-FALSE on both boundaries. It
-		// used to be set unconditionally, so absence and an explicit `false`
-		// both re-encoded as `"stacked":false`; the IDL now declares the member
-		// `omitDefault false`, which makes the omitted form canonical and the
-		// explicit one a §3.6 lenient accept that normalises to it. `optDrop`
-		// is the seam every other omitted-when-default flag already uses.
-		"Chart": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("kind", enumDecoder(chartKindCases, "kind", noAliases))
-			s.req("source", decodeBindingRows, "data")
-			s.optDrop("stacked", decodeBool, isFalseValue)
-			s.req("xField", decodeString)
-			s.req("yFields", decodeStringArrayField)
-			s.opt("title", decodeTextSource)
-			// Phase 1490 — `annotations` (§4l): the data-addressed attachments —
-			// reference lines, event markers and range bands — as one closed
-			// union. Absent OMITS on the wire, so every pre-1490 document decodes
-			// and re-encodes byte-for-byte as it did. An EMPTY list is a different
-			// document from an absent field and is carried as such.
-			s.opt("annotations", decodeChartAnnotationArray)
-			s.sentinel("onPointClick")
-			return s.build("Chart")
-		},
-		"Custom": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("moduleId", decodeString)
-			s.req("componentId", decodeString)
-			s.opt("props", decodeJSONValue)
-			s.opt("contentHash", decodeJSONValue)
-			s.opt("exposedNodeIds", decodeJSONValue)
-			return s.build("Custom")
-		},
-		// Tabs / Stepper — BOTH SPECS ARE NOW COMPLETE against the corpus IDL's
-		// `kinds` entry for each, every member typed to the reference host's own
-		// reading (Phase 1677; the Python host took the same step at the same
-		// scope in Phase 1654, and this is the Go half of that pair).
-		//
-		// The history is worth keeping, because it is what the completion is
-		// measured against. Both kinds were WHOLLY structural before Phase 1064,
-		// which is why this host answered `reject-binding-int-bool` and
-		// `reject-binding-int-sentinel-string` by ACCEPTING them while it refused
-		// every float vector: the typed float parsers existed and were routed,
-		// and these two kinds had no typed decoder to route anything through.
-		// Phase 1064 typed the one `Binding<int>` slot and nothing else,
-		// deliberately — the blast radius was the slot that phase was about — and
-		// recorded the rest as residue. This is that residue.
-		//
-		// What each member's treatment comes from, and nothing invented on top:
-		//   * `activeIndex` — omit-at-default `Static 0` (Phase 1585). This
-		//     host's model is structural, so DROPPING the member on decode is
-		//     what stops it being emitted; an explicit `{"$type":"Static",
-		//     "value":0}` carried through would make the pre-1585 spelling a
-		//     SECOND canonical form.
-		//   * `orientation` — omit-at-default `Horizontal`, the ordinary §3.6
-		//     enum treatment, with the `Row`/`Column` aliases every other
-		//     orientation slot in this host accepts.
-		//   * `children` — REQUIRED on both, and a list of nodes. Leaving a
-		//     node-valued position structural is the one omission that costs more
-		//     than it saves: the nodes inside it never reach the node decoder at
-		//     all, so nothing in them is counted, bounded or typed.
-		//   * `tabHeaders` — an array of `TabHeader` records whose `label` is
-		//     REQUIRED, so a header with no label is a MISSING_FIELD rather than a
-		//     document that round-trips perfectly and renders an unnamed tab.
-		//   * `tabTags` — an array of plain strings, refused by index.
-		//   * `activeTag` — the tag-side selection, a `Binding<string>`; the
-		//     second way a `Tabs` is live, which the validator already reads.
-		//   * `onSelect` / `onSelectTag` — `fn` slots, presence-only and
-		//     normalised to the closure sentinel.
-		//
-		// `Stepper.activeStep` IS REQUIRED — the decision Phase 1064 declined to
-		// smuggle in, taken here explicitly. The corpus IDL declares it
-		// `{"$type":"required"}` where `Tabs.activeIndex` is `omitDefault`, and a
-		// stepper carries no default step to fall back to: `Tabs` has one because
-		// "the first tab" is a meaningful resting state, while a stepper with no
-		// declared step has no position at all, so a host inventing 0 would be
-		// choosing a stage in someone else's workflow. The reference host and the
-		// Python host both require it. No corpus fixture pins it — which is why it
-		// needed deciding rather than reading — so the decision is recorded here
-		// and in `wire/tabs_stepper_test.go`, whose `Stepper` case is this host's
-		// evidence for it.
-		//
-		// `buildStrict` is deliberately NOT used on the kind: an unknown key there
-		// is still preserved structurally (§2 rule 2 tolerance). Strictness is
-		// applied one level in, inside `TabHeader`, where the reference and the
-		// Python host both build a closed record.
-		"Tabs": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.optDrop("activeIndex", decodeBindingInt, isStaticIntZero)
-			s.req("children", decodeChildren)
-			s.optDrop("orientation", enumDecoder(orientationCases, "orientation", orientationAliases), isHorizontal)
-			s.opt("tabHeaders", decodeTabHeaders)
-			s.opt("tabTags", decodeStringArrayField)
-			s.opt("activeTag", decodeBindingString)
-			s.sentinel("onSelect")
-			s.sentinel("onSelectTag")
-			return s.build("Tabs")
-		},
-		"Stepper": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("activeStep", decodeBindingInt)
-			s.req("children", decodeChildren)
-			s.sentinel("onSelect")
-			return s.build("Stepper")
-		},
-		// State-bound conditional child. Duplicate match values are NOT a
-		// decode error (first-match-wins; the validator flags them).
-		// Phase 768 — the selector is any Binding: a non-State selector rides
-		// an `on` key holding the canonical Binding wire form, while the
-		// State(key) form keeps the compact `stateKey` spelling (the reference
-		// encoders' collapse rule, applied on the decode boundary here since
-		// this host's encoder is generic). Both absent keeps the stateKey
-		// MISSING_FIELD, so the reject fixture's error is unchanged; `on` wins
-		// when both are present.
-		"Switch": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("cases", decodeSwitchCases)
-			s.req("default", decodeSingleNode)
-			if raw, ok := s.take("on"); ok {
-				s.take("stateKey") // consumed — `on` is authoritative
-				on := decodeBinding(w, raw, path+".on")
-				if o, isObj := on.(Obj); isObj && o.Tag == "State" && len(o.Fields) == 1 {
-					s.set("stateKey", o.Fields["key"])
-				} else {
-					s.set("on", on)
-				}
-			} else {
-				s.req("stateKey", decodeString)
-			}
-			// Phase 1122 — the timed advance, in whole milliseconds. Zero, a
-			// negative and a fraction are all REFUSED rather than clamped or
-			// rounded: none of them names an interval, and a carousel that
-			// advanced on a rounded guess would be a reading pace the document
-			// never asked for.
-			s.opt("autoAdvanceMs", decodePositiveInt)
-			return s.build("Switch")
-		},
-		// Phase 1670 — the parameterised fragment's two OMIT-AT-DEFAULT slots.
-		//
-		// `WIRE_FORMAT.md`'s parameterised-fragment section has always said a
-		// zero-hole declaration omits `holes` and a pure-deterministic one omits
-		// `effect`, and since Phase 1670 it says so as a MUST: the redundant
-		// `"holes":[]` and `{"determinism":"Deterministic","hostEffect":"Pure"}`
-		// are decode-accepted input, never a second canonical spelling. This
-		// host decoded the kind with no builder at all, so it echoed whatever it
-		// was handed and one document re-encoded to two different byte sequences
-		// depending on which host read it — invisible to this host's own
-		// round-trip gate, which compares its re-encode against bytes it
-		// produced itself.
-		//
-		// DELIBERATELY the whole builder, and deliberately structural otherwise:
-		// `build` preserves every unconsumed key exactly as the fall-through
-		// did, so `body`, `name` and any key a later spec version adds are
-		// untouched. This arm narrows the canonical form and changes nothing
-		// about what is accepted or carried.
-		"FragmentDecl": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.optDrop("holes", decodeJSONPassthrough, isEmptyArr)
-			s.optDrop("effect", decodeJSONPassthrough, isPureDeterministicEffect)
-			return s.build("FragmentDecl")
-		},
-		// Isolation/embedding boundary (§4o). inputs passes through WITHOUT
-		// null-strictness — it embeds whole node trees whose Binding.Static
-		// values are §5 opaque seams.
-		"Mount": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("scopeId", decodeString)
-			s.req("channel", decodeGuestChannel)
-			s.req("capabilities", decodeJSONValue)
-			s.req("onBubble", decodeString)
-			s.opt("inputs", decodeJSONPassthrough)
-			return s.build("Mount")
-		},
+func (handArms) armMarkdown(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindMarkdown)
+	s.field("text", decodeTextSource)
+	return s.build("Markdown")
+}
+
+// 0.2.0 rename law — the scalar displayed value is `value` (`source`
+// is reserved for collection feeds and is NOT accepted here — clean
+// break); `data` stays as the web-prior alias. Phase 460 — the
+// stylistic fields are omitted-when-default on both boundaries.
+func (handArms) armMetric(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindMetric)
+	s.field("label", decodeTextSource)
+	s.field("value", decodeBindingFloat, "data")
+	s.field("format", decodeCellFormat)
+	s.field("tone", decodeTone)
+	s.field("weight", decodeWeight)
+	s.field("emphasis", decodeEmphasisEnum)
+	s.field("trend", decodeBindingFloat)
+	s.field("trendFormat", decodeCellFormat)
+	// Phase 867 — the direction-of-good declaration. Omitted-when-default
+	// on BOTH boundaries (§3.6.1 clause 4: an absent slot IS
+	// `HigherIsBetter`), so an explicitly-spelled default normalises away
+	// and a tree that never mentions polarity keeps its bytes.
+	//
+	// It is decoded rather than left to `build`'s structural passthrough,
+	// and that is the point of this arm: passthrough round-trips the key
+	// byte-for-byte while modelling nothing, so a misspelt case would ride
+	// through to the renderer and be read as an unrecognised polarity —
+	// green corpus, wrong tree. The closed set refuses it at the boundary
+	// the way every other bare enum here is refused.
+	s.field("trendPolarity", enumDecoder(trendPolarityCases, "trendPolarity", noAliases))
+	s.field("icon", decodeString)
+	s.field("subtext", decodeTextSource)
+	return s.build("Metric")
+}
+
+// A labeled TEXT fact: `value` is a TextSource, so static / Bound /
+// I18n values ride the label vocabulary. Only label + value required;
+// tone / emphasis omitted-when-default on BOTH boundaries.
+func (handArms) armFact(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindFact)
+	s.field("label", decodeTextSource)
+	s.field("value", decodeTextSource)
+	s.field("tone", decodeTone)
+	s.field("emphasis", decodeEmphasisFlag)
+	s.field("help", decodeTextSource)
+	s.field("icon", decodeString)
+	return s.build("Fact")
+}
+
+func (handArms) armLabelValueRow(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindLabelValueRow)
+	s.field("label", decodeTextSource)
+	s.field("value", decodeBindingFloat, "data")
+	s.field("format", decodeCellFormat)
+	// 0.2.2 — the behavioural bool, omitted-when-false (aligning with
+	// Fact's identical flag); the cross-vocabulary coercion accepts
+	// the Emphasis enum + its aliases.
+	s.field("emphasis", decodeEmphasisFlag)
+	s.field("help", decodeTextSource)
+	return s.build("LabelValueRow")
+}
+
+func (handArms) armBadge(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindBadge)
+	s.field("label", decodeTextSource)
+	s.field("variant", enumDecoder(badgeVariantCases, "variant", badgeVariantAliases))
+	return s.build("Badge")
+}
+
+func (handArms) armCallout(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindCallout)
+	s.field("body", decodeTextSource)
+	// 0.2.0 — dismissable omitted-when-false; Phase 460 — tone
+	// omitted-when-default. `title` aliases `heading`.
+	s.field("dismissable", decodeBool)
+	s.field("tone", decodeTone)
+	s.field("heading", decodeTextSource, "title")
+	s.field("icon", decodeString)
+	return s.build("Callout")
+}
+
+func (handArms) armProgress(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindProgress)
+	s.field("fraction", decodeBindingFloat)
+	// 0.2.0 — indeterminate omitted-when-false.
+	s.field("indeterminate", decodeBool)
+	s.field("tone", decodeTone)
+	s.field("label", decodeTextSource)
+	s.field("caveat", decodeTextSource)
+	return s.build("Progress")
+}
+
+func (handArms) armToast(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindToast)
+	// 0.2.0 — the one omit-when-TRUE: a toast is dismissable unless
+	// said otherwise.
+	s.field("dismissable", decodeBool)
+	s.field("message", decodeTextSource)
+	s.field("open", decodeBindingBool)
+	s.field("tone", decodeTone)
+	return s.build("Toast")
+}
+
+func (handArms) armSkeleton(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindSkeleton)
+	// Phase 1666 — the §21.9 row bound rides the field's own decoder, so
+	// the spec table stays the single statement of a Skeleton's shape.
+	s.field("rows", decodeSkeletonRows)
+	return s.build("Skeleton")
+}
+
+// Phase 821 — the standalone icon-only display kind. `size`
+// omitted-when-`Medium`; `tone` omitted-when-default (the Phase 460
+// discipline); `label` omitted-when-decorative.
+func (handArms) armIcon(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindIcon)
+	s.field("icon", decodeString)
+	s.field("size", enumDecoder(iconSizeCases, "size", noAliases))
+	s.field("tone", decodeTone)
+	s.field("label", decodeString)
+	return s.build("Icon")
+}
+
+// source is a §5 typed Static float-series position; `data` aliases.
+func (handArms) armSparkline(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindSparkline)
+	s.field("source", decodeBindingFloatSeq, "data")
+	return s.build("Sparkline")
+}
+
+// source is a §5 typed Static marker-list position; `data` / `markers`
+// alias.
+func (handArms) armMap(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindMap)
+	s.field("centreLatitude", expectNumberField)
+	s.field("centreLongitude", expectNumberField)
+	s.field("source", decodeBindingMarkerSeq, "data", "markers")
+	s.field("zoom", decodeInt)
+	s.sentinel("onMarkerClick")
+	return s.build("Map")
+}
+
+func (handArms) armLink(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindLink)
+	s.field("download", decodeBool)
+	s.field("href", decodeBindingString)
+	s.field("label", decodeTextSource)
+	// Phase 812 — optional closed enumeration; an unknown case is
+	// UNKNOWN_DU_CASE at $.kind.protection.
+	s.field("protection", enumDecoder(linkProtectionCases, "protection", noAliases))
+	s.field("rel", decodeString)
+	s.field("target", decodeString)
+	return s.build("Link")
+}
+
+// Phases 1077 / 1078 / 1079 / 1080 — §3.6.2–§3.6.5. Five optional
+// slots beside `variant`, and they do NOT all take the same posture:
+//
+//   - fit / aspectRatio / loading are identity-default TOKENS, dropped
+//     at their default on the decode boundary so an explicit `Natural`
+//     / `Eager` canonicalises to the omitted form (§3.6's table).
+//   - caption is CONTENT, not a presentation token — there is no
+//     default caption the way there is a default fit — so it takes the
+//     ordinary optional-field posture (rule 4). It is a full
+//     `TextSource`, NOT a string: narrowing the slot costs nothing
+//     until somebody needs a locale, which is why the enveloped
+//     `{"$type":"Literal"}` form has its own lenient fixture here.
+//   - srcSet IS an omit-at-default field whose identity is the EMPTY
+//     LIST rather than a token. Absent and `[]` denote the same
+//     document; a present `null` is refused, because absence already
+//     has a spelling and a second one would let two conformant hosts
+//     emit different canonical bytes for one document.
+//   - expandable is a plain bool omitted at `false`, refused rather
+//     than coerced when stringified — a truthiness rule would have to
+//     rule on `"false"` and `""` too, and two hosts ruling differently
+//     would disagree about whether the document declares an affordance
+//     at all.
+func (handArms) armImage(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindImage)
+	s.field("alt", decodeTextSource)
+	s.field("aspectRatio", enumDecoder(imageAspectCases, "aspectRatio", noAliases))
+	s.field("caption", decodeTextSource)
+	s.field("expandable", decodeBool)
+	s.field("fit", enumDecoder(imageFitCases, "fit", noAliases))
+	s.field("loading", enumDecoder(imageLoadingCases, "loading", noAliases))
+	s.field("src", decodeBindingString)
+	s.field("srcSet", decodeSrcSet)
+	s.field("variant", enumDecoder(imageVariantCases, "variant", noAliases))
+	return s.build("Image")
+}
+
+// Phase 1076 — §3.6.6. The shared record carries the source, the
+// mandatory accessible name, and the two shared declarations;
+// `controls` is omitted at TRUE (the second such slot in the
+// vocabulary after `Toast.dismissable`, and the polarity is
+// deliberate — a media element without a transport cannot be paused,
+// seeked or muted by a keyboard user at all, so the accessible setting
+// is what a document gets for free and taking it away is the deviation
+// that costs a key). `loop` takes the ordinary polarity.
+func (handArms) armMedia(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindMedia)
+	s.field("controls", decodeBool)
+	s.field("kind", decodeMediaKind)
+	s.field("label", decodeTextSource)
+	s.field("loop", decodeBool)
+	s.field("src", decodeBindingString)
+	// Phase 1110 — both live on the SPEC rather than on
+	// `MediaKind.Video`, and the second placement is the one worth
+	// explaining: a transcript is the affordance an AUDIO surface needs
+	// most, because a recording with no visual channel has nowhere else
+	// to put its words.
+	//
+	// `tracks` is omitted when EMPTY — an absent list and an empty one
+	// denote the same document — so it drops rather than encoding `[]`.
+	// `transcript` is an ORDINARY optional: absent means the document
+	// offers no transcript, which is a different statement from
+	// offering an empty one, so it does not drop at "".
+	s.field("tracks", decodeTracks)
+	s.field("transcript", decodeTextSource)
+	return s.build("Media")
+}
+
+// Phase 1111 — §3.6.8. `title` is REQUIRED on `MediaSpec.label`'s
+// argument one kind over: a frame is a focus container a reader tabs
+// INTO, so there is no decorative embed, and a frame with no accessible
+// name is announced as "frame" and nothing else.
+//
+// `permissions` omits at the EMPTY list and empty means TOTAL DENIAL —
+// that polarity is the design rather than a consequence of the omit
+// rule, so the wire-cheapest document is also the most locked-down one.
+// `aspectRatio` REUSES `ImageAspect` (the cases are pure layout ratios
+// with nothing image-specific in them) and omits at `Natural`.
+func (handArms) armEmbed(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindEmbed)
+	s.field("aspectRatio", enumDecoder(imageAspectCases, "aspectRatio", noAliases))
+	s.field("permissions", decodeEmbedPermissions)
+	s.field("src", decodeBindingString)
+	s.field("title", decodeTextSource)
+	return s.build("Embed")
+}
+
+// Phase 1120 — §3.6.12. Expansion and selection are named State keys and
+// there is no `expandable` / `selectable` boolean: a behaviour the
+// reader drives is declared as a key the host both writes and reads, and
+// a flag with no key behind it is a decorative control writing state
+// nothing reads.
+func (handArms) armTree(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindTree)
+	s.field("expandedStateKey", decodeString)
+	s.field("items", decodeTreeItems)
+	s.sentinel("onSelect")
+	s.field("selectionStateKey", decodeString)
+	return s.build("Tree")
+}
+
+func (handArms) armList(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindList)
+	s.field("items", decodeTextSourceArray)
+	s.field("ordered", decodeBool)
+	return s.build("List")
+}
+
+func (handArms) armCodeBlock(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindCodeBlock)
+	s.field("code", decodeString)
+	s.field("copyable", decodeBool)
+	s.field("highlightLines", decodeIntArray)
+	s.field("language", decodeString)
+	s.field("lineNumbers", decodeBool)
+	return s.build("CodeBlock")
+}
+
+func (handArms) armMath(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindMath)
+	s.field("display", enumDecoder(mathDisplayCases, "display", noAliases))
+	s.field("source", decodeString)
+	return s.build("Math")
+}
+
+// Phases 524 / 642 — geometry static; the closed Shape / CurveCommand
+// DUs default-deny an unknown discriminator; DrawStyle carries the
+// bindings + the optional markId.
+func (handArms) armDrawing(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindDrawing)
+	s.field("description", decodeTextSource)
+	s.field("shapes", decodeShapeArray)
+	s.field("style", decodeDrawStyle)
+	s.field("title", decodeTextSource)
+	s.field("viewBox", decodeViewBox)
+	return s.build("Drawing")
+}
+
+// The handler fields are OPTIONAL: omitted on the wire when the
+// control is declarative; present as the "<closure>" sentinel when
+// closure-authored. `options` / `data` alias `source`. Phase 291 —
+// multiple omitted-when-false; values omitted when absent.
+func (handArms) armSelect(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindSelect)
+	s.field("label", decodeTextSource)
+	s.sentinel("onChange")
+	s.field("source", decodeBindingSelectOptions, "options", "data")
+	s.field("value", decodeBindingStringOpt)
+	s.field("disabled", decodeBindingBool)
+	s.field("placeholder", decodeTextSource)
+	s.field("multiple", decodeBool)
+	s.field("values", decodeBindingStringList)
+	s.sentinel("onChangeMulti")
+	return s.build("Select")
+}
+
+// onDismiss is optional and — unlike the closure-sentinel handlers — a
+// genuine wire-survivable Action, so it decodes null-strict when
+// present. `title` aliases `heading`.
+func (handArms) armModal(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindModal)
+	s.field("children", decodeChildren)
+	s.field("dismissable", decodeBool)
+	s.field("onDismiss", decodeAction)
+	s.field("open", decodeBindingBool)
+	s.field("heading", decodeTextSource, "title")
+	// Phase 1119 — the closed `Modal | Popover` pair, omitted at
+	// `Modal`. A bare enum (§3.5), so an unrecognised token reports at
+	// the slot's own path with no `.$type` suffix — there is no
+	// discriminator on the wire to name.
+	s.field("modality", enumDecoder(modalityCases, "modality", noAliases))
+	return s.build("Modal")
+}
+
+func (handArms) armScrollArea(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindScrollArea)
+	s.field("children", decodeChildren)
+	s.field("orientation", enumDecoder(scrollOrientationCases, "orientation", noAliases))
+	s.field("maxHeight", decodeInt)
+	s.field("maxWidth", decodeInt)
+	return s.build("ScrollArea")
+}
+
+func (handArms) armButton(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindButton)
+	s.field("label", decodeTextSource)
+	s.field("onClick", decodeAction)
+	s.field("variant", enumDecoder(buttonVariantCases, "variant", buttonVariantAliases))
+	s.field("icon", decodeString)
+	s.field("disabled", decodeBindingBool)
+	return s.build("Button")
+}
+
+func (handArms) armForm(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindForm)
+	s.field("fields", decodeFormFields)
+	s.field("onSubmit", decodeAction)
+	s.field("submitLabel", decodeTextSource)
+	s.field("disabled", decodeBindingBool)
+	return s.build("Form")
+}
+
+func (handArms) armFilters(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindFilters)
+	s.field("items", decodeFilterItems)
+	return s.build("Filters")
+}
+
+func (handArms) armFileUpload(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindFileUpload)
+	s.field("accept", decodeStringArrayField)
+	s.field("label", decodeTextSource)
+	s.field("multiple", decodeBool)
+	// The select handler is a closure slot the canonical encoder
+	// always emits as the sentinel.
+	s.take("onSelect")
+	s.set("onSelect", Str(closureSentinel))
+	s.field("disabled", decodeBindingBool)
+	// Phase 1115 — the two ADDITIONAL ingestion gestures, each omitted
+	// at `false`. Neither replaces the picker: the `<input type=file>`
+	// and its label are emitted whatever a document declares, which is
+	// what keeps the keyboard route intact and the no-script floor a
+	// working upload rather than an inert box.
+	s.field("dropTarget", decodeBool)
+	s.field("acceptPaste", decodeBool)
+	// Phase 1116 — the capture source, a closed `Camera | Microphone`
+	// pair (a bare enum, so the path carries no `.$type`).
+	s.field("capture", enumDecoder(captureSourceCases, "capture", noAliases))
+	// Phase 1117 — the streamed upload's destination. A non-empty
+	// string: an empty one names no destination at all, so it is
+	// refused rather than read as "the default", which is what an
+	// absent member already means.
+	s.field("destination", decodeUploadDestination)
+	// Phase 1548 — the two declared ceilings. Optional: absent declares
+	// no ceiling, which is the pre-1548 control and the wire identity.
+	// Both go through `decodePositiveInt`, so §7.1's slot rule decides
+	// the shape (a fractional value is not truncated, a value beyond the
+	// signed 32-bit slot is refused naming the slot's width) before the
+	// positive floor decides the sign. Zero is refused as firmly as a
+	// negative: a ceiling of zero is a control that can accept nothing,
+	// and the author who means "no ceiling" omits the member.
+	s.field("maxBytes", decodePositiveInt)
+	s.field("maxFiles", decodePositiveInt)
+	return s.build("FileUpload")
+}
+
+// 0.2.0 — editable omitted-when-false; `data` / `rows` alias `source`.
+func (handArms) armDataGrid(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindDataGrid)
+	s.field("columns", decodeColumns)
+	s.field("editable", decodeBool)
+	// Phase 934 — declarative row reorder; omitted-when-false, the same
+	// convention as `editable`.
+	s.field("reorderable", decodeBool)
+	s.field("source", decodeBindingRows, "data", "rows")
+	s.sentinel("onRowClick")
+	s.sentinel("rowKey")
+	s.field("rowKeyField", decodeString)
+	// Phase 818 — the grid-sort header affordance: names the State key
+	// carrying the sort descriptor `{column, direction}` a data-bound
+	// grid's runtime sorts by (and whose headers write it). Typed as a
+	// string; encode-omitted when absent.
+	s.field("sortStateKey", decodeString)
+	// Phase 862 — declarative pagination. `pageStateKey` names the State
+	// key carrying `{"page": N}` (1-based); `pageSize` is how many rows a
+	// page holds. A page of zero or fewer rows names no page at all, so
+	// it is WRONG_TYPE — which is also what schema.json's `minimum: 1`
+	// says. The pager that writes the key is renderer-owned, so nothing
+	// here decodes a control.
+	s.field("pageSize", decodeGridPageSize)
+	// Phase 861 — the bound path's declared initial order, decoded by
+	// the SAME function the staticRows spelling uses: same record, same
+	// bound, same message at a different path.
+	s.field("defaultSort", decodeDefaultSort)
+	checkNearMisses(obj, path, gridNearMisses)
+	// Phase 863 — the declared edit destination.
+	s.field("editStateKey", decodeString)
+	s.field("pageStateKey", decodeString)
+	s.field("staticRows", decodeStaticRows)
+	// Phase 1125 — the CSV export affordance, omitted at `false`.
+	s.field("exportable", decodeBool)
+	// Phase 1473 — the grid's half of the print-break vocabulary. There
+	// is no `breakBefore` here (that is a wrapper's job); what survives
+	// on a grid is whether its rows may fragment and whether the header
+	// repeats on each page.
+	s.field("keepRowsTogether", decodeBool)
+	s.field("repeatHeader", decodeBool)
+	// Phase 1123 — cross-container drag. Two grids naming the same key
+	// exchange rows; a grid declaring only `transferInKey` receives
+	// without giving up its own.
+	s.field("transferInKey", decodeString)
+	s.field("transferOutKey", decodeString)
+	// Phase 1892 — the row window and the declared total. `windowStateKey`
+	// names the State key carrying the window descriptor
+	// `{"offset": N, "count": M}`; `rowTotal` is an int Binding decoded
+	// exactly as the other int Binding slots (Tabs.activeIndex /
+	// Stepper.activeStep). Both are encode-omitted when absent. The
+	// renderer applies the window (Phase 1912: renderer.windowedGrid).
+	s.field("rowTotal", decodeBindingInt)
+	s.field("windowStateKey", decodeString)
+	return s.build("DataGrid")
+}
+
+// Phase 1585 — `stacked` is OMITTED-WHEN-FALSE on both boundaries. It
+// used to be set unconditionally, so absence and an explicit `false`
+// both re-encoded as `"stacked":false`; the IDL now declares the member
+// `omitDefault false`, which makes the omitted form canonical and the
+// explicit one a §3.6 lenient accept that normalises to it. `optDrop`
+// is the seam every other omitted-when-default flag already uses.
+func (handArms) armChart(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindChart)
+	s.field("kind", enumDecoder(chartKindCases, "kind", noAliases))
+	s.field("source", decodeBindingRows, "data")
+	s.field("stacked", decodeBool)
+	s.field("xField", decodeString)
+	s.field("yFields", decodeStringArrayField)
+	s.field("title", decodeTextSource)
+	// Phase 1490 — `annotations` (§4l): the data-addressed attachments —
+	// reference lines, event markers and range bands — as one closed
+	// union. Absent OMITS on the wire, so every pre-1490 document decodes
+	// and re-encodes byte-for-byte as it did. An EMPTY list is a different
+	// document from an absent field and is carried as such.
+	s.field("annotations", decodeChartAnnotationArray)
+	s.sentinel("onPointClick")
+	return s.build("Chart")
+}
+
+func (handArms) armCustom(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindCustom)
+	s.field("moduleId", decodeString)
+	s.field("componentId", decodeString)
+	s.field("props", decodeJSONValue)
+	s.field("contentHash", decodeJSONValue)
+	s.field("exposedNodeIds", decodeJSONValue)
+	return s.build("Custom")
+}
+
+// Tabs / Stepper — BOTH SPECS ARE NOW COMPLETE against the corpus IDL's
+// `kinds` entry for each, every member typed to the reference host's own
+// reading (Phase 1677; the Python host took the same step at the same
+// scope in Phase 1654, and this is the Go half of that pair).
+//
+// The history is worth keeping, because it is what the completion is
+// measured against. Both kinds were WHOLLY structural before Phase 1064,
+// which is why this host answered `reject-binding-int-bool` and
+// `reject-binding-int-sentinel-string` by ACCEPTING them while it refused
+// every float vector: the typed float parsers existed and were routed,
+// and these two kinds had no typed decoder to route anything through.
+// Phase 1064 typed the one `Binding<int>` slot and nothing else,
+// deliberately — the blast radius was the slot that phase was about — and
+// recorded the rest as residue. This is that residue.
+//
+// What each member's treatment comes from, and nothing invented on top:
+//   - `activeIndex` — omit-at-default `Static 0` (Phase 1585). This
+//     host's model is structural, so DROPPING the member on decode is
+//     what stops it being emitted; an explicit `{"$type":"Static",
+//     "value":0}` carried through would make the pre-1585 spelling a
+//     SECOND canonical form.
+//   - `orientation` — omit-at-default `Horizontal`, the ordinary §3.6
+//     enum treatment, with the `Row`/`Column` aliases every other
+//     orientation slot in this host accepts.
+//   - `children` — REQUIRED on both, and a list of nodes. Leaving a
+//     node-valued position structural is the one omission that costs more
+//     than it saves: the nodes inside it never reach the node decoder at
+//     all, so nothing in them is counted, bounded or typed.
+//   - `tabHeaders` — an array of `TabHeader` records whose `label` is
+//     REQUIRED, so a header with no label is a MISSING_FIELD rather than a
+//     document that round-trips perfectly and renders an unnamed tab.
+//   - `tabTags` — an array of plain strings, refused by index.
+//   - `activeTag` — the tag-side selection, a `Binding<string>`; the
+//     second way a `Tabs` is live, which the validator already reads.
+//   - `onSelect` / `onSelectTag` — `fn` slots, presence-only and
+//     normalised to the closure sentinel.
+//
+// `Stepper.activeStep` IS REQUIRED — the decision Phase 1064 declined to
+// smuggle in, taken here explicitly. The corpus IDL declares it
+// `{"$type":"required"}` where `Tabs.activeIndex` is `omitDefault`, and a
+// stepper carries no default step to fall back to: `Tabs` has one because
+// "the first tab" is a meaningful resting state, while a stepper with no
+// declared step has no position at all, so a host inventing 0 would be
+// choosing a stage in someone else's workflow. The reference host and the
+// Python host both require it. No corpus fixture pins it — which is why it
+// needed deciding rather than reading — so the decision is recorded here
+// and in `wire/tabs_stepper_test.go`, whose `Stepper` case is this host's
+// evidence for it.
+//
+// `buildStrict` is deliberately NOT used on the kind: an unknown key there
+// is still preserved structurally (§2 rule 2 tolerance). Strictness is
+// applied one level in, inside `TabHeader`, where the reference and the
+// Python host both build a closed record.
+func (handArms) armTabs(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindTabs)
+	s.field("activeIndex", decodeBindingInt)
+	s.field("children", decodeChildren)
+	s.field("orientation", enumDecoder(orientationCases, "orientation", orientationAliases))
+	s.field("tabHeaders", decodeTabHeaders)
+	s.field("tabTags", decodeStringArrayField)
+	s.field("activeTag", decodeBindingString)
+	s.sentinel("onSelect")
+	s.sentinel("onSelectTag")
+	return s.build("Tabs")
+}
+
+func (handArms) armStepper(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindStepper)
+	s.field("activeStep", decodeBindingInt)
+	s.field("children", decodeChildren)
+	s.sentinel("onSelect")
+	return s.build("Stepper")
+}
+
+// State-bound conditional child. Duplicate match values are NOT a
+// decode error (first-match-wins; the validator flags them).
+// Phase 768 — the selector is any Binding: a non-State selector rides
+// an `on` key holding the canonical Binding wire form, while the
+// State(key) form keeps the compact `stateKey` spelling (the reference
+// encoders' collapse rule, applied on the decode boundary here since
+// this host's encoder is generic). Both absent keeps the stateKey
+// MISSING_FIELD, so the reject fixture's error is unchanged; `on` wins
+// when both are present.
+func (handArms) armSwitch(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindSwitch)
+	s.field("cases", decodeSwitchCases)
+	s.field("default", decodeSingleNode)
+	if raw, ok := s.take("on"); ok {
+		s.take("stateKey") // consumed — `on` is authoritative
+		on := decodeBinding(w, raw, path+".on")
+		if o, isObj := on.(Obj); isObj && o.Tag == "State" && len(o.Fields) == 1 {
+			s.set("stateKey", o.Fields["key"])
+		} else {
+			s.set("on", on)
+		}
+	} else {
+		// Relational, so hand: the table declares `on` and `stateKey` each
+		// optional, and exactly one of the pair names the selector.
+		s.req("stateKey", decodeString)
 	}
+	// Phase 1122 — the timed advance, in whole milliseconds. Zero, a
+	// negative and a fraction are all REFUSED rather than clamped or
+	// rounded: none of them names an interval, and a carousel that
+	// advanced on a rounded guess would be a reading pace the document
+	// never asked for.
+	s.field("autoAdvanceMs", decodePositiveInt)
+	return s.build("Switch")
+}
+
+// Phase 1670 — the parameterised fragment's two OMIT-AT-DEFAULT slots.
+//
+// `WIRE_FORMAT.md`'s parameterised-fragment section has always said a
+// zero-hole declaration omits `holes` and a pure-deterministic one omits
+// `effect`, and since Phase 1670 it says so as a MUST: the redundant
+// `"holes":[]` and `{"determinism":"Deterministic","hostEffect":"Pure"}`
+// are decode-accepted input, never a second canonical spelling. This
+// host decoded the kind with no builder at all, so it echoed whatever it
+// was handed and one document re-encoded to two different byte sequences
+// depending on which host read it — invisible to this host's own
+// round-trip gate, which compares its re-encode against bytes it
+// produced itself.
+//
+// DELIBERATELY the whole builder, and deliberately structural otherwise:
+// `build` preserves every unconsumed key exactly as the fall-through
+// did, so `body`, `name` and any key a later spec version adds are
+// untouched. This arm narrows the canonical form and changes nothing
+// about what is accepted or carried.
+func (handArms) armFragmentDecl(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindFragmentDecl)
+	s.field("holes", decodeJSONPassthrough)
+	s.field("effect", decodeJSONPassthrough)
+	return s.build("FragmentDecl")
+}
+
+// Isolation/embedding boundary (§4o). inputs passes through WITHOUT
+// null-strictness — it embeds whole node trees whose Binding.Static
+// values are §5 opaque seams.
+func (handArms) armMount(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindMount)
+	s.field("scopeId", decodeString)
+	s.field("channel", decodeGuestChannel)
+	s.field("capabilities", decodeJSONValue)
+	s.field("inputs", decodeJSONPassthrough)
+	return s.build("Mount")
 }
 
 // ── Box (the unified container) + legacy decode-upgrade ─────────────────────
@@ -4457,7 +4380,8 @@ func decodeBox(w *walkState, obj map[string]any, path string) Obj {
 	// truthiness read would honour `"no"`.
 	for _, name := range []string{"breakBefore", "keepTogether"} {
 		if raw, ok := obj[name]; ok {
-			if v := decodeBool(w, raw, path+"."+name); !isFalseValue(v) {
+			row, _ := idl.KindBox.Field(name)
+			if v := decodeBool(w, raw, path+"."+name); !matchesDefault(v, row.Default) {
 				fields[name] = v
 			}
 		}
@@ -4465,26 +4389,18 @@ func decodeBox(w *walkState, obj map[string]any, path string) Obj {
 	return Obj{Tag: "Box", Fields: fields}
 }
 
+// armBox — Box decodes with its own strict reader (an unknown key is dropped,
+// not preserved), so it does not go through a spec.
+func (handArms) armBox(w *walkState, obj map[string]any, path string) Obj {
+	return decodeBox(w, obj, path)
+}
+
 // ── Kind / style / state / node envelope ────────────────────────────────────
 
 func decodeKind(w *walkState, raw any, path string) Obj {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, knownKinds, CodeWrongNodeKind)
-	switch {
-	case tag == "Box":
-		return decodeBox(w, obj, path)
-	}
-	if builder, ok := kindBuilders[tag]; ok {
-		return builder(w, obj, path)
-	}
-	// Recognised kind without a typed decoder yet — accept structurally.
-	fields := make(map[string]Value, len(obj))
-	for k, v := range obj {
-		if k != "$type" {
-			fields[k] = fromJSON(v)
-		}
-	}
-	return Obj{Tag: tag, Fields: fields}
+	return dispatchKindArm(handArms{}, w, tag, obj, path)
 }
 
 // styleMember is one SemanticStyle member: its wire name, its per-field

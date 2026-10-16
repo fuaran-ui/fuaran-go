@@ -156,21 +156,21 @@ func codesOf(findings []Finding) []string {
 
 func TestInertControlDisclosure(t *testing.T) {
 	inertNode := wire.Node{ID: "d1", Kind: wire.Obj{Tag: "Disclosure", Fields: map[string]wire.Value{
-		"heading": wire.Str("H"), "open": staticBinding(), "children": wire.Arr{},
+		"heading": wire.Str("H"), "defaultOpen": wire.Bool(false), "open": staticBinding(), "children": wire.Arr{},
 	}}}
 	if got := codesOf(ValidateNode(inertNode)); len(got) != 1 || got[0] != "FUARAN069" {
 		t.Errorf("inert disclosure: got %v; want [FUARAN069]", got)
 	}
 
 	live := wire.Node{ID: "d1", Kind: wire.Obj{Tag: "Disclosure", Fields: map[string]wire.Value{
-		"heading": wire.Str("H"), "open": stateBinding(), "children": wire.Arr{},
+		"heading": wire.Str("H"), "defaultOpen": wire.Bool(false), "open": stateBinding(), "children": wire.Arr{},
 	}}}
 	if got := codesOf(ValidateNode(live)); len(got) != 0 {
 		t.Errorf("writable slot is live: got %v; want none", got)
 	}
 
 	handled := wire.Node{ID: "d1", Kind: wire.Obj{Tag: "Disclosure", Fields: map[string]wire.Value{
-		"heading": wire.Str("H"), "open": staticBinding(),
+		"heading": wire.Str("H"), "defaultOpen": wire.Bool(false), "open": staticBinding(),
 		"onToggle": wire.Str("<closure>"), "children": wire.Arr{},
 	}}}
 	if got := codesOf(ValidateNode(handled)); len(got) != 0 {

@@ -1,5 +1,7 @@
 package wire
 
+import "github.com/fuaran-ui/fuaran-go/wire/idl"
+
 // Exported copies of the closed wire vocabularies, for the downstream tiers
 // (the apply engine's coercion surface, the validator, the renderer). Each
 // returns a fresh sorted slice; the decoder's own tables stay private.
@@ -43,13 +45,16 @@ func IconSizes() []string { return append([]string(nil), iconSizeCases.names...)
 func TrendPolarities() []string { return append([]string(nil), trendPolarityCases.names...) }
 
 // RequiredKindFields returns, per kind discriminator, the wire fields the
-// contract requires (the same required set the decoder enforces on wire
-// input). The validator uses it to catch a CONSTRUCTED tree that would fail
-// decode on any conformant host. Kinds without a typed schema are absent.
+// contract requires — the required rows of each kind's generated field table,
+// which is the set the decoder enforces on wire input. The validator uses it to
+// catch a CONSTRUCTED tree that would fail decode on any conformant host. Kinds
+// with no required field are absent.
 func RequiredKindFields() map[string][]string {
-	out := make(map[string][]string, len(requiredKindFields))
-	for kind, required := range requiredKindFields {
-		out[kind] = append([]string(nil), required...)
+	out := make(map[string][]string, len(idl.Kinds))
+	for _, k := range idl.Kinds {
+		if required := k.RequiredFields(); len(required) > 0 {
+			out[k.Tag] = required
+		}
 	}
 	return out
 }

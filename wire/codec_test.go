@@ -274,24 +274,8 @@ func TestPatchStyleRejects(t *testing.T) {
 	}
 }
 
-// Every kind with a typed decoder must be a recognised kind, and the
-// special-cased handler (Box) must not also carry a builder — a builder for an
-// unroutable kind would be dead code. The
-// validator's required-fields registry must likewise name only routable kinds.
-func TestKindSchemasAreRegistered(t *testing.T) {
-	for kind := range kindBuilders {
-		if !knownKinds.has(kind) {
-			t.Errorf("kindBuilders[%q] is not in knownKinds", kind)
-		}
-		if kind == "Box" {
-			t.Errorf("kindBuilders[%q] is shadowed by a dedicated handler", kind)
-		}
-	}
-	for kind := range requiredKindFields {
-		if !knownKinds.has(kind) {
-			t.Errorf("requiredKindFields[%q] is not in knownKinds", kind)
-		}
-	}
+// Every op schema must be a recognised op, and every op a schema.
+func TestOpSchemasAreRegistered(t *testing.T) {
 	for op := range opSchemas {
 		if !opCases.has(op) {
 			t.Errorf("opSchemas[%q] is not in opCases", op)
