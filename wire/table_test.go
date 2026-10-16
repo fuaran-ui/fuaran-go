@@ -184,3 +184,32 @@ func TestOmitAtDefaultComparesTheWholeValue(t *testing.T) {
 		t.Error("a non-identity binding matched the default")
 	}
 }
+
+// A CONSTRUCTED tree carrying a field at its declared default encodes to the
+// canonical form, exactly as the decoded spelling of the same document does.
+func TestConstructedDefaultsEncodeOmitted(t *testing.T) {
+	metric := Node{ID: "m", Kind: Obj{Tag: "Metric", Fields: map[string]Value{
+		"label":         Str("Revenue"),
+		"value":         Obj{Tag: "Static", Fields: map[string]Value{"value": Int(1)}},
+		"tone":          Str("Default"),
+		"weight":        Str("Spacious"),
+		"emphasis":      Str("Normal"),
+		"subtext":       Str("kept"),
+		"trendPolarity": Str("HigherIsBetter"),
+	}}}
+	got, err := EncodeNode(metric)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"id":"m","kind":{"$type":"Metric","label":"Revenue","subtext":"kept","value":{"$type":"Static","value":1},"weight":"Spacious"}}`
+	if got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+	decoded, err := DecodeNode(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := EncodeNode(decoded); again != want {
+		t.Errorf("re-encode of the decoded form differs: %s", again)
+	}
+}
