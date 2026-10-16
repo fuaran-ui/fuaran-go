@@ -20,43 +20,39 @@
 // accessibility). It favours a localised edit over replacing the whole tree,
 // but never at the cost of correctness.
 //
-// Granularity divergence from the Rust producer (documented, correctness-
-// neutral): the recursion descends only through the kinds the Go apply engine
-// addresses structurally — the six layout kinds in layoutKinds below, matching
-// ops.layoutKinds. The Rust producer additionally recurses through Modal and
-// ScrollArea; the Go apply engine has no structural-child surface for those, so
-// a difference inside one escalates here to a whole-node replace at the nearest
-// layout ancestor (or ReplaceRoot). The emitted script stays applyable by every
-// conformant host and still satisfies the round-trip law; only the op count can
-// be coarser. A granular-field refinement pass (matching the Python producer's
-// UpdateProp/UpdateStyle/UpdateState op choices) is a possible follow-up.
+// The recursion descends through the kinds the apply engine addresses
+// structurally — the kinds whose generated idl.json table carries an ordered
+// list-of-nodes slot (idl.OrderedChildren, the one set ops reads too, so a
+// script emitted against a parent always applies) — less the two named in
+// recursionBounded below. A granular-field refinement pass (matching the
+// Python producer's UpdateProp/UpdateStyle/UpdateState op choices) is a
+// possible follow-up.
 package diff
 
 import (
 	"github.com/fuaran-ui/fuaran-go/wire"
+	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
 
-// layoutKinds are the kinds carrying an ordered "children" array — the only
-// kinds the structural child ops (InsertChild / RemoveNode) address, and the
-// only kinds this diff recurses through. It MUST stay in step with
-// ops/traverse.go's layoutKinds (the apply engine's structural-child set); a
-// script emitted against a parent outside this set would not apply.
-var layoutKinds = map[string]bool{
-	"Box":         true,
-	"SplitPanel":  true,
-	"Tabs":        true,
-	"Stepper":     true,
-	"SummaryList": true,
-	"Disclosure":  true,
-}
+// recursionBounded are the kinds with an ordered child list that this diff
+// does NOT recurse through: a difference inside one escalates to a whole-node
+// replace at the kind's own seat. It is a granularity choice, not a
+// correctness one — the apply engine addresses both kinds' children, so a
+// recursing script would apply too — and it is kept only because the corpus
+// pins this host's output for it: diff/goldens.json's divergent entries
+// modal-interior-change and scrollarea-interior-change record the seat-level
+// replace under hosts["go"]. Lifting it is a regeneration of those two entries
+// and the deletion of this set.
+var recursionBounded = map[string]bool{"Modal": true, "ScrollArea": true}
 
 // structuralChildren returns a layout node's ordered child list, or
-// (nil, false) for a kind with no addressable structural children.
+// (nil, false) for a kind this diff does not recurse through.
 func structuralChildren(n wire.Node) ([]wire.Node, bool) {
-	if !layoutKinds[n.Kind.Tag] {
+	slot, ok := idl.OrderedChildren(n.Kind.Tag)
+	if !ok || recursionBounded[n.Kind.Tag] {
 		return nil, false
 	}
-	arr, ok := n.Kind.Fields["children"].(wire.Arr)
+	arr, ok := n.Kind.Fields[slot].(wire.Arr)
 	if !ok {
 		return nil, false
 	}
@@ -80,7 +76,8 @@ func stripStructuralChildren(n wire.Node) wire.Node {
 	for k, v := range n.Kind.Fields {
 		fields[k] = v
 	}
-	fields["children"] = wire.Arr{}
+	slot, _ := idl.OrderedChildren(n.Kind.Tag)
+	fields[slot] = wire.Arr{}
 	return wire.Node{ID: n.ID, Kind: wire.Obj{Tag: n.Kind.Tag, Fields: fields}, Extras: n.Extras}
 }
 

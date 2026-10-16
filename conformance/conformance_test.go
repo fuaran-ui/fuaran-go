@@ -17,7 +17,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/diff"
 	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
+	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -255,5 +257,73 @@ func TestCorpusFamiliesBeyondTheFloorAreNamed(t *testing.T) {
 		if present[kind] == 0 {
 			t.Errorf("named as covered but absent from the corpus: %s", kind)
 		}
+	}
+}
+
+// TestStructuralKindsApplyAndDiff — Phase 2297's acceptance for the kinds that
+// used to decode structurally (absorbing Phase 1926). Their nested nodes now
+// decode as wire.Node and the apply engine, the diff and the island walk all
+// read one layout set from the generated tables, so:
+//   - InsertChild into a decoded SplitPanel keeps the children it had;
+//   - InsertChild into a Modal (and a ScrollArea) succeeds;
+//   - Diff is non-empty for trees that differ only under an ErrorBoundary, a
+//     SplitPanel or a Disclosure, and Apply(Diff(a, b), a) == b.
+func TestStructuralKindsApplyAndDiff(t *testing.T) {
+	decode := func(doc string) wire.Node {
+		t.Helper()
+		n, err := wire.DecodeNode(doc)
+		if err != nil {
+			t.Fatalf("DecodeNode(%s): %v", doc, err)
+		}
+		return n
+	}
+	leaf := func(id, text string) string {
+		return `{"id":"` + id + `","kind":{"$type":"Markdown","text":"` + text + `"}}`
+	}
+	insert := func(parent string) wire.Obj {
+		return wire.Obj{Tag: "InsertChild", Fields: map[string]wire.Value{
+			"parentId": wire.Str(parent),
+			"child":    decode(leaf("new", "inserted")),
+		}}
+	}
+
+	for _, c := range []struct{ name, tree, parent, want string }{
+		{"split panel keeps its children",
+			`{"id":"p","kind":{"$type":"SplitPanel","children":[` + leaf("a", "A") + `],"weight":0.5}}`, "p",
+			`{"id":"p","kind":{"$type":"SplitPanel","children":[` + leaf("a", "A") + `,` + leaf("new", "inserted") + `],"weight":0.5}}`},
+		{"modal",
+			`{"id":"m","kind":{"$type":"Modal","children":[],"dismissable":true,"open":{"$type":"Static","value":true}}}`, "m",
+			`{"id":"m","kind":{"$type":"Modal","children":[` + leaf("new", "inserted") + `],"dismissable":true,"open":{"$type":"Static","value":true}}}`},
+		{"scroll area",
+			`{"id":"s","kind":{"$type":"ScrollArea","children":[],"orientation":"Vertical"}}`, "s",
+			`{"id":"s","kind":{"$type":"ScrollArea","children":[` + leaf("new", "inserted") + `],"orientation":"Vertical"}}`},
+	} {
+		got, err := ops.Apply(insert(c.parent), decode(c.tree))
+		if err != nil {
+			t.Errorf("%s: InsertChild refused: %v", c.name, err)
+			continue
+		}
+		if enc := encNode(t, got); enc != c.want {
+			t.Errorf("%s: InsertChild gave\n %s\nwant\n %s", c.name, enc, c.want)
+		}
+	}
+
+	for _, c := range []struct{ name, a, b string }{
+		{"under an ErrorBoundary",
+			`{"id":"e","kind":{"$type":"ErrorBoundary","child":` + leaf("c", "before") + `,"fallback":` + leaf("f", "F") + `}}`,
+			`{"id":"e","kind":{"$type":"ErrorBoundary","child":` + leaf("c", "after") + `,"fallback":` + leaf("f", "F") + `}}`},
+		{"under a SplitPanel",
+			`{"id":"p","kind":{"$type":"SplitPanel","children":[` + leaf("a", "before") + `],"weight":0.5}}`,
+			`{"id":"p","kind":{"$type":"SplitPanel","children":[` + leaf("a", "after") + `],"weight":0.5}}`},
+		{"under a Disclosure",
+			`{"id":"d","kind":{"$type":"Disclosure","children":[` + leaf("a", "before") + `],"defaultOpen":true,"heading":"H","open":{"$type":"Static","value":true}}}`,
+			`{"id":"d","kind":{"$type":"Disclosure","children":[` + leaf("a", "after") + `],"defaultOpen":true,"heading":"H","open":{"$type":"Static","value":true}}}`},
+	} {
+		a, b := decode(c.a), decode(c.b)
+		if len(diff.Diff(a, b)) == 0 {
+			t.Errorf("%s: the diff of two different trees is empty", c.name)
+			continue
+		}
+		assertRoundTrip(t, a, b)
 	}
 }
