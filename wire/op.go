@@ -9,7 +9,7 @@ import "strconv"
 // decoders.
 
 var opCases = newCaseSet(
-	"EditNode", "UpdateProp", "ReplaceBinding", "UpdateStyle", "UpdateState",
+	"EditNode", "UpdateProp", "ReplaceBinding", "UpdateStyle", "PatchStyle", "UpdateState",
 	"InsertChild", "RemoveNode", "MoveNode", "ReorderChildren", "ReplaceRoot", "Batch",
 )
 
@@ -47,6 +47,10 @@ func decodeNodeField(w *walkState, raw any, path string) Value {
 
 func decodeStyleField(w *walkState, raw any, path string) Value {
 	return decodeStyle(w, raw, path)
+}
+
+func decodeStyleDeltaField(w *walkState, raw any, path string) Value {
+	return decodeStyleDelta(w, raw, path)
 }
 
 func decodeStateField(w *walkState, raw any, path string) Value {
@@ -97,6 +101,12 @@ func init() {
 		},
 		"UpdateStyle": {
 			{"style", true, decodeStyleField},
+			{"target", true, decodeString},
+		},
+		// Phase 2291 — the field-level style edit: UpdateStyle's shape, whose
+		// style is a StyleDelta (absent member = leave the field as it is).
+		"PatchStyle": {
+			{"style", true, decodeStyleDeltaField},
 			{"target", true, decodeString},
 		},
 		"UpdateState": {

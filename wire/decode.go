@@ -4487,48 +4487,87 @@ func decodeKind(w *walkState, raw any, path string) Obj {
 	return Obj{Tag: tag, Fields: fields}
 }
 
+// styleMember is one SemanticStyle member: its wire name, its per-field
+// decoder and its identity default. styleMembers lists them in the order the
+// decoders read them, so which defect surfaces first is fixed.
+type styleMember struct {
+	name     string
+	dec      func(w *walkState, raw any, path string) Value
+	identity string
+}
+
+var styleMembers = []styleMember{
+	{"emphasis", decodeEmphasisEnum, "Normal"},
+	{"tone", decodeTone, "Default"},
+	{"weight", decodeWeight, "Standard"},
+	{"role", func(w *walkState, raw any, path string) Value {
+		return Str(enumStr(raw, path, styleRoleCases, "role", noAliases))
+	}, "None"},
+	{"voice", func(w *walkState, raw any, path string) Value {
+		return Str(enumStr(raw, path, fontVoiceCases, "voice", noAliases))
+	}, "Default"},
+	// Phase 1472 — the declared direction, on exactly the same omit-at-identity
+	// terms as its neighbours (§3.1). It is not presentational: a host that
+	// drops it renders a document that says something else, so an unrecognised
+	// token is refused here rather than coerced to `"auto"`.
+	{"direction", func(w *walkState, raw any, path string) Value {
+		return Str(enumStr(raw, path, textDirectionCases, "direction", noAliases))
+	}, "auto"},
+}
+
+// decodeStyleMembers decodes every SemanticStyle member present in obj,
+// default tokens included. Unknown keys are ignored (rule 2).
+func decodeStyleMembers(w *walkState, obj map[string]any, path string) map[string]Value {
+	fields := map[string]Value{}
+	for _, m := range styleMembers {
+		if raw, ok := obj[m.name]; ok {
+			fields[m.name] = m.dec(w, raw, path+"."+m.name)
+		}
+	}
+	return fields
+}
+
 // decodeStyle — SemanticStyle. Every field is omitted-when-default on BOTH
 // boundaries (Phase 147 role/voice; Phase 460 emphasis/tone/weight): an
 // absent field restores the identity default, and a present explicit default
 // normalises to the omitted form.
 func decodeStyle(w *walkState, raw any, path string) Obj {
-	obj := expectObject(raw, path)
-	fields := map[string]Value{}
-	if raw, ok := obj["emphasis"]; ok {
-		if v := decodeEmphasisEnum(w, raw, path+".emphasis"); !isStr(v, "Normal") {
-			fields["emphasis"] = v
-		}
-	}
-	if raw, ok := obj["tone"]; ok {
-		if v := decodeTone(w, raw, path+".tone"); !isStr(v, "Default") {
-			fields["tone"] = v
-		}
-	}
-	if raw, ok := obj["weight"]; ok {
-		if v := decodeWeight(w, raw, path+".weight"); !isStr(v, "Standard") {
-			fields["weight"] = v
-		}
-	}
-	if raw, ok := obj["role"]; ok {
-		if v := Str(enumStr(raw, path+".role", styleRoleCases, "role", noAliases)); !isStr(v, "None") {
-			fields["role"] = v
-		}
-	}
-	if raw, ok := obj["voice"]; ok {
-		if v := Str(enumStr(raw, path+".voice", fontVoiceCases, "voice", noAliases)); !isStr(v, "Default") {
-			fields["voice"] = v
-		}
-	}
-	// Phase 1472 — the declared direction, on exactly the same omit-at-identity
-	// terms as its neighbours (§3.1). It is not presentational: a host that
-	// drops it renders a document that says something else, so an unrecognised
-	// token is refused here rather than coerced to `"auto"`.
-	if raw, ok := obj["direction"]; ok {
-		if v := Str(enumStr(raw, path+".direction", textDirectionCases, "direction", noAliases)); !isStr(v, "auto") {
-			fields["direction"] = v
+	fields := decodeStyleMembers(w, expectObject(raw, path), path)
+	for _, m := range styleMembers {
+		if isStr(fields[m.name], m.identity) {
+			delete(fields, m.name)
 		}
 	}
 	return Obj{Fields: fields}
+}
+
+// decodeStyleDelta — Phase 2291, the PatchStyle payload (§3.4). The same six
+// members and the same per-field decoders as SemanticStyle, but each member is
+// OPTIONAL and absence means "leave this field as it is": a present member sets
+// the field, a default token included, so nothing is normalised away and the
+// encoder emits every member the delta sets. A delta naming no member is not
+// an edit and is refused.
+func decodeStyleDelta(w *walkState, raw any, path string) Obj {
+	fields := decodeStyleMembers(w, expectObject(raw, path), path)
+	if len(fields) == 0 {
+		failExpecting(
+			CodeWrongType,
+			path,
+			"a StyleDelta must name at least one field — an empty patch is not an edit",
+			"a StyleDelta naming at least one field (direction | emphasis | role | tone | voice | weight)",
+		)
+	}
+	return Obj{Fields: fields}
+}
+
+// StyleIdentity returns the identity (default) token of each SemanticStyle
+// member, keyed by wire name — what an absent member of a SemanticStyle means.
+func StyleIdentity() map[string]string {
+	out := make(map[string]string, len(styleMembers))
+	for _, m := range styleMembers {
+		out[m.name] = m.identity
+	}
+	return out
 }
 
 // decodeAccessibility decodes the §3.1 Accessibility trait. It used to be

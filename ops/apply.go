@@ -148,6 +148,38 @@ func asInt(v wire.Value) (int, bool) {
 	return int(i), ok
 }
 
+// patchStyle applies a Phase 2291 StyleDelta over a node's CURRENT style (an
+// absent slot is the default record): every member the delta names replaces
+// the node's value and every other member is carried through. The result is
+// held in the decoder's omitted-when-default form, and a result equal to the
+// default record is stored as the ABSENT slot.
+func patchStyle(n wire.Node, delta wire.Obj) wire.Node {
+	identity := wire.StyleIdentity()
+	merged := make(map[string]wire.Value)
+	if current, ok := n.Extras["style"].(wire.Obj); ok {
+		for k, v := range current.Fields {
+			merged[k] = v
+		}
+	}
+	for k, v := range delta.Fields {
+		if s, ok := asStr(v); ok && s == identity[k] {
+			delete(merged, k)
+		} else {
+			merged[k] = v
+		}
+	}
+	extras := make(map[string]wire.Value, len(n.Extras)+1)
+	for k, v := range n.Extras {
+		extras[k] = v
+	}
+	if len(merged) == 0 {
+		delete(extras, "style")
+	} else {
+		extras["style"] = wire.Obj{Fields: merged}
+	}
+	return wire.Node{ID: n.ID, Kind: n.Kind, Extras: extras}
+}
+
 // ── Single-op apply ─────────────────────────────────────────────────────────
 
 func applyOne(op wire.Obj, root wire.Node) (wire.Node, *ApplyError) {
@@ -197,6 +229,20 @@ func applyOne(op wire.Obj, root wire.Node) (wire.Node, *ApplyError) {
 		}
 		tree, found := mapNode(target, func(n wire.Node) wire.Node {
 			return setExtra(n, "style", fields["style"])
+		}, root)
+		if !found {
+			return root, apErr(CodeNodeNotFound, fmt.Sprintf("Node '%s' not found in tree.", target))
+		}
+		return tree, nil
+
+	case "PatchStyle":
+		target, ok := asStr(fields["target"])
+		delta, deltaOK := fields["style"].(wire.Obj)
+		if !ok || !deltaOK {
+			return root, errBadShape
+		}
+		tree, found := mapNode(target, func(n wire.Node) wire.Node {
+			return patchStyle(n, delta)
 		}, root)
 		if !found {
 			return root, apErr(CodeNodeNotFound, fmt.Sprintf("Node '%s' not found in tree.", target))

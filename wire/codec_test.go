@@ -213,6 +213,67 @@ func TestOpRejectsSentinelValue(t *testing.T) {
 	}
 }
 
+// Phase 2291 — PatchStyle's StyleDelta keeps every member it sets, a default
+// token included: absence means "leave the field as it is", so a default must
+// survive the round trip where a SemanticStyle would normalise it away.
+func TestPatchStyleRoundTrip(t *testing.T) {
+	for _, in := range []string{
+		`{"$type":"PatchStyle","style":{"tone":"Success","voice":"Display"},"target":"metric-1"}`,
+		`{"$type":"PatchStyle","style":{"tone":"Default"},"target":"metric-1"}`,
+		`{"$type":"PatchStyle","style":{"direction":"auto","emphasis":"Normal","role":"None","tone":"Default","voice":"Default","weight":"Standard"},"target":"metric-1"}`,
+		`{"$type":"Batch","ops":[{"$type":"PatchStyle","style":{"weight":"Spacious"},"target":"a"}]}`,
+	} {
+		op, err := DecodeOp(in)
+		if err != nil {
+			t.Fatalf("DecodeOp(%s): %v", in, err)
+		}
+		out, err := EncodeOp(op)
+		if err != nil {
+			t.Fatalf("EncodeOp: %v", err)
+		}
+		if out != in {
+			t.Errorf("round trip diverged:\n got %s\nwant %s", out, in)
+		}
+	}
+	// The same payload as an UpdateStyle still normalises the default away.
+	op, err := DecodeOp(`{"$type":"UpdateStyle","style":{"tone":"Default"},"target":"metric-1"}`)
+	if err != nil {
+		t.Fatalf("DecodeOp: %v", err)
+	}
+	if out, _ := EncodeOp(op); out != `{"$type":"UpdateStyle","style":{},"target":"metric-1"}` {
+		t.Errorf("UpdateStyle default normalisation changed: %s", out)
+	}
+}
+
+func TestPatchStyleRejects(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		code  DecodeErrorCode
+		path  string
+	}{
+		{"empty delta", `{"$type":"PatchStyle","style":{},"target":"n1"}`, CodeWrongType, "$.style"},
+		{"only unknown keys", `{"$type":"PatchStyle","style":{"colour":"red"},"target":"n1"}`, CodeWrongType, "$.style"},
+		{"unknown token", `{"$type":"PatchStyle","style":{"tone":"Neon"},"target":"n1"}`, CodeUnknownDUCase, "$.style.tone"},
+		{"non-string token", `{"$type":"PatchStyle","style":{"direction":true},"target":"n1"}`, CodeWrongType, "$.style.direction"},
+		{"missing style", `{"$type":"PatchStyle","target":"n1"}`, CodeMissingField, "$.style"},
+		{"missing target", `{"$type":"PatchStyle","style":{"tone":"Brand"}}`, CodeMissingField, "$.target"},
+		{"style not an object", `{"$type":"PatchStyle","style":"Brand","target":"n1"}`, CodeWrongType, "$.style"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := DecodeOp(c.input)
+			var derr *DecodeError
+			if !errors.As(err, &derr) {
+				t.Fatalf("expected a *DecodeError, got %v", err)
+			}
+			if derr.Code != c.code || derr.Path != c.path {
+				t.Errorf("got %s at %s, want %s at %s", derr.Code, derr.Path, c.code, c.path)
+			}
+		})
+	}
+}
+
 // Every kind with a typed decoder must be a recognised kind, and the
 // special-cased handler (Box) must not also carry a builder — a builder for an
 // unroutable kind would be dead code. The
