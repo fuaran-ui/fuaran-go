@@ -16,9 +16,6 @@ import (
 
 func TestDagCorpus(t *testing.T) {
 	corpus := corpusroot.ForTest(t)
-	if corpus == "" {
-		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
-	}
 	dagRoot := filepath.Join(corpus, "dag")
 	raw, err := os.ReadFile(filepath.Join(dagRoot, "manifest.json"))
 	if err != nil {

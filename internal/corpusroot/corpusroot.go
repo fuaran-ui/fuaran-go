@@ -15,8 +15,12 @@
 // nobody named and report it as green. An empty or whitespace-only value counts
 // as unset, as it does in the other hosts.
 //
-// Nothing named and nothing found is "" with no error: a standalone checkout,
-// where each caller keeps its own skip.
+// Nothing named and nothing found is "" with no error from Find and Resolve. For
+// a TEST that is a failure, not a skip (Phase 1938): the corpus is the oracle,
+// and a conformance leg that goes green without it has certified nothing.
+// ForTest and MustFind therefore fail on it, naming the remedy — clone the
+// corpus beside this repo (the workspace's init manifest does), or name it in
+// FUARAN_WIRE_FIXTURES.
 //
 // TestNoLegSpellsTheCorpusPath (guard_test.go) fails the build when any other
 // file in the module spells the corpus path for itself.
@@ -91,24 +95,34 @@ type TB interface {
 	Fatalf(format string, args ...any)
 }
 
-// ForTest is Find for a test: a refused override fails the test (never a skip),
-// and "" means a standalone checkout, which the caller skips as before.
+// absent is the failure a test meets when no corpus is named or found.
+const absent = "no wire-format corpus: none is named in " + EnvVar + " and no " + DirName +
+	"/manifest.json sits beside this repository or above it. The corpus is the conformance oracle, so a " +
+	"leg without it FAILS rather than skips (Phase 1938) — clone it beside this repo, or name it in " + EnvVar
+
+// ForTest is Find for a test: a refused override and an absent corpus both fail
+// the test — never a skip.
 func ForTest(t TB) string {
 	t.Helper()
 	root, err := Find()
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
+	if root == "" {
+		t.Fatalf("%s", absent)
+	}
 	return root
 }
 
-// MustFind is Find for a helper with no test handle: a refused override panics
-// with the refusal — failing the calling test loudly, never skipping it — and
-// "" means a standalone checkout.
+// MustFind is Find for a helper with no test handle: a refused override and an
+// absent corpus both panic — failing the calling test loudly, never skipping it.
 func MustFind() string {
 	root, err := Find()
 	if err != nil {
 		panic(err)
+	}
+	if root == "" {
+		panic(absent)
 	}
 	return root
 }

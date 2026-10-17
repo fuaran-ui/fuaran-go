@@ -35,9 +35,6 @@ type a11yContract struct {
 
 func TestA11yContract(t *testing.T) {
 	corpus := corpusroot.ForTest(t)
-	if corpus == "" {
-		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
-	}
 	raw, err := os.ReadFile(filepath.Join(corpus, "a11y-contract.json"))
 	if err != nil {
 		t.Skipf("a11y-contract.json not present: %v", err)

@@ -23,9 +23,6 @@ import (
 // on a standalone checkout. The corpus is resolved by internal/corpusroot.
 func findGoldens() string {
 	corpus := corpusroot.MustFind()
-	if corpus == "" {
-		return ""
-	}
 	g := filepath.Join(corpus, "function-registry", "goldens.json")
 	if _, err := os.Stat(g); err != nil {
 		return ""

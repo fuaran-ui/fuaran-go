@@ -48,9 +48,6 @@ func TestStyleNormaliseApplyCorpus(t *testing.T) { certifyApplyFamily(t, "styleN
 // certifyApplyFamily decodes and applies every vector of one apply/ family.
 func certifyApplyFamily(t *testing.T, familyID string) {
 	root := corpusroot.ForTest(t)
-	if root == "" {
-		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
-	}
 
 	var manifest struct {
 		Families []struct {

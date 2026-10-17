@@ -43,9 +43,6 @@ const listParamFixture = "multiselect-chip-list-param"
 func loadListParamFixture(t *testing.T) wire.Node {
 	t.Helper()
 	corpus := corpusroot.ForTest(t)
-	if corpus == "" {
-		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
-	}
 	raw, err := os.ReadFile(filepath.Join(corpus, "nodes", listParamFixture+".json"))
 	if err != nil {
 		t.Fatalf("reading fixture %s: %v", listParamFixture, err)

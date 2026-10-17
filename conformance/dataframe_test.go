@@ -1,11 +1,13 @@
 // Dataframe parity: certifies the Go Binding.Transform evaluator value-for-value
-// against the F# reference report (fuaran-py/tests/fixtures/dataframe_parity.json).
-// Three legs per case: the source table codec round-trips byte-exact, the pipeline
-// codec round-trips byte-exact, and evaluating the pipeline over the source
-// produces a result whose canonical encoding is byte-identical to the reference
-// `expected` (or, for an `ok:false` case, surfaces a typed evaluation error). The
-// fixture is a sibling of the wire-format corpus; the leg skips on a standalone
-// checkout.
+// against the reference evaluator's own answers — the corpus law family
+// laws/dataframeParity (Phase 1938), emitted by the reference with a recorded
+// producer commit in laws/manifest.json. (Until Phase 1938 this leg read the
+// same cases from the Python host's tests, where they had hand-recorded answers
+// and no producer.) Three legs per vector: the source table codec round-trips
+// byte-exact, the pipeline codec round-trips byte-exact, and evaluating the
+// pipeline over the source produces a result whose canonical encoding is
+// byte-identical to the reference `expected.table` — or, for an `error`
+// verdict, surfaces a typed evaluation error.
 package conformance
 
 import (
@@ -17,78 +19,70 @@ import (
 	"github.com/fuaran-ui/fuaran-go/dataframe"
 )
 
-// parityRootEnv names the fuaran-py checkout holding the reference report, for a
-// working copy that is not the canonical side-by-side sibling — a git worktree, say.
-// The default walk below climbs to whatever `fuaran-py` sits beside this repo, which
-// from a worktree is a checkout this session does not own and which can be at a
-// different commit than the change under test; the two then disagree about the wire
-// and the failure reads as a codec defect. A value naming no directory is REFUSED
-// rather than ignored, because falling back reaches the very checkout the override
-// exists to leave alone. Same contract as the corpus and CSS sibling overrides.
-const parityRootEnv = "FUARAN_PY_ROOT"
+const dataframeParityFamily = "dataframeParity"
 
-// findDataframeParity walks up from the working directory looking for the F#
-// reference report under the fuaran-py sibling. Returns "" when absent.
-func findDataframeParity(t *testing.T) string {
-	if declared, ok := os.LookupEnv(parityRootEnv); ok {
-		p := filepath.Join(declared, "tests", "fixtures", "dataframe_parity.json")
-		if _, err := os.Stat(p); err != nil {
-			t.Fatalf("%s names %q, which holds no tests/fixtures/dataframe_parity.json: %v",
-				parityRootEnv, declared, err)
-		}
-		return p
-	}
+type lawFamilyRow struct {
+	ID   string `json:"id"`
+	File string `json:"file"`
+}
 
-	dir, err := os.Getwd()
+type parityVector struct {
+	ID    string `json:"id"`
+	Input struct {
+		Source   string `json:"source"`
+		Pipeline string `json:"pipeline"`
+	} `json:"input"`
+	Expected struct {
+		Verdict string `json:"verdict"`
+		Table   string `json:"table"`
+	} `json:"expected"`
+}
+
+// loadDataframeParity reads the family's vectors through laws/manifest.json.
+func loadDataframeParity(t *testing.T) []parityVector {
+	t.Helper()
+	corpus, _ := loadCorpus(t)
+	laws := filepath.Join(corpus, "laws")
+	raw, err := os.ReadFile(filepath.Join(laws, "manifest.json"))
 	if err != nil {
-		return ""
+		t.Fatalf("reading laws/manifest.json: %v", err)
 	}
-	for {
-		p := filepath.Join(dir, "fuaran-py", "tests", "fixtures", "dataframe_parity.json")
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
+	var manifest struct {
+		Families []lawFamilyRow `json:"families"`
 	}
-}
-
-type dataframeCase struct {
-	ID       string `json:"id"`
-	OK       bool   `json:"ok"`
-	Source   string `json:"source"`
-	Pipeline string `json:"pipeline"`
-	Expected string `json:"expected"`
-}
-
-type dataframeReport struct {
-	Cases []dataframeCase `json:"cases"`
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("parsing laws/manifest.json: %v", err)
+	}
+	var file string
+	for _, f := range manifest.Families {
+		if f.ID == dataframeParityFamily {
+			file = f.File
+		}
+	}
+	if file == "" {
+		t.Fatalf("laws/manifest.json declares no %s family", dataframeParityFamily)
+	}
+	raw, err = os.ReadFile(filepath.Join(laws, file))
+	if err != nil {
+		t.Fatalf("reading laws/%s: %v", file, err)
+	}
+	var doc struct {
+		Vectors []parityVector `json:"vectors"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parsing laws/%s: %v", file, err)
+	}
+	if len(doc.Vectors) == 0 {
+		t.Fatalf("laws/%s carries no vectors", file)
+	}
+	return doc.Vectors
 }
 
 func TestDataframeParity(t *testing.T) {
-	path := findDataframeParity(t)
-	if path == "" {
-		t.Skip("dataframe_parity.json not found alongside the repo; skipping (standalone checkout)")
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading parity report: %v", err)
-	}
-	var report dataframeReport
-	if err := json.Unmarshal(raw, &report); err != nil {
-		t.Fatalf("parsing parity report: %v", err)
-	}
-	if len(report.Cases) == 0 {
-		t.Fatal("parity report has no cases")
-	}
-
-	for _, c := range report.Cases {
-		t.Run(c.ID, func(t *testing.T) {
+	for _, v := range loadDataframeParity(t) {
+		t.Run(v.ID, func(t *testing.T) {
 			// Leg 1 — source codec round-trips byte-exact.
-			src, cerr := dataframe.DecodeSource(c.Source)
+			src, cerr := dataframe.DecodeSource(v.Input.Source)
 			if cerr != nil {
 				t.Fatalf("decode source: %v", cerr)
 			}
@@ -96,12 +90,12 @@ func TestDataframeParity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode source: %v", err)
 			}
-			if reSrc != c.Source {
-				t.Fatalf("source round-trip mismatch\n got: %s\nwant: %s", reSrc, c.Source)
+			if reSrc != v.Input.Source {
+				t.Fatalf("source round-trip mismatch\n got: %s\nwant: %s", reSrc, v.Input.Source)
 			}
 
 			// Leg 2 — pipeline codec round-trips byte-exact.
-			pipeline, cerr := dataframe.DecodePipeline(c.Pipeline)
+			pipeline, cerr := dataframe.DecodePipeline(v.Input.Pipeline)
 			if cerr != nil {
 				t.Fatalf("decode pipeline: %v", cerr)
 			}
@@ -109,19 +103,19 @@ func TestDataframeParity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode pipeline: %v", err)
 			}
-			if rePipe != c.Pipeline {
-				t.Fatalf("pipeline round-trip mismatch\n got: %s\nwant: %s", rePipe, c.Pipeline)
+			if rePipe != v.Input.Pipeline {
+				t.Fatalf("pipeline round-trip mismatch\n got: %s\nwant: %s", rePipe, v.Input.Pipeline)
 			}
 
-			// Leg 3 — evaluation is value-identical to the reference report.
+			// Leg 3 — evaluation is value-identical to the reference's answer.
 			embedded, ok := src.(dataframe.Embedded)
 			if !ok {
 				t.Fatalf("parity source is not embedded")
 			}
 			result, evalErr := dataframe.EvalPipeline(pipeline, embedded.Table)
-			if !c.OK {
+			if v.Expected.Verdict != "ok" {
 				if evalErr == nil {
-					t.Fatalf("expected an evaluation error, got a result")
+					t.Fatalf("the reference refused the pipeline; this evaluator returned a result")
 				}
 				return
 			}
@@ -132,8 +126,8 @@ func TestDataframeParity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode result: %v", err)
 			}
-			if got != c.Expected {
-				t.Fatalf("evaluator mismatch\n got: %s\nwant: %s", got, c.Expected)
+			if got != v.Expected.Table {
+				t.Fatalf("evaluator mismatch\n got: %s\nwant: %s", got, v.Expected.Table)
 			}
 		})
 	}

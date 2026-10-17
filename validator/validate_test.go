@@ -359,7 +359,7 @@ func corpusNodesDir(t *testing.T) string {
 	t.Helper()
 	corpus := corpusroot.ForTest(t)
 	candidate := filepath.Join(corpus, "nodes")
-	if info, err := os.Stat(candidate); corpus == "" || err != nil || !info.IsDir() {
+	if info, err := os.Stat(candidate); err != nil || !info.IsDir() {
 		t.Skip("wire-format-fixtures/nodes not found")
 	}
 	return candidate

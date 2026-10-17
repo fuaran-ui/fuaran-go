@@ -2362,7 +2362,7 @@ func decodeTextSourceArray(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeTextSource(w, item, path+"."+strconv.Itoa(i))
+		out[i] = decodeTextSource(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
@@ -2371,7 +2371,7 @@ func decodeIntArray(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = Int(expectInt(item, path+"."+strconv.Itoa(i)))
+		out[i] = Int(expectInt(item, path+"["+strconv.Itoa(i)+"]"))
 	}
 	return out
 }

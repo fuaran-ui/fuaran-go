@@ -135,7 +135,10 @@ law), the **markdown corpus** (`markdown/corpus.json`, byte-pinned), and the
 source; the shipped reference CSS byte-equal to the canonical artefact — both
 skip on a standalone checkout). The envelope and elicitation families land
 with their own roadmap tiers (`conformance` locates `../wire-format-fixtures/`
-and skips when absent).
+and FAILS when it is absent — the corpus is the oracle, Phase 1938). Which
+corpus families the suite runs is declared in `host-capability-manifest.json`
+(`corpusFamilies`, WIRE_FORMAT §27.7), generated from
+`conformance/families_test.go` and held to the corpus tree.
 
 ### Decoder robustness fuzz (`wire/decoderfuzz_test.go`)
 
@@ -262,8 +265,8 @@ client-mask unmask path).
 ## Cross-repo dependencies
 
 No upstream dependency on any other sibling. At test time it reads the
-workspace-relative corpus at `../wire-format-fixtures/` (skipped when absent, so
-the repo is standalone-testable). It produces a Go module, not a NuGet pack — the
+workspace-relative corpus at `../wire-format-fixtures/` (or `FUARAN_WIRE_FIXTURES`);
+its absence fails the suite rather than skipping it (Phase 1938). It produces a Go module, not a NuGet pack — the
 consumer-side package build treats it as a no-op.
 
 ## Public vocabulary discipline

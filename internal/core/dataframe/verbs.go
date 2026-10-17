@@ -61,6 +61,11 @@ func evalDerive(f Frame, name string, expr ColExpr) (Frame, *EvalError) {
 		newCells[ri] = c
 	}
 	ty := inferType(newCells)
+	if allNull(newCells) {
+		if st := staticType(f.Cols, expr); st != "" {
+			ty = st
+		}
+	}
 	i := colIndex(f.Cols, name)
 	if i >= 0 {
 		cols := append(Schema(nil), f.Cols...)
@@ -607,4 +612,47 @@ func EvalPipelineWith(resolve Resolver, pipeline []Transform, input Table) (Tabl
 // UNRESOLVED_SOURCE).
 func EvalPipeline(pipeline []Transform, input Table) (Table, *EvalError) {
 	return EvalPipelineWith(NoResolve, pipeline, input)
+}
+
+func allNull(cells []Cell) bool {
+	for _, c := range cells {
+		if !isNull(c) {
+			return false
+		}
+	}
+	return true
+}
+
+// staticType is the column type an expression is typed at from the schema
+// alone, where that is decidable, and "" where it is not. A derive whose every
+// cell is null has no value to read a type off, and the reference evaluator
+// types it from the expression (laws/dataframeParity's derive-div-by-zero: an
+// int quotient of all-null cells is a float column).
+func staticType(cols Schema, e ColExpr) string {
+	switch x := e.(type) {
+	case Col:
+		return colType(cols, x.Name)
+	case Lit:
+		return typeOf(x.Cell)
+	case Cast:
+		return x.Type
+	case Not, IsNull, InList:
+		return TypeBool
+	case Binary:
+		switch x.Op {
+		case "eq", "ne", "lt", "le", "gt", "ge", "and", "or", "contains", "startsWith", "endsWith":
+			return TypeBool
+		case "div":
+			return TypeFloat
+		case "add", "sub", "mul", "mod":
+			l, r := staticType(cols, x.Left), staticType(cols, x.Right)
+			if l == TypeInt && r == TypeInt {
+				return TypeInt
+			}
+			if (l == TypeInt || l == TypeFloat) && (r == TypeInt || r == TypeFloat) {
+				return TypeFloat
+			}
+		}
+	}
+	return ""
 }

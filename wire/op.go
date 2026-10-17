@@ -58,7 +58,7 @@ func decodeIDList(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = Str(expectString(item, path+"."+strconv.Itoa(i)))
+		out[i] = Str(expectString(item, path+"["+strconv.Itoa(i)+"]"))
 	}
 	return out
 }
@@ -67,7 +67,7 @@ func decodeOpList(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeOpValue(w, item, path+"."+strconv.Itoa(i))
+		out[i] = decodeOpValue(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }

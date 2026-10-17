@@ -1,0 +1,96 @@
+{
+  "$manifest": "fuaran.host-capability/1",
+  "host": "fuaran-go",
+  "hostVersion": "0.0.6-alpha",
+  "corpusAuthority": null,
+  "generator": "github.com/fuaran-ui/fuaran-go/conformance (FUARAN_MANIFEST_REGENERATE=1 go test ./conformance -run TestHostCapabilityManifestIsCurrent)",
+  "families": {
+    "caseFields": {
+      "covered": false,
+      "reason": "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
+    },
+    "hostedCases": {
+      "covered": false,
+      "reason": "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
+    },
+    "kindFields": {
+      "covered": false,
+      "reason": "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
+    },
+    "kinds": {
+      "covered": false,
+      "reason": "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
+    },
+    "recordFields": {
+      "covered": false,
+      "reason": "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
+    },
+    "unionCases": {
+      "covered": false,
+      "reason": "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
+    }
+  },
+  "corpusFamilies": {
+    "apply/duplicateIdsApply": "covered",
+    "apply/limitsApply": "covered",
+    "apply/skeletonApply": {
+      "pending": "the apply engine's suite does not yet run the skeleton-apply vectors"
+    },
+    "apply/styleNormaliseApply": "covered",
+    "contract-card-reject": {
+      "pending": "this host has no contract-card codec (§25) for the card fixtures to run against yet"
+    },
+    "contract-card-round-trip": {
+      "pending": "this host has no contract-card codec (§25) for the card fixtures to run against yet"
+    },
+    "dag": "covered",
+    "decode-policy": {
+      "notApplicable": "this host's decoder offers no §23 kind admission policy"
+    },
+    "devtools-relay": {
+      "notApplicable": "this host ships no devtools relay endpoint"
+    },
+    "elicitation-answer-accept": "covered",
+    "elicitation-answer-reject": "covered",
+    "elicitation-reject": "covered",
+    "elicitation-round-trip": "covered",
+    "envelope-reject": "covered",
+    "envelope-round-trip": "covered",
+    "laws/capabilityLaws": {
+      "pending": "the capability twin mirrors an older Core than the vectors are stamped for, so capability_laws_test.go reports the gap and asserts nothing until the twin is raised"
+    },
+    "laws/dataframeParity": "covered",
+    "laws/decimal": {
+      "pending": "this host's suite does not yet run this law family's vectors"
+    },
+    "laws/fieldLaws": {
+      "pending": "this host's suite does not yet run this law family's vectors"
+    },
+    "laws/transformLaws": {
+      "pending": "the evaluator certifies against the authored dataframeParity cases; the drawn transform sample is not run yet"
+    },
+    "lenient-accept": "covered",
+    "lowers-to": {
+      "notApplicable": "this host carries no bounded program core for actions to lower onto (§30)"
+    },
+    "merge-conformance": "covered",
+    "node-round-trip": "covered",
+    "op-round-trip": "covered",
+    "reject": "covered",
+    "repair": {
+      "pending": "this host has no §28 repair function yet"
+    },
+    "sanitization": "covered",
+    "stored-emissions": {
+      "pending": "this host's suite does not yet run the stored-emission fixtures"
+    },
+    "style-observer": "covered",
+    "teleport-decode": {
+      "pending": "the teleport package is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures"
+    },
+    "teleport-reject": {
+      "pending": "the teleport package is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures"
+    }
+  },
+  "tokens": []
+}
