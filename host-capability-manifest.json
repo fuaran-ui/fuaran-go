@@ -50,6 +50,7 @@
     "devtools-relay": {
       "notApplicable": "this host ships no devtools relay endpoint"
     },
+    "diff/treeDiff": "covered",
     "elicitation-answer-accept": "covered",
     "elicitation-answer-reject": "covered",
     "elicitation-reject": "covered",
@@ -67,7 +68,7 @@
       "pending": "this host's suite does not yet run this law family's vectors"
     },
     "laws/transformLaws": {
-      "pending": "the evaluator certifies against the authored dataframeParity cases; the drawn transform sample is not run yet"
+      "pending": "the committed draw (kitVersion 0.35.0) predates the reference evaluator's typing of an all-null derive that dataframeParity pins, so its two div-by-zero vectors disagree with this evaluator until the producer re-emits the family"
     },
     "lenient-accept": "covered",
     "lowers-to": {
