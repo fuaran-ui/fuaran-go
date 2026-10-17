@@ -167,6 +167,133 @@ func TestNestedLayoutRecursesPerSeat(t *testing.T) {
 	}
 }
 
+// ── the style facet (Phase 2314) ─────────────────────────────────────────────
+
+// styledCard is card("Sales", "Revenue") with a style on the root and on the
+// metric; an empty style string leaves that slot absent.
+func styledCard(rootStyle, metricStyle string) string {
+	withStyle := func(style string) string {
+		if style == "" {
+			return ""
+		}
+		return `,"style":` + style
+	}
+	return `{"id":"card","kind":{"$type":"Box","children":[` +
+		`{"id":"h","kind":{"$type":"Heading","level":1,"text":"Sales","variant":"Standard"}},` +
+		`{"id":"m","kind":{"$type":"Metric","label":"Revenue","value":{"$type":"Static","value":1}}` + withStyle(metricStyle) + `}` +
+		`],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Card"}` + withStyle(rootStyle) + `}`
+}
+
+func TestStyleOnlyChangeIsOneStyleEdit(t *testing.T) {
+	cases := []struct {
+		name          string
+		before, after string
+		want          string
+	}{
+		{
+			name:   "one member of a leaf",
+			before: styledCard("", `{"tone":"Success","weight":"Spacious"}`),
+			after:  styledCard("", `{"tone":"Critical","weight":"Spacious"}`),
+			want:   `{"$type":"PatchStyle","style":{"tone":"Critical"},"target":"m"}`,
+		},
+		{
+			name:   "two members of the root, one back to its default",
+			before: styledCard(`{"tone":"Brand","weight":"Spacious"}`, ""),
+			after:  styledCard(`{"emphasis":"Loud","tone":"Brand"}`, ""),
+			want:   `{"$type":"PatchStyle","style":{"emphasis":"Loud","weight":"Standard"},"target":"card"}`,
+		},
+		{
+			name:   "every member moves",
+			before: styledCard("", `{"direction":"ltr","emphasis":"Loud","role":"Data","tone":"Success","voice":"Display","weight":"Spacious"}`),
+			after:  styledCard("", `{"direction":"rtl","emphasis":"Quiet","role":"Caption","tone":"Info","voice":"Structural","weight":"Compact"}`),
+			want:   `{"$type":"UpdateStyle","style":{"direction":"rtl","emphasis":"Quiet","role":"Caption","tone":"Info","voice":"Structural","weight":"Compact"},"target":"m"}`,
+		},
+		{
+			name:   "back to the absent slot",
+			before: styledCard("", `{"emphasis":"Loud","tone":"Warning"}`),
+			after:  styledCard("", ""),
+			want:   `{"$type":"PatchStyle","style":{"emphasis":"Normal","tone":"Default"},"target":"m"}`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			script := assertRoundTrip(t, decode(t, c.before), decode(t, c.after))
+			assertGoldenBytes(t, script, []string{c.want})
+		})
+	}
+}
+
+func TestStyleAndContentChangeKeepsTheSeatReplace(t *testing.T) {
+	a := decode(t, styledCard("", `{"tone":"Success"}`))
+	b := decode(t, strings.Replace(styledCard("", `{"tone":"Critical"}`), "Revenue", "Profit", 1))
+	if got := opTags(assertRoundTrip(t, a, b)); got != "[RemoveNode, InsertChild]" {
+		t.Errorf("a style change beside a content change: got %s, want the seat replace", got)
+	}
+}
+
+func TestRootStyleChangeBesideAChildChange(t *testing.T) {
+	a := decode(t, styledCard(`{"tone":"Brand"}`, ""))
+	b := decode(t, strings.Replace(styledCard(`{"tone":"Info"}`, ""), "Revenue", "Profit", 1))
+	if got := opTags(assertRoundTrip(t, a, b)); got != "[PatchStyle, RemoveNode, InsertChild]" {
+		t.Errorf("a root restyle beside a child change: got %s, want the style edit then the child's seat replace", got)
+	}
+}
+
+// TestRestyleRoundTripProperty restyles random nodes of generated trees and
+// asserts the round-trip law, and that a restyle diffs to style edits alone.
+func TestRestyleRoundTripProperty(t *testing.T) {
+	members := []struct {
+		name   string
+		tokens []string
+	}{
+		{"direction", []string{"auto", "ltr", "rtl"}},
+		{"emphasis", []string{"Quiet", "Normal", "Loud"}},
+		{"role", []string{"None", "Eyebrow", "Data", "Lede", "Caption"}},
+		{"tone", []string{"Default", "Subdued", "Brand", "Success", "Warning", "Critical", "Info"}},
+		{"voice", []string{"Default", "Display", "Structural"}},
+		{"weight", []string{"Compact", "Standard", "Spacious"}},
+	}
+	for seed := int64(1); seed <= 200; seed++ {
+		rng := rand.New(rand.NewSource(seed))
+		a := genTree(rng, "root", 3)
+		var ids []string
+		var walk func(n wire.Node)
+		walk = func(n wire.Node) {
+			ids = append(ids, n.ID)
+			kids, _ := structuralChildren(n)
+			for _, k := range kids {
+				walk(k)
+			}
+		}
+		walk(a)
+		b := a
+		for i := 0; i < 1+rng.Intn(3); i++ {
+			delta := map[string]wire.Value{}
+			for _, m := range members {
+				if rng.Intn(2) == 0 {
+					delta[m.name] = wire.Str(m.tokens[rng.Intn(len(m.tokens))])
+				}
+			}
+			if len(delta) == 0 {
+				continue
+			}
+			op := styleOp("PatchStyle", ids[rng.Intn(len(ids))], delta)
+			next, err := ops.Apply(op, b)
+			if err != nil {
+				t.Fatalf("seed %d: restyle failed to apply: %v", seed, err)
+			}
+			b = next
+		}
+		t.Run(fmt.Sprintf("seed-%d", seed), func(t *testing.T) {
+			for _, op := range assertRoundTrip(t, a, b) {
+				if op.Tag != "PatchStyle" && op.Tag != "UpdateStyle" {
+					t.Errorf("a restyle diffed to %s, want style edits only", op.Tag)
+				}
+			}
+		})
+	}
+}
+
 func TestDiffBatchedWraps(t *testing.T) {
 	a := decode(t, card("Sales", "Revenue"))
 	b := decode(t, card("Sales", "Profit"))
@@ -274,15 +401,12 @@ func TestRoundTripProperty(t *testing.T) {
 
 // ── cross-host golden set ────────────────────────────────────────────────────
 //
-// A small (before, after) → op-script golden, authored for the Go host. No
-// shared cross-host diff-golden fixture exists in wire-format-fixtures/ yet
-// (the rs/py producers assert the round-trip law with in-language cases, not a
-// committed shared golden). These goldens pin the Go op choices so a regression
-// is caught here; reconciling them into a shared wire-format-fixtures/diff/
-// family that rs and py also certify against is tracked as follow-up (see the
-// phase Outcome note). The op scripts below match the rs producer's choices for
-// the deterministic cases (ReplaceRoot on root-id change; RemoveNode+InsertChild
-// seat-local replace on a localised change).
+// A small (before, after) → op-script golden, authored for the Go host and
+// runnable without the corpus. The shared cross-host family is
+// wire-format-fixtures/diff/goldens.json, certified in conformance/diff_test.go.
+// The op scripts below match the rs producer's choices for the deterministic
+// cases (ReplaceRoot on root-id change; RemoveNode+InsertChild seat-local
+// replace on a localised change).
 
 func TestCrossHostGoldens(t *testing.T) {
 	cases := []struct {
