@@ -12,20 +12,29 @@
 // invocation — never the body.
 //
 // Reference semantics (canonical = the F# reference host):
-//   - default-deny by shape: an arg must address a declared hole that takes a
-//     scalar value, and lie in that hole's space; every required hole must be
-//     bound; a slot hole with no declared space ranges over the tree space its
+//   - default-deny by shape: an address is bound once (a repeat is refused
+//     duplicateArg before any value is read); an arg must address a declared
+//     hole that takes a scalar value, and lie in that hole's space; every
+//     required hole must be bound; a slot hole ranges over the tree space its
 //     slot constraint names (Phase 1873), and a hole with neither a space nor a
 //     slot reading (an action hole) is not invocable. Every refusal is NAMED
 //     and returned, never a panic.
+//   - a value is read by the reference's invariant readers: an integer is
+//     `-?digits`, a number `-?digits(.digits)?([eE][+-]?digits)?` — no white
+//     space, no `+` — and each value in a space has ONE canonical spelling.
 //   - the replay key is `id + "#" + fnv1a(CanonicalFields(addr, value, ...))`
-//     over the addr-sorted args (Phase 1860, the reference's fuaran-core#225
-//     form): each field escaped and terminated, so the pre-image is injective
-//     and two distinct argument sets never share one. The hash iterates UTF-16
-//     code units, which is what makes it value-identical to the reference on
+//     over the addr-sorted args, each value keyed by its canonical spelling in
+//     its hole's space (Phase 1860, the reference's fuaran-core#225 form): each
+//     field escaped and terminated, so the pre-image is injective and two
+//     distinct argument sets never share one. The hash iterates UTF-16 code
+//     units, which is what makes it value-identical to the reference on
 //     non-ASCII args.
-//   - registry enumeration is id-sorted; stability is part of the contract
-//     (it is the discovery surface an agent reads).
+//   - the determinism axis is a SET of factors (clock, random, network), its
+//     wire label the canonical `+`-joined spelling of the set.
+//   - registration runs the reference's admission gate (totality, then
+//     well-formedness) and refuses by name; enumeration is id-sorted, and that
+//     stability is part of the contract (it is the discovery surface an agent
+//     reads).
 //
 // Certified against the shared corpus's `laws/capability-laws.json` vectors —
 // the (input, expected) pairs the reference's own conformance law family draws
@@ -34,11 +43,16 @@ package function
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf16"
+
+	"github.com/fuaran-ui/fuaran-go/internal/core/canonical"
 )
 
 // MirroredCoreVersion is the Fuaran.Core version whose capability semantics
@@ -48,15 +62,19 @@ import (
 // by Core and stamped with the Core version that emitted them (`kitVersion`).
 // This twin certifies against the vectors of the Core it mirrors; a copy
 // stamped for any other Core is the cut-to-raise window, and the capability
-// leg reports it by name rather than asserting it. Raised to the Core version
-// the twin is brought up to: fuaran#1966 raises it to 0.33.0 when it moves
-// determinism to the factor set (fuaran-core Phase 319).
-const MirroredCoreVersion = "0.32.0"
+// leg reports it by name rather than asserting it. Raised to 0.39.0 by Phase
+// 2001: the determinism factor set (Core 0.33.0, fuaran-core Phase 319), the
+// invariant readers and canonical argument spelling the replay key hashes
+// (0.34.0, Phase 295), the admission gate, duplicateArg and the reader's
+// `$type` check (0.35.1, Phase 307), and the entry read as its hole kind
+// (0.37.0, Phase 409). The policy gate on the registry (0.35.1, Phase 318) is
+// not mirrored: this host's registry carries no policy.
+const MirroredCoreVersion = "0.39.0"
 
 // EffectClass is the total two-axis effect declaration: what host state a body
 // touches, and what makes it non-reproducible. The wire spellings are the
-// canonical ones (`pure` / `readsHost` / `writesHost`, and `deterministic` /
-// `clock` / `random` / `network`).
+// canonical ones (`pure` / `readsHost` / `writesHost`; the determinism set's
+// label, see DeterminismSet.Tag).
 type EffectClass struct {
 	Host        string `json:"host"`
 	Determinism string `json:"determinism"`
@@ -69,15 +87,90 @@ const (
 	HostWritesHost = "writesHost"
 )
 
-// The closed determinism-source vocabulary. These strings ARE the determinism
-// tags a capture-replay seam keys on — there is no second spelling, so no host
-// can diverge on a mapping step that does not exist.
+// The single-factor determinism labels, and the empty set's. A composed class
+// is labelled by DeterminismSet.Tag (`clock+random`, …). These strings ARE the
+// determinism tags a capture-replay seam keys on — there is no second spelling,
+// so no host can diverge on a mapping step that does not exist.
 const (
 	DeterminismDeterministic = "deterministic"
 	DeterminismClock         = "clock"
 	DeterminismRandom        = "random"
 	DeterminismNetwork       = "network"
 )
+
+// DeterminismSet is the determinism axis: the SET of non-deterministic sources
+// a body reads, joined by union (Core 0.33.0, fuaran-core Phase 319). The empty
+// set is deterministic. Build one by or-ing the factors.
+type DeterminismSet uint8
+
+// The three determinism factors, declared in the canonical order every label
+// renders them in.
+const (
+	FactorClock DeterminismSet = 1 << iota
+	FactorRandom
+	FactorNetwork
+)
+
+// determinismFactors pairs each factor with its label, in canonical order.
+var determinismFactors = []struct {
+	factor DeterminismSet
+	name   string
+}{
+	{FactorClock, DeterminismClock},
+	{FactorRandom, DeterminismRandom},
+	{FactorNetwork, DeterminismNetwork},
+}
+
+// Tag is the set's canonical wire label: `deterministic` for the empty set,
+// otherwise its factors in the order clock, random, network joined by `+`
+// (`clock`, `clock+random`, `clock+random+network`). Twin of the reference's
+// `Effect.determinismTag`.
+func (d DeterminismSet) Tag() string {
+	var names []string
+	for _, f := range determinismFactors {
+		if d&f.factor != 0 {
+			names = append(names, f.name)
+		}
+	}
+	if len(names) == 0 {
+		return DeterminismDeterministic
+	}
+	return strings.Join(names, "+")
+}
+
+// Union is the join of two determinism sets.
+func (d DeterminismSet) Union(other DeterminismSet) DeterminismSet { return d | other }
+
+// Covers reports whether d names every factor actual reads — the superset
+// relation a declared determinism must stand in to an observed one.
+func (d DeterminismSet) Covers(actual DeterminismSet) bool { return actual&^d == 0 }
+
+// ParseDeterminismTag inverts Tag on exactly the canonical labels: a reordered,
+// repeated, empty or unknown member is not a label, so a set has one wire
+// spelling. Twin of the reference's `Effect.tryDeterminismOfTag`.
+func ParseDeterminismTag(tag string) (DeterminismSet, bool) {
+	if tag == DeterminismDeterministic {
+		return 0, true
+	}
+	var set DeterminismSet
+	for _, name := range strings.Split(tag, "+") {
+		found := false
+		for _, f := range determinismFactors {
+			if f.name == name {
+				set |= f.factor
+				found = true
+				break
+			}
+		}
+		if !found {
+			return 0, false
+		}
+	}
+	if set.Tag() != tag {
+		return 0, false
+	}
+	return set, true
+}
 
 // The closed placement vocabulary — where a capability's body runs.
 const (
@@ -139,6 +232,17 @@ const (
 	ErrRequiredArgsUnbound = "requiredArgsUnbound"
 	ErrUninvocableArg      = "uninvocableArg"
 	ErrBodyFailed          = "bodyFailed"
+	ErrNonTotalCapability  = "nonTotalCapability"
+	ErrIllFormedCapability = "illFormedCapability"
+	ErrDuplicateArg        = "duplicateArg"
+)
+
+// The declaration faults the admission gate names (the reference's
+// `DeclarationFault`, as far as a signature can show one).
+const (
+	FaultEmptySpace        = "emptySpace"
+	FaultNonFiniteBound    = "nonFiniteBound"
+	FaultDuplicateHoleAddr = "duplicateHoleAddr"
 )
 
 // InvokeError names why a typed invocation (or a registration) was refused and,
@@ -146,13 +250,14 @@ const (
 // reference InvokeError.
 type InvokeError struct {
 	Kind     string   // one of the Err* constants above
-	ID       string   // noSuchCapability / duplicateCapability
-	Addr     string   // unknownArg / argOutOfSpace / uninvocableArg
-	Addrs    []string // requiredArgsUnbound
+	ID       string   // noSuchCapability / duplicateCapability / nonTotalCapability / illFormedCapability
+	Addr     string   // unknownArg / argOutOfSpace / uninvocableArg / duplicateArg; illFormedCapability — the faulted hole
+	Addrs    []string // requiredArgsUnbound; nonTotalCapability — the non-total holes
 	Declared []string // unknownArg — the addresses that WOULD have been accepted
 	Known    []string // noSuchCapability — the registered ids
 	Got      string   // argOutOfSpace — the offending value
 	Reason   string   // bodyFailed
+	Fault    string   // illFormedCapability — one of the Fault* constants above
 }
 
 func (e *InvokeError) Error() string {
@@ -171,6 +276,12 @@ func (e *InvokeError) Error() string {
 		return fmt.Sprintf("uninvocableArg(%s)", e.Addr)
 	case ErrBodyFailed:
 		return "bodyFailed(" + e.Reason + ")"
+	case ErrNonTotalCapability:
+		return fmt.Sprintf("nonTotalCapability(%s; [%s])", e.ID, strings.Join(e.Addrs, ", "))
+	case ErrIllFormedCapability:
+		return fmt.Sprintf("illFormedCapability(%s; %s at %s)", e.ID, e.Fault, e.Addr)
+	case ErrDuplicateArg:
+		return fmt.Sprintf("duplicateArg(%s)", e.Addr)
 	default:
 		return "invokeError(" + e.Kind + ")"
 	}
@@ -188,9 +299,10 @@ func NewCapability(id string, sg Signature, placement Placement) Capability {
 	}
 }
 
-// DeterminismTag is the label a capability keys its captures on. It is the
-// determinism source itself — the vocabulary above IS the tag set, so there is
-// no mapping step in which a host could diverge.
+// DeterminismTag is the label a capability keys its captures on: its
+// determinism set's canonical label, which is what the field holds — a decoded
+// capability's label has been checked canonical, so there is no mapping step in
+// which a host could diverge.
 func DeterminismTag(c Capability) string { return c.Determinism }
 
 // FNV1a is a 32-bit non-cryptographic content fingerprint (FNV-1a, lower-case
@@ -263,7 +375,10 @@ func lessUTF16(a, b string) bool {
 // InvocationKey is the effect-identity key the capture seam journals a
 // non-deterministic invocation under: the capability id plus a hash of the
 // canonical pre-image of the addr-sorted args — two fields per binding (addr,
-// value) through CanonicalFields. Two invocations with the same args replay the
+// value) through CanonicalFields. Each value is keyed by its CANONICAL spelling
+// in its hole's space where it lies there (`05` and `5` in an integer hole are
+// one value and one key; Core 0.34.0, fuaran-core Phase 295), by its own
+// spelling otherwise. Two invocations with the same args replay the
 // same captured value, and the pre-image is injective, so distinct argument
 // sets never share one whatever their values contain (Phase 1860; the
 // reference's fuaran-core#225 form, which replaced the old separator-free
@@ -276,56 +391,115 @@ func InvocationKey(c Capability, args []InvokeArg) string {
 	sort.SliceStable(sorted, func(i, j int) bool { return lessUTF16(sorted[i].Addr, sorted[j].Addr) })
 	fields := make([]string, 0, 2*len(sorted))
 	for _, a := range sorted {
-		fields = append(fields, a.Addr, a.Value)
+		fields = append(fields, a.Addr, spelled(c, a))
 	}
 	return c.ID + "#" + FNV1a(CanonicalFields(fields))
 }
 
-// SpaceValidate reports whether a candidate string value lies in a value space.
-// A nil space is not scalar-valued and never validates — callers distinguish
-// that case before asking (ValidateArgs supplies a spaceless slot hole's tree
-// space, and refuses an action hole by name).
-//
-// The integer leg parses as a 32-BIT signed integer, matching the reference's
-// own parse: a value outside that range is out of the space whatever the
-// declared bounds say. The string-length leg measures UTF-16 code units, for
-// the same reason FNV1a folds them.
+// spelled is the spelling an argument is keyed by: its canonical spelling in
+// its hole's space, or its own where it has none there.
+func spelled(c Capability, a InvokeArg) string {
+	for _, h := range c.Signature.Holes {
+		if h.Addr == a.Addr {
+			if v, ok := Canonical(invocationSpace(h), a.Value); ok {
+				return v
+			}
+			break
+		}
+	}
+	return a.Value
+}
+
+// SpaceValidate reports whether a candidate string value lies in a value space:
+// exactly when it has a Canonical spelling there. A nil space is not
+// scalar-valued and never validates — callers distinguish that case before
+// asking (ValidateArgs supplies a slot hole's tree space, and refuses an action
+// hole by name).
 func SpaceValidate(space *Space, s string) bool {
+	_, ok := Canonical(space, s)
+	return ok
+}
+
+// Canonical is the ONE spelling a value in the space is handed on as, and ok
+// false where the string is not in the space (Core 0.34.0, fuaran-core Phase
+// 295). An integer is read by the reference's invariant reader — `-?digits`, no
+// white space, no `+`, within 32 bits — and written in its shortest decimal
+// form (`05` is `5`); a number is read as `-?digits(.digits)?([eE][+-]?digits)?`
+// and written in the canonical float layout (`1.50` is `1.5`); every other
+// space's value is its own spelling. The string-length leg measures UTF-16 code
+// units, for the same reason FNV1a folds them. Twin of the reference's
+// `Space.canonical`.
+func Canonical(space *Space, s string) (string, bool) {
 	if space == nil {
-		return false
+		return "", false
 	}
 	switch space.Kind {
 	case "intRange":
-		v, err := strconv.ParseInt(strings.TrimSpace(s), 10, 32)
-		if err != nil {
-			return false
+		v, ok := readInt(s)
+		if !ok || float64(v) < space.Min || float64(v) > space.Max {
+			return "", false
 		}
-		return float64(v) >= space.Min && float64(v) <= space.Max
+		return strconv.FormatInt(int64(v), 10), true
 	case "floatRange":
-		v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-		if err != nil {
-			return false
+		v, ok := readFloat(s)
+		if !ok || v < space.Min || v > space.Max {
+			return "", false
 		}
-		return v >= space.Min && v <= space.Max
+		return canonical.FormatFiniteDouble(v), true
 	case "stringLen":
 		n := float64(len(utf16.Encode([]rune(s))))
-		return n >= space.Min && n <= space.Max
+		if n < space.Min || n > space.Max {
+			return "", false
+		}
+		return s, true
 	case "enum":
 		for _, c := range space.Choices {
 			if c == s {
-				return true
+				return s, true
 			}
 		}
-		return false
+		return "", false
 	case "anyString":
-		return true
+		return s, true
 	case "slotTree":
 		kind, ok := slotKindOf(s)
-		return ok && (space.SlotKind == "" || kind == space.SlotKind)
+		if !ok || (space.SlotKind != "" && kind != space.SlotKind) {
+			return "", false
+		}
+		return s, true
 	default:
-		return false
+		return "", false
 	}
 }
+
+// readInt reads an integer argument as the reference's seam does: an optional
+// `-` and decimal digits (leading zeros read), within 32 bits.
+func readInt(s string) (int32, bool) {
+	digits := strings.TrimPrefix(s, "-")
+	if digits == "" || strings.IndexFunc(digits, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(s, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return int32(v), true
+}
+
+// readFloat reads a number argument as the reference's seam does:
+// `-?digits(.digits)?([eE][+-]?digits)?`, finite.
+func readFloat(s string) (float64, bool) {
+	if !floatShape.MatchString(s) {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if math.IsInf(v, 0) || (err != nil && !errors.Is(err, strconv.ErrRange)) {
+		return 0, false
+	}
+	return v, true
+}
+
+var floatShape = regexp.MustCompile(`^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
 
 // slotKindOf is the kind tag of a tree argument: ok when the string is a
 // well-formed wire document whose top level is an object with a string
@@ -364,18 +538,27 @@ func invocationSpace(h SigEntry) *Space {
 }
 
 // ValidateArgs checks typed args against a capability's signature BEFORE any
-// dispatch: every arg must address a declared hole that takes a scalar value
-// in-space, and every required hole must be bound. Returns nil on acceptance
-// and a named refusal otherwise — never a panic.
+// dispatch: every address is bound once, every arg must address a declared hole
+// that takes a scalar value in-space, and every required hole must be bound.
+// Returns nil on acceptance and a named refusal otherwise — never a panic.
 //
-// The two checks run in the reference's order (args first, then unbound
-// required holes), because the vectors pin WHICH refusal an input that trips
-// both would produce.
+// The checks run in the reference's order (a repeated address first, at its
+// second occurrence and before any value is read — Core 0.35.1, fuaran-core
+// Phase 307; then the args in order; then unbound required holes), because the
+// vectors pin WHICH refusal an input that trips two would produce.
 func ValidateArgs(c Capability, args []InvokeArg) *InvokeError {
 	holes := c.Signature.Holes
 	declared := make([]string, len(holes))
 	for i, h := range holes {
 		declared[i] = h.Addr
+	}
+
+	seen := make(map[string]bool, len(args))
+	for _, a := range args {
+		if seen[a.Addr] {
+			return &InvokeError{Kind: ErrDuplicateArg, Addr: a.Addr}
+		}
+		seen[a.Addr] = true
 	}
 
 	for _, a := range args {
@@ -407,18 +590,86 @@ func ValidateArgs(c Capability, args []InvokeArg) *InvokeError {
 		}
 	}
 
-	bound := make(map[string]bool, len(args))
-	for _, a := range args {
-		bound[a.Addr] = true
-	}
 	var unbound []string
 	for _, h := range holes {
-		if h.Required && !bound[h.Addr] {
+		if h.Required && !seen[h.Addr] {
 			unbound = append(unbound, h.Addr)
 		}
 	}
 	if len(unbound) > 0 {
 		return &InvokeError{Kind: ErrRequiredArgsUnbound, Addrs: unbound}
+	}
+	return nil
+}
+
+// maxRepeatCount is the largest count a repeat hole may range over — the cap a
+// count space sits under. Twin of the reference's `Space.maxRepeatCount`.
+const maxRepeatCount = 1000000
+
+// isCount reports whether a space is a COUNT space a repeat may range over: an
+// integer range with 0 <= min <= max <= maxRepeatCount. Twin of the
+// reference's `Space.isCount`.
+func isCount(s *Space) bool {
+	return s != nil && s.Kind == "intRange" && 0 <= s.Min && s.Min <= s.Max && s.Max <= maxRepeatCount
+}
+
+// spaceFault names why a space admits no value (FaultEmptySpace) or carries a
+// bound no JSON number spells (FaultNonFiniteBound), or is "" for a well-formed
+// space. Twin of the reference's `Space.wellFormed`.
+func spaceFault(s *Space) string {
+	if s == nil {
+		return ""
+	}
+	switch s.Kind {
+	case "floatRange":
+		if math.IsNaN(s.Min) || math.IsInf(s.Min, 0) || math.IsNaN(s.Max) || math.IsInf(s.Max, 0) {
+			return FaultNonFiniteBound
+		}
+		if s.Min > s.Max {
+			return FaultEmptySpace
+		}
+	case "intRange":
+		if s.Min > s.Max {
+			return FaultEmptySpace
+		}
+	case "stringLen":
+		if s.Min > s.Max || s.Max < 0 {
+			return FaultEmptySpace
+		}
+	case "enum":
+		if len(s.Choices) == 0 {
+			return FaultEmptySpace
+		}
+	}
+	return ""
+}
+
+// Admission is THE gate a declaration passes to be registered or read (Core
+// 0.35.1, fuaran-core Phase 307; the reference's `Capability.admissionOf`):
+// totality first — every repeat hole ranges over a count space, refused
+// nonTotalCapability naming each one that does not — then well-formedness, the
+// first entry in declaration order whose address an earlier entry holds
+// (duplicateHoleAddr) or whose space admits no value or has a non-finite bound
+// (emptySpace / nonFiniteBound), refused illFormedCapability. Nil admits.
+func Admission(id string, sg Signature) *InvokeError {
+	var nonTotal []string
+	for _, e := range sg.Holes {
+		if e.Kind == "repeat" && !isCount(e.Space) {
+			nonTotal = append(nonTotal, e.Addr)
+		}
+	}
+	if len(nonTotal) > 0 {
+		return &InvokeError{Kind: ErrNonTotalCapability, ID: id, Addrs: nonTotal}
+	}
+	seen := make(map[string]bool, len(sg.Holes))
+	for _, e := range sg.Holes {
+		if seen[e.Addr] {
+			return &InvokeError{Kind: ErrIllFormedCapability, ID: id, Fault: FaultDuplicateHoleAddr, Addr: e.Addr}
+		}
+		if fault := spaceFault(invocationSpace(e)); fault != "" {
+			return &InvokeError{Kind: ErrIllFormedCapability, ID: id, Fault: fault, Addr: e.Addr}
+		}
+		seen[e.Addr] = true
 	}
 	return nil
 }
@@ -438,10 +689,14 @@ func NewCapabilityRegistry() *CapabilityRegistry {
 }
 
 // Register adds a capability — additive, with no silent overwrite: a duplicate
-// id is a named refusal.
+// id is a named refusal, and so is a declaration the admission gate refuses
+// (Admission).
 func (r *CapabilityRegistry) Register(c Capability) *InvokeError {
 	if _, exists := r.capabilities[c.ID]; exists {
 		return &InvokeError{Kind: ErrDuplicateCapability, ID: c.ID}
+	}
+	if e := Admission(c.ID, c.Signature); e != nil {
+		return e
 	}
 	r.capabilities[c.ID] = c
 	return nil
@@ -453,7 +708,8 @@ func (r *CapabilityRegistry) TryFind(id string) (Capability, bool) {
 	return c, ok
 }
 
-// Enumerate lists the registry in id order. The ORDER is contractual, not
+// Enumerate lists the registry in id order — ordinal, by UTF-16 code unit, as
+// the reference's is. The ORDER is contractual, not
 // incidental: it is what makes a discovery listing reproducible across hosts
 // and across insertion orders.
 func (r *CapabilityRegistry) Enumerate() []Capability {
@@ -461,7 +717,7 @@ func (r *CapabilityRegistry) Enumerate() []Capability {
 	for _, c := range r.capabilities {
 		out = append(out, c)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.Slice(out, func(i, j int) bool { return lessUTF16(out[i].ID, out[j].ID) })
 	return out
 }
 
