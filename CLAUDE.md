@@ -54,6 +54,16 @@ conformant host. Cross-repo development conventions (port allocation, formatting
   encode / decode byte-identically against the shared corpus and surface the
   canonical reject code + `$`-rooted path for every malformed fixture — certified
   the same way the F#, TypeScript, and Python hosts are.
+- **The capability manifest's token families are generated from the type model,
+  never authored (Phase 2332).** `conformance/families_test.go` projects `kinds`,
+  `kindFields`, `unionCases`, `caseFields` and `recordFields` (WIRE_FORMAT §27.3)
+  from the rows `wire/idl` generates from `idl.json`; a `hostOnly` row is no token.
+  A vocabulary change grows or shrinks the claim by regeneration alone, and no
+  token list is ever written by hand. `hostedCases` is declared not covered: the
+  generated layer types each hosted slot opaquely, so it holds no enumeration to
+  project (§27.5). The same file reads the claim back against the corpus fixtures
+  and fails, by token, on a construct the corpus exercises and the claim omits, or
+  a claimed one this host does not round-trip.
 - **Dependency-light.** The runtime host uses the Go standard library only.
   Third-party packages appear only as dev tooling if ever.
 
@@ -138,7 +148,8 @@ with their own roadmap tiers (`conformance` locates `../wire-format-fixtures/`
 and FAILS when it is absent — the corpus is the oracle, Phase 1938). Which
 corpus families the suite runs is declared in `host-capability-manifest.json`
 (`corpusFamilies`, WIRE_FORMAT §27.7), generated from
-`conformance/families_test.go` and held to the corpus tree.
+`conformance/families_test.go` and held to the corpus tree; its token claim
+(§27.3) is projected from the generated `wire/idl` rows in the same file.
 
 ### Decoder robustness fuzz (`wire/decoderfuzz_test.go`)
 
