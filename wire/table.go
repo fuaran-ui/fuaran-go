@@ -2,6 +2,7 @@ package wire
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/fuaran-ui/fuaran-go/canonical"
 	"github.com/fuaran-ui/fuaran-go/wire/idl"
@@ -51,21 +52,6 @@ func enumCases(e *idl.Enum) caseSet { return enumSets[e.Name] }
 // unionCases is the generated discriminator set of a union.
 func unionCases(u *idl.Union) caseSet { return unionSets[u.Name] }
 
-// The omit-at-default tests of the record and union-case rows that a hand
-// decoder reads field by field. Each is resolved from its table row once, at
-// initialisation, so a row the table stops declaring omit-at-default fails
-// every run at start-up instead of one decode at a time.
-var (
-	dropComboboxFreeText = declaredDefault(caseRows(&idl.UnionFormFieldKind, "Combobox"), "allowFreeText")
-	dropRatingHalf       = declaredDefault(caseRows(&idl.UnionFormFieldKind, "Rating"), "allowHalf")
-	dropTonedPillDefault = declaredDefault(caseRows(&idl.UnionCellKindErased, "TonedPill"), "default")
-	dropVideoAutoplay    = declaredDefault(caseRows(&idl.UnionMediaKind, "Video"), "autoplay")
-	dropColumnFormat     = declaredDefault(idl.RecordColumnErased.Fields, "format")
-	dropColumnWidth      = declaredDefault(idl.RecordColumnErased.Fields, "width")
-	dropTrackDefault     = declaredDefault(idl.RecordTrackEntry.Fields, "default")
-	dropTreeItemChildren = declaredDefault(idl.RecordTreeItem.Fields, "children")
-)
-
 func caseRows(u *idl.Union, tag string) []idl.Field {
 	if c, ok := u.Case(tag); ok {
 		return c.Fields
@@ -73,15 +59,17 @@ func caseRows(u *idl.Union, tag string) []idl.Field {
 	panic("wire: idl.json's " + u.Name + " declares no case " + tag)
 }
 
-// declaredDefault is the omit-at-default test of one table row.
-func declaredDefault(rows []idl.Field, key string) func(Value) bool {
+// requiredRowsPresent reports whether obj carries every row the table declares
+// required — for a hand decoder whose shape test (an object form beside a
+// lenient array form) refuses an incomplete object as a whole rather than at
+// the missing member.
+func requiredRowsPresent(rows []idl.Field, obj map[string]any) bool {
 	for _, f := range rows {
-		if f.Name == key && f.Optionality == idl.OmitDefault {
-			def := f.Default
-			return func(v Value) bool { return matchesDefault(v, def) }
+		if _, ok := obj[f.Name]; !ok && f.Optionality == idl.Required {
+			return false
 		}
 	}
-	panic("wire: idl.json declares no omit-at-default row " + key)
+	return true
 }
 
 // newKindSpec starts a kind object's decode against its table.
@@ -101,26 +89,52 @@ func (s *spec) row(key string) (*idl.Field, bool) {
 }
 
 // field reads one row with the optionality and omit-at-default value the
-// table declares for it: a required row refuses its absence, an omit-at-default
-// row drops a value equal to its declared default (on the decode boundary, so
-// an explicit default normalises to the omitted canonical form), and an
-// optional row carries whatever is present. A key the table does not declare
-// is read as optional — TestHandArmsReadOnlyDeclaredRows keeps that path empty.
+// table declares for it: a required row refuses its absence (unless its
+// declared leniency admits it), an omit-at-default row drops a value equal to
+// its declared default (on the decode boundary, so an explicit default
+// normalises to the omitted canonical form), and an optional row carries
+// whatever is present. A key the table does not declare is read as optional —
+// TestHandArmsReadOnlyDeclaredRows and TestHandDecodersReadOnlyDeclaredRows keep
+// that path empty.
 func (s *spec) field(key string, dec fieldDecoder, aliases ...string) {
-	f, ok := s.row(key)
+	raw, ok := s.take(key, aliases...)
 	if !ok {
-		s.opt(key, dec, aliases...)
+		s.absent(key)
 		return
 	}
-	switch f.Optionality {
-	case idl.Required:
-		s.req(key, dec, aliases...)
-	case idl.OmitDefault:
-		def := f.Default
-		s.optDrop(key, dec, func(v Value) bool { return matchesDefault(v, def) }, aliases...)
-	default:
-		s.opt(key, dec, aliases...)
+	v := dec(s.w, raw, s.path+"."+key)
+	if f, declared := s.row(key); declared && f.Optionality == idl.OmitDefault && matchesDefault(v, f.Default) {
+		return
 	}
+	s.fields[key] = v
+}
+
+// has reads a row's raw value for a hand reading that carries behaviour over it
+// (a relational check, a shape coercion, a bound): present or not, with the
+// table's answer to absence — a required row refuses it here, exactly as field
+// would, so the hand code after it never states required-ness itself.
+func (s *spec) has(key string, aliases ...string) (any, bool) {
+	raw, ok := s.take(key, aliases...)
+	if !ok {
+		s.absent(key)
+	}
+	return raw, ok
+}
+
+// absent answers a key missing from the object. Only a required row refuses
+// it; a row whose absence the decode policy admits (absentLeniency) takes its
+// declared value instead (a fresh one per decode: decoded values are not
+// shared).
+func (s *spec) absent(key string) {
+	f, ok := s.row(key)
+	if !ok || f.Optionality != idl.Required {
+		return
+	}
+	if v, lenient := absentLeniency[s.owner+"."+key]; lenient {
+		s.fields[key] = v()
+		return
+	}
+	fail(CodeMissingField, s.path+"."+key, "missing required field '"+key+"'")
 }
 
 // matchesDefault reports whether v is the declared omit-at-default value,
@@ -145,17 +159,45 @@ func (s *spec) decodeRemainingRows() {
 	}
 }
 
+// readRowsOrdinal decodes every row not yet read, by its declared type, in
+// Ordinal key order — the order the first of several defects is reported at
+// (WIRE_FORMAT.md section 29.3). For a hand decoder with no behaviour of its
+// own on those fields.
+func (s *spec) readRowsOrdinal() {
+	names := make([]string, 0, len(s.rows))
+	for _, f := range s.rows {
+		if f.Optionality != idl.HostOnly && !s.consumed[f.Name] {
+			if _, decoded := s.fields[f.Name]; !decoded {
+				names = append(names, f.Name)
+			}
+		}
+	}
+	canonical.SortKeys(names)
+	for _, name := range names {
+		f, _ := s.row(name)
+		s.field(name, typeDecoder(f.Type))
+	}
+}
+
 // decodeKindByTable is the table arm: the kind decoded entirely from its row.
 func decodeKindByTable(w *walkState, obj map[string]any, path string, k *idl.Kind) Obj {
 	return newKindSpec(w, obj, path, k).build(k.Tag)
 }
 
-// decodeRowsByTable decodes a union case's or a record's object from its rows;
-// tag is the case discriminator, or "" for a record.
-func decodeRowsByTable(w *walkState, obj map[string]any, path string, rows []idl.Field, tag string) Obj {
+// newCaseSpec starts one union case's decode against the case's row set.
+func newCaseSpec(w *walkState, obj map[string]any, path string, u *idl.Union, tag string) *spec {
 	s := newSpec(w, obj, path)
-	s.rows = rows
-	return s.build(tag)
+	s.rows = caseRows(u, tag)
+	s.owner = u.Name + "." + tag
+	return s
+}
+
+// newRecordSpec starts one record object's decode against the record's rows.
+func newRecordSpec(w *walkState, obj map[string]any, path string, r *idl.Record) *spec {
+	s := newSpec(w, obj, path)
+	s.rows = r.Fields
+	s.owner = r.Name
+	return s
 }
 
 // tableCase decodes a union case a hand decoder has no arm for — one idl.json
@@ -163,9 +205,82 @@ func decodeRowsByTable(w *walkState, obj map[string]any, path string, rows []idl
 // generated case set would admit the new discriminator into a switch whose last
 // arm reads some OTHER case's fields, or whose strict build drops them all.
 func tableCase(w *walkState, obj map[string]any, path string, u *idl.Union, tag string) Value {
-	c, _ := u.Case(tag)
-	return decodeRowsByTable(w, obj, path, c.Fields, tag)
+	return newCaseSpec(w, obj, path, u, tag).build(tag)
 }
+
+// absentLeniency is decode policy, not vocabulary (Phase 2330): the required
+// rows whose ABSENCE this host admits on decode, each with the value absence
+// decodes to. The table says the canonical encoder always writes these fields;
+// the reference decoder reads a missing one as the value below, so this host
+// does too, and every other required row refuses its absence. Keyed
+// "<Union>.<Case>.<field>" or "<Record>.<field>". Each entry is checked against
+// the table at start-up: one naming a row the table does not declare REQUIRED
+// panics, so a leniency cannot outlive the disagreement it records.
+var absentLeniency = map[string]func() Value{
+	// The closure slots: the wire cannot carry a closure, so the reference
+	// decoder never reads these keys and a missing one is the sentinel.
+	"Binding.Computed.fn":                absentClosure,
+	"Binding.Local.format":               absentClosure,
+	"Binding.Local.parse":                absentClosure,
+	"CellFormat.Custom.fn":               absentClosure,
+	"CellKindErased.Checkbox.get":        absentClosure,
+	"CellKindErased.Custom.fn":           absentClosure,
+	"CellKindErased.Link.hrefFn":         absentClosure,
+	"CellKindErased.Link.labelFn":        absentClosure,
+	"CellKindErased.Pill.labelFn":        absentClosure,
+	"CellKindErased.Pill.toneFn":         absentClosure,
+	"CellKindErased.Progress.fractionFn": absentClosure,
+	// SegmentedChoice's orientation restores the language default.
+	"FormFieldKind.SegmentedChoice.orientation": func() Value { return Str("Horizontal") },
+	// The buffer's flush trigger defaults to on-blur.
+	"Binding.Local.flushOn": func() Value { return Obj{Tag: "OnBlur", Fields: map[string]Value{}} },
+	// A message with no arguments.
+	"TextSource.I18n.args": absentEmpty,
+	// An unstyled shape: the empty DrawStyle.
+	"Shape.Group.style":     absentEmpty,
+	"Shape.Rectangle.style": absentEmpty,
+	"Shape.Line.style":      absentEmpty,
+	"Shape.Polyline.style":  absentEmpty,
+	"Shape.Polygon.style":   absentEmpty,
+	"Shape.Curve.style":     absentEmpty,
+	"Shape.Circle.style":    absentEmpty,
+	"Shape.Ellipse.style":   absentEmpty,
+	"Shape.Label.style":     absentEmpty,
+}
+
+func absentClosure() Value { return Str(closureSentinel) }
+
+func absentEmpty() Value { return Obj{Fields: map[string]Value{}} }
+
+func init() {
+	for key := range absentLeniency {
+		if f, ok := leniencyRow(key); !ok || f.Optionality != idl.Required {
+			panic("wire: absentLeniency names " + key + ", which idl.json does not declare as a required row")
+		}
+	}
+}
+
+// leniencyRow resolves an absentLeniency key to its table row.
+func leniencyRow(key string) (*idl.Field, bool) {
+	parts := strings.Split(key, ".")
+	switch len(parts) {
+	case 2:
+		if r, ok := idl.RecordByName(parts[0]); ok {
+			return r.Field(parts[1])
+		}
+	case 3:
+		if u, ok := idl.UnionByName(parts[0]); ok {
+			if c, ok := u.Case(parts[1]); ok {
+				return c.Field(parts[2])
+			}
+		}
+	}
+	return nil, false
+}
+
+// decodeClosure reads a closure slot. It carries nothing but its presence: the
+// canonical form is the sentinel, whatever was written.
+func decodeClosure(*walkState, any, string) Value { return Str(closureSentinel) }
 
 // typeDecoder is the decoder a row's declared type implies. Where this host
 // already reads a type through a hand decoder (TextSource's bare-string
@@ -180,7 +295,7 @@ func typeDecoder(t idl.Type) fieldDecoder {
 	case idl.TInt:
 		return decodeInt
 	case idl.TFloat:
-		return expectNumberField
+		return expectNumber
 	case idl.TNode:
 		return decodeSingleNode
 	case idl.TKind:
@@ -188,9 +303,7 @@ func typeDecoder(t idl.Type) fieldDecoder {
 	case idl.TOp:
 		return func(w *walkState, raw any, path string) Value { return decodeOpValue(w, raw, path) }
 	case idl.TFn:
-		// A closure slot carries nothing but its presence: the canonical form is
-		// the sentinel, whatever was written.
-		return func(*walkState, any, string) Value { return Str(closureSentinel) }
+		return decodeClosure
 	case idl.THosted:
 		if t.Elem != nil {
 			return typeDecoder(*t.Elem)
@@ -267,7 +380,7 @@ func unionDecoder(t idl.Type) fieldDecoder {
 	case "CurveCommand":
 		return decodeCurveCommand
 	case "BoxLayout":
-		return func(_ *walkState, raw any, path string) Value { return decodeBoxLayout(raw, path) }
+		return decodeBoxLayout
 	}
 	u, ok := idl.UnionByName(t.Name)
 	if !ok {
@@ -277,8 +390,7 @@ func unionDecoder(t idl.Type) fieldDecoder {
 	return func(w *walkState, raw any, path string) Value {
 		obj := expectObject(raw, path)
 		tag := dispatch(obj, path, cases, CodeUnknownDUCase)
-		c, _ := u.Case(tag)
-		return decodeRowsByTable(w, obj, path, c.Fields, tag)
+		return tableCase(w, obj, path, u, tag)
 	}
 }
 
@@ -315,13 +427,21 @@ func recordDecoder(t idl.Type) fieldDecoder {
 		return decodeStateField
 	case "Accessibility":
 		return func(w *walkState, raw any, path string) Value { return decodeAccessibility(w, raw, path) }
+	case "ButtonGroupItem":
+		return decodeButtonGroupItem
+	case "DrawPoint":
+		return decodeDrawPoint
+	case "DrawStyle":
+		return decodeDrawStyle
+	case "ViewBox":
+		return decodeViewBox
 	}
 	r, ok := idl.RecordByName(t.Name)
 	if !ok {
 		return decodeJSONValue
 	}
 	return func(w *walkState, raw any, path string) Value {
-		return decodeRowsByTable(w, expectObject(raw, path), path, r.Fields, "")
+		return newRecordSpec(w, expectObject(raw, path), path, r).build("")
 	}
 }
 
