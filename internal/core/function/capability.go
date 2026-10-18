@@ -348,19 +348,16 @@ func slotKindOf(s string) (string, bool) {
 
 // invocationSpace is the value space an argument for this hole must lie in.
 //
-// The rule (Phase 1873, from fuaran-core#229): a slot hole with no declared
-// space ranges over the tree space constrained to its slot kind, so it admits
-// a well-formed wire document whose "kind" satisfies that constraint (any kind
-// when the slot is unconstrained) — exactly the space the reference's decoder
-// restores for a slot entry that travels without one.
-//
-// The reference writes a slot's space only when it disagrees with the slot's
-// constraint, so this is the ordinary shape of a slotted capability on the
-// wire. The space is supplied here, at validation, rather than at decode, so a
-// declaration re-encodes to the bytes it arrived as. Every other hole answers
-// its declared space; nil (an action hole) is not invocable.
+// A slot hole ranges over the tree space constrained to its slot kind: it
+// admits a well-formed wire document whose "kind" satisfies that constraint
+// (any kind when the slot is unconstrained). From Core 0.37.0 (fuaran-core
+// Phase 409) the slot entry IS that constraint — no declared space overrides
+// it, and the decoder drops one written in the pre-0.37.0 form. The space is
+// supplied here, at validation, so a declaration re-encodes to its canonical
+// bytes. Every other hole answers its declared space; nil (an action hole) is
+// not invocable.
 func invocationSpace(h SigEntry) *Space {
-	if h.Space == nil && h.Kind == "slot" {
+	if h.Kind == "slot" {
 		return &Space{Kind: "slotTree", SlotKind: h.Slot}
 	}
 	return h.Space

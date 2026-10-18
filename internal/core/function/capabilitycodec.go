@@ -120,9 +120,9 @@ func encodeSpaceDecl(s *Space) (string, error) {
 	case "anyString":
 		return jobj(jmember{"$type", jstr("anyString")}), nil
 	case "slotTree":
-		// The explicit tree space (fuaran-core#229): the reference writes one only
-		// when a slot's space disagrees with its constraint, or a non-slot hole
-		// ranges over trees. The constraint is omitted when there is none.
+		// The explicit tree space (fuaran-core#229), written for a non-slot hole
+		// that ranges over trees (a slot entry holds none since Core 0.37.0).
+		// The constraint is omitted when there is none.
 		if s.SlotKind == "" {
 			return jobj(jmember{"$type", jstr("slotTree")}), nil
 		}
@@ -367,7 +367,13 @@ func decodeSigEntry(el map[string]any) (SigEntry, error) {
 		if err != nil {
 			return SigEntry{}, err
 		}
-		entry.Space = space
+		// From Core 0.37.0 (fuaran-core Phase 409) a slot entry IS its
+		// constraint and holds no space: a space written beside one (the
+		// pre-0.37.0 form) is read, checked for shape, and dropped, so the
+		// declaration re-encodes without it.
+		if kind != "slot" {
+			entry.Space = space
+		}
 	}
 	if raw, present := el["slotKind"]; present {
 		s, ok := raw.(string)
