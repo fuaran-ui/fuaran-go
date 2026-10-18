@@ -63,6 +63,7 @@ var hostCorpusFamilies = map[string]any{
 	"dag":                       "covered",
 	"merge-conformance":         "covered",
 	"sanitization":              "covered",
+	"row-encode":                "covered",
 	"laws/dataframeParity":      "covered",
 	"laws/capabilityLaws": familyPending("the capability twin mirrors an older Core than the vectors are stamped for, " +
 		"so capability_laws_test.go reports the gap and asserts nothing until the twin is raised"),

@@ -115,6 +115,11 @@ func appendFloat(sb *strings.Builder, f float64) {
 }
 
 func appendObj(sb *strings.Builder, o Obj) error {
+	if isRowFeedKind(o) {
+		if err := checkRowFeed(o.Fields["source"]); err != nil {
+			return err
+		}
+	}
 	keys := make([]string, 0, len(o.Fields)+1)
 	for k := range o.Fields {
 		keys = append(keys, k)

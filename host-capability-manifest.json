@@ -81,6 +81,7 @@
     "repair": {
       "pending": "this host has no §28 repair function yet"
     },
+    "row-encode": "covered",
     "sanitization": "covered",
     "stored-emissions": {
       "pending": "this host's suite does not yet run the stored-emission fixtures"
