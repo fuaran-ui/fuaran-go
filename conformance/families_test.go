@@ -67,6 +67,7 @@ var hostCorpusFamilies = map[string]any{
 	"apply/styleNormaliseApply": "covered",
 	"apply/skeletonApply":       familyPending("the apply engine's suite does not yet run the skeleton-apply vectors"),
 	"dag":                       "covered",
+	"formatting":                familyPending("this host's suite does not yet run the number-formatting vectors"),
 	"merge-conformance":         "covered",
 	"sanitization":              "covered",
 	"row-encode":                "covered",
