@@ -72,19 +72,16 @@ var hostCorpusFamilies = map[string]any{
 	"sanitization":              "covered",
 	"row-encode":                "covered",
 	"laws/dataframeParity":      "covered",
-	"laws/capabilityLaws": familyPending("the capability twin mirrors an older Core than the vectors are stamped for, " +
-		"so capability_laws_test.go reports the gap and asserts nothing until the twin is raised"),
-	"laws/decimal":   familyPending(lawUnrun),
-	"laws/fieldLaws": familyPending(lawUnrun),
-	"laws/transformLaws": familyPending("the committed draw (kitVersion 0.35.0) predates the reference evaluator's typing " +
-		"of an all-null derive that dataframeParity pins, so its two div-by-zero vectors disagree with this evaluator " +
-		"until the producer re-emits the family"),
-	"diff/treeDiff":    "covered",
-	"decode-policy":    familyNotApplicable("this host's decoder offers no §23 kind admission policy"),
-	"devtools-relay":   familyNotApplicable("this host ships no devtools relay endpoint"),
-	"lowers-to":        familyNotApplicable("this host carries no bounded program core for actions to lower onto (§30)"),
-	"repair":           familyPending("this host has no §28 repair function yet"),
-	"stored-emissions": familyPending("this host's suite does not yet run the stored-emission fixtures"),
+	"laws/capabilityLaws":       "covered",
+	"laws/decimal":              "covered",
+	"laws/fieldLaws":            familyPending(lawUnrun),
+	"laws/transformLaws":        "covered",
+	"diff/treeDiff":             "covered",
+	"decode-policy":             familyNotApplicable("this host's decoder offers no §23 kind admission policy"),
+	"devtools-relay":            familyNotApplicable("this host ships no devtools relay endpoint"),
+	"lowers-to":                 familyNotApplicable("this host carries no bounded program core for actions to lower onto (§30)"),
+	"repair":                    familyPending("this host has no §28 repair function yet"),
+	"stored-emissions":          familyPending("this host's suite does not yet run the stored-emission fixtures"),
 }
 
 // corpusFamilies derives the corpus family set from the corpus tree (§27.7):

@@ -15,7 +15,8 @@ import (
 // three-valued logic); int+int stays int, any float widens; sort is stable and
 // nulls sort last regardless of direction; groups appear in first-appearance
 // order; count is the non-null count; round is half-away-from-zero; division by
-// zero is null (not an error). Totality: every verb returns a value or a named
+// zero is null (not an error); a decimal is exact everywhere it is not cast
+// away, and a float beside a decimal is refused by name. Totality: every verb returns a value or a named
 // *EvalError, never panics.
 
 // A row is a slice of cells co-indexed with the frame's columns.
@@ -110,8 +111,43 @@ func cellString(c Cell) string {
 		return "false"
 	case TypeString, TypeDate, TypeTimestamp:
 		return c.Value.(string)
+	case TypeDecimal:
+		return decimalCanonicalOrSelf(c.Value.(string))
 	}
 	return "" // null
+}
+
+// decimalCanonicalOrSelf reads a decimal cell's text canonically, keeping a
+// text that is not decimal as it stands (it then never equals a decimal).
+func decimalCanonicalOrSelf(s string) string {
+	if c, ok := DecimalCanonical(s); ok {
+		return c
+	}
+	return s
+}
+
+// decimalText is a cell as exact-decimal text — a decimal's, or an int's digits
+// (the lossless promotion) — or ok=false for any other cell.
+func decimalText(c Cell) (string, bool) {
+	switch c.Kind {
+	case TypeDecimal:
+		return c.Value.(string), true
+	case TypeInt:
+		return strconv.FormatInt(c.Value.(int64), 10), true
+	}
+	return "", false
+}
+
+func isDecimalFloatPair(a, b Cell) bool {
+	return (a.Kind == TypeDecimal && b.Kind == TypeFloat) || (a.Kind == TypeFloat && b.Kind == TypeDecimal)
+}
+
+// decimalFloatMismatch is the refusal a decimal beside a float meets, naming the
+// cast that resolves it: neither type widens into the other, so nothing converts
+// between them unless the pipeline says which way.
+func decimalFloatMismatch(what string) *EvalError {
+	return evalErr(TypeError, what+" between a decimal and a float: cast one to the other's type first — "+
+		"Cast(decimal, …) to keep the digits exact, Cast(float, …) to compute approximately")
 }
 
 func asNum(c Cell) (float64, bool) {
@@ -124,13 +160,42 @@ func asNum(c Cell) (float64, bool) {
 	return 0, false
 }
 
+// compareFloat is the float order every numeric comparison is made in: IEEE
+// order on the non-NaN values, -0 = 0, and NaN one value ABOVE every other —
+// never the host comparison, which does not order NaN at all.
+func compareFloat(a, b float64) int {
+	an, bn := math.IsNaN(a), math.IsNaN(b)
+	switch {
+	case an && bn:
+		return 0
+	case an:
+		return 1
+	case bn:
+		return -1
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
 // compareCells is a total comparison between two present, same-family cells;
-// ok=false when incomparable.
+// ok=false when incomparable. A decimal against a decimal or an int compares
+// EXACTLY; against a float it is incomparable (neither widens into the other).
 func compareCells(a, b Cell) (int, bool) {
 	if an, aok := asNum(a); aok {
 		if bn, bok := asNum(b); bok {
-			return sign(an - bn), true
+			return compareFloat(an, bn), true
 		}
+	}
+	if a.Kind == TypeDecimal || b.Kind == TypeDecimal {
+		x, okx := decimalText(a)
+		y, oky := decimalText(b)
+		if !okx || !oky {
+			return 0, false
+		}
+		return DecimalCompare(x, y)
 	}
 	if a.Kind == TypeBool && b.Kind == TypeBool {
 		return sign(b2i(a.Value.(bool)) - b2i(b.Value.(bool))), true
@@ -168,18 +233,64 @@ func strCmp(a, b string) int {
 	return 0
 }
 
-// cellEq is present-value comparison equality (int 5 == float 5.0).
+// cellEq is present-value comparison equality (int 5 == float 5.0). A decimal
+// matches only a decimal — the relation join keys match by.
 func cellEq(a, b Cell) bool {
 	if isNull(a) || isNull(b) {
+		return false
+	}
+	if (a.Kind == TypeDecimal) != (b.Kind == TypeDecimal) {
 		return false
 	}
 	c, ok := compareCells(a, b)
 	return ok && c == 0
 }
 
+// decimalArith is add / sub / mul / mod over two exact operands, at least one a
+// decimal: exact, and a decimal. Div is refused by name — a quotient of
+// decimals is not a finite decimal in general, so the pipeline names its
+// rounding through Quotient.
+func decimalArith(op, x, y string) (Cell, *EvalError) {
+	var r string
+	var ok bool
+	switch op {
+	case "add":
+		r, ok = DecimalAdd(x, y)
+	case "sub":
+		r, ok = decimalSub(x, y)
+	case "mul":
+		r, ok = decimalMul(x, y)
+	case "mod":
+		if decimalIsZero(y) {
+			return Null, nil
+		}
+		r, ok = decimalRem(x, y)
+	case "div":
+		return Cell{}, evalErr(TypeError,
+			"division of an exact decimal names its rounding: write Quotient(dividend, divisor, { Scale; Mode })")
+	default:
+		return Cell{}, evalErr(TypeError, "not an arithmetic operator")
+	}
+	if !ok {
+		return Cell{}, evalErr(TypeError, op+": an operand is not decimal text")
+	}
+	return Cell{Kind: TypeDecimal, Value: r}, nil
+}
+
 func arith(op string, a, b Cell) (Cell, *EvalError) {
 	if isNull(a) || isNull(b) {
 		return Null, nil
+	}
+	if a.Kind == TypeDecimal || b.Kind == TypeDecimal {
+		if isDecimalFloatPair(a, b) {
+			return Cell{}, decimalFloatMismatch("arithmetic")
+		}
+		x, okx := decimalText(a)
+		y, oky := decimalText(b)
+		if !okx || !oky {
+			return Cell{}, evalErr(TypeError, "arithmetic on a non-numeric operand")
+		}
+		return decimalArith(op, x, y)
 	}
 	x, xok := asNum(a)
 	y, yok := asNum(b)
@@ -226,6 +337,9 @@ func comparison(op string, a, b Cell) (Cell, *EvalError) {
 	}
 	c, ok := compareCells(a, b)
 	if !ok {
+		if isDecimalFloatPair(a, b) {
+			return Cell{}, decimalFloatMismatch("comparison")
+		}
 		return Cell{}, evalErr(TypeError, "comparison between incompatible types")
 	}
 	var r bool
@@ -362,6 +476,14 @@ func castCell(ty string, c Cell) (Cell, *EvalError) {
 		if n, ok := asNum(c); ok {
 			return CellFloat(n), nil
 		}
+		if c.Kind == TypeDecimal {
+			// The nearest float — the cast says the pipeline asked for the
+			// approximation. A decimal past the float range is refused, never ∞.
+			if f, ok := DecimalToFloat(c.Value.(string)); ok {
+				return CellFloat(f), nil
+			}
+			return Cell{}, evalErr(TypeError, "cannot cast decimal '"+c.Value.(string)+"' to float: outside the float range")
+		}
 		if c.Kind == TypeString {
 			if f, err := strconv.ParseFloat(c.Value.(string), 64); err == nil {
 				return CellFloat(f), nil
@@ -375,6 +497,12 @@ func castCell(ty string, c Cell) (Cell, *EvalError) {
 			return c, nil
 		case TypeFloat:
 			return CellInt(int64(c.Value.(float64))), nil
+		case TypeDecimal:
+			// Truncated toward zero, as a float is; outside int32 a named refusal.
+			if v, ok := decimalTruncateToInt64(c.Value.(string)); ok && v >= math.MinInt32 && v <= math.MaxInt32 {
+				return CellInt(v), nil
+			}
+			return Cell{}, evalErr(TypeError, "decimal→int cast out of int32 range: "+c.Value.(string))
 		case TypeBool:
 			if c.Value.(bool) {
 				return CellInt(1), nil
@@ -411,8 +539,97 @@ func castCell(ty string, c Cell) (Cell, *EvalError) {
 			return CellTimestamp(c.Value.(string)), nil
 		}
 		return Cell{}, evalErr(TypeError, "cannot cast to timestamp")
+	case TypeDecimal:
+		// An int is exactly a decimal; a string is read by the decimal grammar; a
+		// FLOAT is the one place an approximation enters a decimal — its shortest
+		// round-trip digits, which are the float's.
+		switch c.Kind {
+		case TypeDecimal, TypeString:
+			if d, ok := CellDecimal(c.Value.(string)); ok {
+				return d, nil
+			}
+			return Cell{}, evalErr(TypeError, "cannot cast '"+c.Value.(string)+"' to decimal")
+		case TypeInt:
+			return Cell{Kind: TypeDecimal, Value: strconv.FormatInt(c.Value.(int64), 10)}, nil
+		case TypeFloat:
+			if t, ok := decimalOfFloat(c.Value.(float64)); ok {
+				return Cell{Kind: TypeDecimal, Value: t}, nil
+			}
+			return Cell{}, evalErr(TypeError, "cannot cast a non-finite float to decimal")
+		}
+		return Cell{}, evalErr(TypeError, "cannot cast to decimal")
 	}
 	return Cell{}, evalErr(TypeError, "unknown cast type "+ty)
+}
+
+// checkScale refuses a rounding scale outside 0..MaxRoundingScale by name.
+func checkScale(scale int) *EvalError {
+	if scale < 0 || scale > MaxRoundingScale {
+		return evalErr(TypeError, "rounding scale "+strconv.Itoa(scale)+" is outside 0.."+strconv.Itoa(MaxRoundingScale))
+	}
+	return nil
+}
+
+// roundedCell is THE rounding primitive over cells (Phase 277) — Rounded's, and
+// through it the decimal arm of round / floor / ceil, its scale-0
+// specialisations. The scale is checked first, then a null propagates, then an
+// exact operand is brought to the scale; a float names the cast.
+func roundedCell(mode string, scale int, c Cell) (Cell, *EvalError) {
+	if e := checkScale(scale); e != nil {
+		return Cell{}, e
+	}
+	if isNull(c) {
+		return Null, nil
+	}
+	if c.Kind == TypeFloat {
+		return Cell{}, decimalFloatMismatch("rounding")
+	}
+	x, ok := decimalText(c)
+	if !ok {
+		return Cell{}, evalErr(TypeError, "rounding of a non-numeric")
+	}
+	r, ok := decimalQuantize(mode, scale, x)
+	if !ok {
+		return Cell{}, evalErr(TypeError, "rounded: an operand is not decimal text")
+	}
+	return Cell{Kind: TypeDecimal, Value: r}, nil
+}
+
+// quotientCell is Quotient's primitive: the scale first, then a null operand
+// propagates, then two exact operands divide, correctly rounded; a zero divisor
+// answers null, as div's does.
+func quotientCell(mode string, scale int, a, b Cell) (Cell, *EvalError) {
+	if e := checkScale(scale); e != nil {
+		return Cell{}, e
+	}
+	if isNull(a) || isNull(b) {
+		return Null, nil
+	}
+	if a.Kind == TypeFloat || b.Kind == TypeFloat {
+		return Cell{}, decimalFloatMismatch("quotient")
+	}
+	x, okx := decimalText(a)
+	y, oky := decimalText(b)
+	if !okx || !oky {
+		return Cell{}, evalErr(TypeError, "quotient of a non-numeric")
+	}
+	q, isNullQ, ok := decimalDivide(mode, scale, x, y)
+	switch {
+	case !ok:
+		return Cell{}, evalErr(TypeError, "quotient: an operand is not decimal text")
+	case isNullQ:
+		return Null, nil
+	}
+	return Cell{Kind: TypeDecimal, Value: q}, nil
+}
+
+// roundingScale resolves a rounding's scale slot. A param slot reaching the
+// evaluator is unbound (params resolve by substitution before evaluation).
+func roundingScale(r Rounding) (int, *EvalError) {
+	if r.ScaleParam != "" {
+		return 0, evalErr(UnboundParam, "unbound parameter '"+r.ScaleParam+"'")
+	}
+	return r.Scale, nil
 }
 
 func roundHalfAway(x float64) float64 {
@@ -449,9 +666,20 @@ func applyScalar(fn string, args []Cell) (Cell, *EvalError) {
 				return CellInt(v), nil
 			case TypeFloat:
 				return CellFloat(math.Abs(c.Value.(float64))), nil
+			case TypeDecimal:
+				if r, ok := decimalAbs(c.Value.(string)); ok {
+					return Cell{Kind: TypeDecimal, Value: r}, nil
+				}
+				return Cell{}, evalErr(TypeError, "abs: an operand is not decimal text")
 			}
 			return Cell{}, evalErr(TypeError, "abs of a non-numeric")
 		case "round", "floor", "ceil":
+			// Over a decimal these are scale-0 Rounded under their pinned modes —
+			// exact, through the one rounding kernel.
+			if c.Kind == TypeDecimal {
+				mode := map[string]string{"round": RoundHalfUp, "floor": RoundFloor, "ceil": RoundCeiling}[fn]
+				return roundedCell(mode, 0, c)
+			}
 			n, ok := asNum(c)
 			if !ok {
 				return Cell{}, evalErr(TypeError, fn+" of a non-numeric")
@@ -720,20 +948,42 @@ func evalExpr(cols Schema, r row, e ColExpr) (Cell, *EvalError) {
 		// List params resolve by substitution before evaluation — one that
 		// reaches the evaluator is unbound, same strictness as a scalar Param.
 		return Cell{}, evalErr(UnboundParam, "unbound parameter '"+x.Name+"'")
+	case Quotient:
+		// Evaluation order: the scale, the dividend, the divisor.
+		scale, se := roundingScale(x.Rounding)
+		if se != nil {
+			return Cell{}, se
+		}
+		if e := checkScale(scale); e != nil {
+			return Cell{}, e
+		}
+		a, ea := evalExpr(cols, r, x.Dividend)
+		if ea != nil {
+			return Cell{}, ea
+		}
+		b, eb := evalExpr(cols, r, x.Divisor)
+		if eb != nil {
+			return Cell{}, eb
+		}
+		return quotientCell(x.Rounding.Mode, scale, a, b)
+	case Rounded:
+		scale, se := roundingScale(x.Rounding)
+		if se != nil {
+			return Cell{}, se
+		}
+		if e := checkScale(scale); e != nil {
+			return Cell{}, e
+		}
+		c, ce := evalExpr(cols, r, x.Expr)
+		if ce != nil {
+			return Cell{}, ce
+		}
+		return roundedCell(x.Rounding.Mode, scale, c)
 	}
 	return Cell{}, evalErr(TypeError, "unknown ColExpr")
 }
 
-// ── type inference / aggregates ──────────────────────────────────────────────
-
-func inferType(cells []Cell) string {
-	for _, c := range cells {
-		if t := typeOf(c); t != "" {
-			return t
-		}
-	}
-	return TypeString
-}
+// ── aggregates ───────────────────────────────────────────────────────────────
 
 func presentNums(cells []Cell) []float64 {
 	var out []float64
@@ -745,87 +995,44 @@ func presentNums(cells []Cell) []float64 {
 	return out
 }
 
-func aggCells(fn, srcType string, cells []Cell) Cell {
-	var present []Cell
-	for _, c := range cells {
-		if !isNull(c) {
-			present = append(present, c)
-		}
+// floatAgg is mean / stddev (the population form) / median over the present
+// numbers, in their order; null over none.
+func floatAgg(fn string, nums []float64) Cell {
+	if len(nums) == 0 {
+		return Null
+	}
+	n := float64(len(nums))
+	var s float64
+	for _, x := range nums {
+		s += x
 	}
 	switch fn {
-	case "count":
-		return CellInt(int64(len(present)))
-	case "first":
-		if len(cells) > 0 {
-			return cells[0]
-		}
-		return Null
-	case "last":
-		if len(cells) > 0 {
-			return cells[len(cells)-1]
-		}
-		return Null
-	case "sum":
-		nums := presentNums(cells)
-		if len(nums) == 0 {
-			return Null
-		}
-		if srcType == TypeInt {
-			var s int64
-			for _, n := range nums {
-				s += int64(n)
-			}
-			return CellInt(s)
-		}
-		var s float64
-		for _, n := range nums {
-			s += n
-		}
-		return CellFloat(s)
 	case "mean":
-		nums := presentNums(cells)
-		if len(nums) == 0 {
-			return Null
-		}
-		var s float64
-		for _, n := range nums {
-			s += n
-		}
-		return CellFloat(s / float64(len(nums)))
+		return CellFloat(s / n)
 	case "stddev":
-		nums := presentNums(cells)
-		if len(nums) == 0 {
-			return Null
-		}
-		n := float64(len(nums))
-		var s float64
-		for _, x := range nums {
-			s += x
-		}
 		mean := s / n
 		var v float64
 		for _, x := range nums {
 			v += (x - mean) * (x - mean)
 		}
 		return CellFloat(math.Sqrt(v / n))
-	case "median":
-		nums := presentNums(cells)
-		if len(nums) == 0 {
-			return Null
-		}
-		sort.Float64s(nums)
-		n := len(nums)
-		mid := n / 2
-		if n%2 == 1 {
-			return CellFloat(nums[mid])
-		}
-		return CellFloat((nums[mid-1] + nums[mid]) / 2.0)
 	}
-	// min / max
+	// median
+	sorted := append([]float64(nil), nums...)
+	sort.SliceStable(sorted, func(i, j int) bool { return compareFloat(sorted[i], sorted[j]) < 0 })
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 1 {
+		return CellFloat(sorted[mid])
+	}
+	return CellFloat((sorted[mid-1] + sorted[mid]) / 2.0)
+}
+
+// extreme is min (keeping the FIRST of equals) or max (keeping the LAST) of the
+// present cells; an incomparable pair keeps the incumbent.
+func extreme(isMin bool, present []Cell) Cell {
 	if len(present) == 0 {
 		return Null
 	}
-	isMin := fn == "min"
 	acc := present[0]
 	for _, b := range present[1:] {
 		c, ok := compareCells(acc, b)
@@ -836,9 +1043,126 @@ func aggCells(fn, srcType string, cells []Cell) Cell {
 	return acc
 }
 
-func aggType(fn, srcType string) string {
+// distinctCount is the number of distinct present values by the grouping key.
+func distinctCount(present []Cell) int64 {
+	seen := map[string]bool{}
+	for _, c := range present {
+		seen[cellKey(c)] = true
+	}
+	return int64(len(seen))
+}
+
+func aggCells(fn, srcType string, cells []Cell) (Cell, *EvalError) {
+	if srcType == TypeDecimal {
+		return aggDecimals(fn, cells)
+	}
+	var present []Cell
+	for _, c := range cells {
+		if !isNull(c) {
+			present = append(present, c)
+		}
+	}
 	switch fn {
 	case "count":
+		return CellInt(int64(len(present))), nil
+	case "countDistinct":
+		return CellInt(distinctCount(present)), nil
+	case "first":
+		if len(cells) > 0 {
+			return cells[0], nil
+		}
+		return Null, nil
+	case "last":
+		if len(cells) > 0 {
+			return cells[len(cells)-1], nil
+		}
+		return Null, nil
+	case "sum":
+		nums := presentNums(cells)
+		if len(nums) == 0 {
+			return Null, nil
+		}
+		if srcType == TypeInt {
+			var s int64
+			for _, n := range nums {
+				s += int64(n)
+			}
+			return CellInt(s), nil
+		}
+		var s float64
+		for _, n := range nums {
+			s += n
+		}
+		return CellFloat(s), nil
+	case "mean", "stddev", "median":
+		return floatAgg(fn, presentNums(cells)), nil
+	}
+	return extreme(fn == "min", present), nil
+}
+
+// aggDecimals is every aggregate over a decimal column. The column is ADMITTED
+// first: each present cell is read canonically (an int as the decimal it widens
+// to), and a cell that is not decimal text is refused by name, outranking every
+// answer. Sum is EXACT and a decimal; min / max compare exactly; mean / median /
+// stddev read each value at its nearest float, and a value past the float range
+// is refused for them rather than answered as an infinity.
+func aggDecimals(fn string, cells []Cell) (Cell, *EvalError) {
+	admitted := make([]Cell, len(cells))
+	var present []Cell
+	for i, c := range cells {
+		if isNull(c) {
+			admitted[i] = Null
+			continue
+		}
+		text, ok := decimalText(c)
+		canonical, okc := DecimalCanonical(text)
+		if !ok || !okc {
+			return Cell{}, evalErr(AggError, "aggregate over a decimal column met a cell outside its type: "+cellString(c))
+		}
+		admitted[i] = Cell{Kind: TypeDecimal, Value: canonical}
+		present = append(present, admitted[i])
+	}
+	switch fn {
+	case "count":
+		return CellInt(int64(len(present))), nil
+	case "countDistinct":
+		return CellInt(distinctCount(present)), nil
+	case "first":
+		if len(admitted) > 0 {
+			return admitted[0], nil
+		}
+		return Null, nil
+	case "last":
+		if len(admitted) > 0 {
+			return admitted[len(admitted)-1], nil
+		}
+		return Null, nil
+	case "sum":
+		if len(present) == 0 {
+			return Null, nil
+		}
+		total := present[0].Value.(string)
+		for _, c := range present[1:] {
+			total, _ = DecimalAdd(total, c.Value.(string))
+		}
+		return Cell{Kind: TypeDecimal, Value: total}, nil
+	case "mean", "stddev", "median":
+		nums := make([]float64, 0, len(present))
+		for _, c := range present {
+			f, ok := DecimalToFloat(c.Value.(string))
+			if !ok {
+				return Cell{}, evalErr(AggError, "the decimal "+c.Value.(string)+" is past the float range, and "+fn+" is a float")
+			}
+			nums = append(nums, f)
+		}
+		return floatAgg(fn, nums), nil
+	}
+	return extreme(fn == "min", present), nil
+}
+
+func aggType(fn, srcType string) string {
+	switch fn {
+	case "count", "countDistinct":
 		return TypeInt
 	case "mean", "median", "stddev":
 		return TypeFloat
@@ -896,6 +1220,10 @@ func cellKey(c Cell) string {
 		return "b\x000"
 	case TypeString, TypeDate, TypeTimestamp:
 		return c.Kind + "\x00" + c.Value.(string)
+	case TypeDecimal:
+		// The CANONICAL text under its own tag: 1.50 and 1.5 are one value, and a
+		// decimal never shares a key with an int or a float of the same value.
+		return "m\x00" + decimalCanonicalOrSelf(c.Value.(string))
 	}
 	return "n"
 }

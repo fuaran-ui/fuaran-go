@@ -326,9 +326,10 @@ func decodeEffect(el map[string]any) (EffectClass, error) {
 	if err != nil {
 		return EffectClass{}, err
 	}
-	switch det {
-	case DeterminismDeterministic, DeterminismClock, DeterminismRandom, DeterminismNetwork:
-	default:
+	// The determinism set is read from its canonical label only (Core 0.33.0,
+	// fuaran-core Phase 319): `clock+random` is a set, `random+clock` is not a
+	// label, so a set has one wire spelling.
+	if _, ok := ParseDeterminismTag(det); !ok {
 		return EffectClass{}, errors.New("unknown determinism: " + det)
 	}
 	return EffectClass{Host: host, Determinism: det}, nil
@@ -356,42 +357,57 @@ func decodeSigEntry(el map[string]any) (SigEntry, error) {
 		return SigEntry{}, errors.New("field is not a boolean: required")
 	}
 
+	// The entry is read AS its hole kind (Core 0.37.0, fuaran-core Phase 409):
+	// the tag is one of the four kinds, a kind without the member it needs is
+	// refused at that member, and a member the kind does not read — a slot's
+	// space in the pre-0.37.0 form among them — is checked for shape and is not
+	// part of the entry, so the declaration re-encodes without it.
 	entry := SigEntry{Addr: addr, Name: name, Kind: kind, Required: required}
-
+	var space *Space
 	if raw, present := el["space"]; present {
 		o, ok := raw.(map[string]any)
 		if !ok {
 			return SigEntry{}, errors.New("field is not an object: space")
 		}
-		space, err := decodeSpaceDecl(o)
-		if err != nil {
+		if space, err = decodeSpaceDecl(o); err != nil {
 			return SigEntry{}, err
 		}
-		// From Core 0.37.0 (fuaran-core Phase 409) a slot entry IS its
-		// constraint and holds no space: a space written beside one (the
-		// pre-0.37.0 form) is read, checked for shape, and dropped, so the
-		// declaration re-encodes without it.
-		if kind != "slot" {
-			entry.Space = space
-		}
 	}
-	if raw, present := el["slotKind"]; present {
-		s, ok := raw.(string)
-		if !ok {
-			return SigEntry{}, errors.New("field is not a string: slotKind")
-		}
-		entry.Slot = s
-	}
+	var effect *EffectClass
 	if raw, present := el["actionEffect"]; present {
 		o, ok := raw.(map[string]any)
 		if !ok {
 			return SigEntry{}, errors.New("field is not an object: actionEffect")
 		}
-		effect, err := decodeEffect(o)
+		e, err := decodeEffect(o)
 		if err != nil {
 			return SigEntry{}, err
 		}
-		entry.ActionEffect = &effect
+		effect = &e
+	}
+	slot := ""
+	if raw, present := el["slotKind"]; present {
+		s, ok := raw.(string)
+		if !ok {
+			return SigEntry{}, errors.New("field is not a string: slotKind")
+		}
+		slot = s
+	}
+	switch kind {
+	case "value", "repeat":
+		if space == nil {
+			return SigEntry{}, errors.New("missing field: space")
+		}
+		entry.Space = space
+	case "slot":
+		entry.Slot = slot
+	case "action":
+		if effect == nil {
+			return SigEntry{}, errors.New("missing field: actionEffect")
+		}
+		entry.ActionEffect = effect
+	default:
+		return SigEntry{}, errors.New("unknown hole kind: " + kind)
 	}
 	return entry, nil
 }
@@ -466,6 +482,14 @@ func DecodeDeclarationParsed(raw any) (Capability, error) {
 		return Capability{}, errors.New("a capability declaration must be an object")
 	}
 
+	// A capability document says so (Core 0.35.1, fuaran-core Phase 307).
+	tag, err := strField(el, "$type")
+	if err != nil {
+		return Capability{}, err
+	}
+	if tag != "capability" {
+		return Capability{}, errors.New("not a capability declaration: " + tag)
+	}
 	id, err := strField(el, "id")
 	if err != nil {
 		return Capability{}, err
@@ -477,6 +501,12 @@ func DecodeDeclarationParsed(raw any) (Capability, error) {
 	signature, err := decodeSignature(signatureObj)
 	if err != nil {
 		return Capability{}, err
+	}
+	// The registry's admission gate runs over the signature just read, so a
+	// declaration that decodes is one Register admits, and a refused one is
+	// refused with the registry's own error.
+	if refusal := Admission(id, signature); refusal != nil {
+		return Capability{}, errors.New("signature.holes: " + refusal.Error())
 	}
 
 	// The wire tag is derivable from the signature, so a disagreement is a

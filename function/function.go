@@ -58,6 +58,10 @@ const (
 	DeterminismRandom        = core.DeterminismRandom
 	DeterminismNetwork       = core.DeterminismNetwork
 
+	FactorClock   = core.FactorClock
+	FactorRandom  = core.FactorRandom
+	FactorNetwork = core.FactorNetwork
+
 	PlacementServer            = core.PlacementServer
 	PlacementBuildTime         = core.PlacementBuildTime
 	PlacementPrecomputed       = core.PlacementPrecomputed
@@ -78,6 +82,13 @@ const (
 	ErrArgOutOfSpace       = core.ErrArgOutOfSpace
 	ErrUninvocableArg      = core.ErrUninvocableArg
 	ErrBodyFailed          = core.ErrBodyFailed
+	ErrNonTotalCapability  = core.ErrNonTotalCapability
+	ErrIllFormedCapability = core.ErrIllFormedCapability
+	ErrDuplicateArg        = core.ErrDuplicateArg
+
+	FaultEmptySpace        = core.FaultEmptySpace
+	FaultNonFiniteBound    = core.FaultNonFiniteBound
+	FaultDuplicateHoleAddr = core.FaultDuplicateHoleAddr
 )
 
 // The registry, signature and capability types.
@@ -91,6 +102,7 @@ type (
 	ComposeStep        = core.ComposeStep
 	ComposeResult      = core.ComposeResult
 	EffectClass        = core.EffectClass
+	DeterminismSet     = core.DeterminismSet
 	Placement          = core.Placement
 	Signature          = core.Signature
 	Capability         = core.Capability
@@ -111,6 +123,13 @@ func NewCapability(id string, sg Signature, placement Placement) Capability {
 // DeterminismTag is the capability's wire determinism tag.
 func DeterminismTag(c Capability) string { return core.DeterminismTag(c) }
 
+// ParseDeterminismTag reads a determinism set from its canonical label only.
+func ParseDeterminismTag(tag string) (DeterminismSet, bool) { return core.ParseDeterminismTag(tag) }
+
+// Admission is the gate a declaration passes to be registered or read:
+// totality, then well-formedness. Nil admits.
+func Admission(id string, sg Signature) *InvokeError { return core.Admission(id, sg) }
+
 // FNV1a is the 32-bit FNV-1a hash of s, rendered as eight lower-case hex digits.
 func FNV1a(s string) string { return core.FNV1a(s) }
 
@@ -118,8 +137,12 @@ func FNV1a(s string) string { return core.FNV1a(s) }
 // invocation under.
 func InvocationKey(c Capability, args []InvokeArg) string { return core.InvocationKey(c, args) }
 
+// Canonical is the one spelling a value in the space is handed on as; ok is
+// false where s is not in the space.
+func Canonical(space *Space, s string) (string, bool) { return core.Canonical(space, s) }
+
 // SpaceValidate reports whether s lies in the value space (a nil space admits
-// every value).
+// no value).
 func SpaceValidate(space *Space, s string) bool { return core.SpaceValidate(space, s) }
 
 // ValidateArgs checks an invocation's arguments against the capability's
