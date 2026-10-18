@@ -93,6 +93,17 @@ func exprParamNames(e ColExpr) []string {
 			}
 		case IsNull:
 			walk(x.Expr)
+		case Quotient:
+			walk(x.Dividend)
+			walk(x.Divisor)
+			if x.Rounding.ScaleParam != "" {
+				out = append(out, x.Rounding.ScaleParam)
+			}
+		case Rounded:
+			walk(x.Expr)
+			if x.Rounding.ScaleParam != "" {
+				out = append(out, x.Rounding.ScaleParam)
+			}
 		case Col, Lit:
 			// leaf, no params
 		}
@@ -186,6 +197,10 @@ func substListExpr(e ColExpr, listEnv map[string][]Cell) ColExpr {
 		return InList{Subject: substListExpr(x.Subject, listEnv), Items: items}
 	case IsNull:
 		return IsNull{Expr: substListExpr(x.Expr, listEnv)}
+	case Quotient:
+		return Quotient{Dividend: substListExpr(x.Dividend, listEnv), Divisor: substListExpr(x.Divisor, listEnv), Rounding: x.Rounding}
+	case Rounded:
+		return Rounded{Expr: substListExpr(x.Expr, listEnv), Rounding: x.Rounding}
 	default: // Col, Lit, Param — a scalar param is never bound here
 		return e
 	}
@@ -236,7 +251,24 @@ func substExpr(e ColExpr, env map[string]Cell) ColExpr {
 		return InParam{Subject: substExpr(x.Subject, env), Name: x.Name}
 	case IsNull:
 		return IsNull{Expr: substExpr(x.Expr, env)}
+	case Quotient:
+		return Quotient{Dividend: substExpr(x.Dividend, env), Divisor: substExpr(x.Divisor, env), Rounding: bindScale(x.Rounding, env)}
+	case Rounded:
+		return Rounded{Expr: substExpr(x.Expr, env), Rounding: bindScale(x.Rounding, env)}
 	default: // Col, Lit
 		return e
 	}
+}
+
+// bindScale binds a rounding's scale slot from env — only to an int cell, as a
+// limit's count binds; a cell of another shape leaves the param, so evaluation
+// names the slot.
+func bindScale(r Rounding, env map[string]Cell) Rounding {
+	if r.ScaleParam == "" {
+		return r
+	}
+	if c, ok := env[r.ScaleParam]; ok && c.Kind == TypeInt {
+		return Rounding{Scale: int(c.Value.(int64)), Mode: r.Mode}
+	}
+	return r
 }

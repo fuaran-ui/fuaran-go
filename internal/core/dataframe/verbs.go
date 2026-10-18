@@ -51,7 +51,15 @@ func evalProject(f Frame, pairs []Pair) (Frame, *EvalError) {
 	return Frame{Cols: cols, Rows: rows}, nil
 }
 
+// evalDerive types its column by THE derived-column rule (typing.go): read off
+// the schema before any row, so a derive refused statically is refused on every
+// frame, an empty one included, and a decided one carries its type whatever rows
+// the frame holds.
 func evalDerive(f Frame, name string, expr ColExpr) (Frame, *EvalError) {
+	dt := deriveTyping(f.Cols, expr)
+	if dt.kind == derivedRefused {
+		return Frame{}, floatBesideDecimal(name)
+	}
 	newCells := make([]Cell, len(f.Rows))
 	for ri, r := range f.Rows {
 		c, e := evalExpr(f.Cols, r, expr)
@@ -60,11 +68,9 @@ func evalDerive(f Frame, name string, expr ColExpr) (Frame, *EvalError) {
 		}
 		newCells[ri] = c
 	}
-	ty := inferType(newCells)
-	if allNull(newCells) {
-		if st := staticType(f.Cols, expr); st != "" {
-			ty = st
-		}
+	ty, te := columnTypeBy(dt, name, newCells)
+	if te != nil {
+		return Frame{}, te
 	}
 	i := colIndex(f.Cols, name)
 	if i >= 0 {
@@ -143,7 +149,11 @@ func evalGroupBy(f Frame, keys []string, aggs []Agg) (Frame, *EvalError) {
 			for gi, gr := range grp {
 				cellsOf[gi] = gr[rc.idx]
 			}
-			r = append(r, aggCells(rc.a.Fn, rc.ty, cellsOf))
+			c, e := aggCells(rc.a.Fn, rc.ty, cellsOf)
+			if e != nil {
+				return Frame{}, e
+			}
+			r = append(r, c)
 		}
 		rows = append(rows, r)
 	}
@@ -267,6 +277,26 @@ func evalUnion(f, other Frame) (Frame, *EvalError) {
 	return Frame{Cols: f.Cols, Rows: append(append([]row(nil), f.Rows...), other.Rows...)}, nil
 }
 
+// evalSetOp keeps the left rows whose full row does (intersect) or does not
+// (except) appear in other, in the left's order and multiplicity. Row identity
+// is the grouping key, so a null matches a null and 1.50 matches 1.5.
+func evalSetOp(verb string, keepPresent bool, f, other Frame) (Frame, *EvalError) {
+	if !strSliceEq(available(f.Cols), available(other.Cols)) {
+		return Frame{}, evalErr(JoinError, verb+" requires matching column names")
+	}
+	present := make(map[string]bool, len(other.Rows))
+	for _, r := range other.Rows {
+		present[rowKey(r)] = true
+	}
+	var kept []row
+	for _, r := range f.Rows {
+		if present[rowKey(r)] == keepPresent {
+			kept = append(kept, r)
+		}
+	}
+	return Frame{Cols: f.Cols, Rows: kept}, nil
+}
+
 func strSliceEq(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -284,6 +314,7 @@ func evalWindow(f Frame, spec WindowSpec) (Frame, *EvalError) {
 	if ofIdx < 0 && spec.Fn != "rowNumber" && spec.Fn != "rank" {
 		return Frame{}, unknownColumn(spec.Of, f.Cols)
 	}
+	sourceIsDecimal := colType(f.Cols, spec.Of) == TypeDecimal
 	var partIdx []int
 	for _, p := range spec.PartitionBy {
 		if i := colIndex(f.Cols, p); i >= 0 {
@@ -356,6 +387,20 @@ func evalWindow(f Frame, spec WindowSpec) (Frame, *EvalError) {
 				outs[n-1] = Null
 			}
 		case "cumulSum":
+			if sourceIsDecimal {
+				// Over a decimal column the running total is EXACT and a decimal,
+				// as sum over one is — never a float in silence.
+				total := "0"
+				for i, v := range vals {
+					if x, ok := decimalText(v); ok {
+						if t, ok := DecimalAdd(total, x); ok {
+							total = t
+						}
+					}
+					outs[i] = Cell{Kind: TypeDecimal, Value: total}
+				}
+				break
+			}
 			total := 0.0
 			for i, v := range vals {
 				if x, ok := asNum(v); ok {
@@ -373,6 +418,12 @@ func evalWindow(f Frame, spec WindowSpec) (Frame, *EvalError) {
 				for _, v := range vals[lo : i+1] {
 					if x, ok := asNum(v); ok {
 						nums = append(nums, x)
+					} else if v.Kind == TypeDecimal {
+						// A window's MEAN over a decimal is a float, as mean over one
+						// is: each value at its nearest float.
+						if x, ok := DecimalToFloat(v.Value.(string)); ok {
+							nums = append(nums, x)
+						}
 					}
 				}
 				if len(nums) == 0 {
@@ -391,10 +442,12 @@ func evalWindow(f Frame, spec WindowSpec) (Frame, *EvalError) {
 		}
 	}
 	var ty string
-	switch spec.Fn {
-	case "rowNumber", "rank":
+	switch {
+	case spec.Fn == "rowNumber" || spec.Fn == "rank":
 		ty = TypeInt
-	case "cumulSum", "rollingMean":
+	case spec.Fn == "cumulSum" && sourceIsDecimal:
+		ty = TypeDecimal
+	case spec.Fn == "cumulSum" || spec.Fn == "rollingMean":
 		ty = TypeFloat
 	default:
 		ty = colType(f.Cols, spec.Of)
@@ -482,7 +535,11 @@ func evalPivot(f Frame, spec PivotSpec) (Frame, *EvalError) {
 					matching = append(matching, fr[valIdx])
 				}
 			}
-			r = append(r, aggCells(spec.Agg, valType, matching))
+			c, e := aggCells(spec.Agg, valType, matching)
+			if e != nil {
+				return Frame{}, e
+			}
+			r = append(r, c)
 		}
 		rows = append(rows, r)
 	}
@@ -514,14 +571,18 @@ func evalUnpivot(f Frame, idVars, valueVars []string) (Frame, *EvalError) {
 		}
 		cols = append(cols, SchemaEntry{Name: n, Type: t})
 	}
-	valType := TypeString
-	for _, n := range valueVars {
-		if t := colType(f.Cols, n); t != "" {
-			valType = t
-			break
-		}
+	// The value column is typed by the one derived-column rule, the value
+	// columns being its arms: their declared types' join where the schema
+	// decides it — over an empty frame too — and the melted cells only where it
+	// does not.
+	valTypes := make([]string, len(valIdx))
+	for k, vi := range valIdx {
+		valTypes[k] = f.Cols[vi].Type
 	}
-	cols = append(cols, SchemaEntry{Name: "variable", Type: TypeString}, SchemaEntry{Name: "value", Type: valType})
+	dt := unpivotTyping(valTypes)
+	if dt.kind == derivedRefused {
+		return Frame{}, floatBesideDecimal("value")
+	}
 	var rows []row
 	for _, r := range f.Rows {
 		idCells := make([]Cell, len(idIdx))
@@ -533,6 +594,16 @@ func evalUnpivot(f Frame, idVars, valueVars []string) (Frame, *EvalError) {
 			rows = append(rows, nr)
 		}
 	}
+	valueAt := len(idIdx) + 1
+	melted := make([]Cell, len(rows))
+	for i, r := range rows {
+		melted[i] = r[valueAt]
+	}
+	valType, te := columnTypeBy(dt, "value", melted)
+	if te != nil {
+		return Frame{}, te
+	}
+	cols = append(cols, SchemaEntry{Name: "variable", Type: TypeString}, SchemaEntry{Name: "value", Type: valType})
 	return Frame{Cols: cols, Rows: rows}, nil
 }
 
@@ -590,6 +661,18 @@ func evalStep(resolve Resolver, f Frame, t Transform) (Frame, *EvalError) {
 			return Frame{}, e
 		}
 		return evalUnion(f, toFrame(t))
+	case Intersect:
+		t, e := evalSource(resolve, v.Source)
+		if e != nil {
+			return Frame{}, e
+		}
+		return evalSetOp("intersect", true, f, toFrame(t))
+	case Except:
+		t, e := evalSource(resolve, v.Source)
+		if e != nil {
+			return Frame{}, e
+		}
+		return evalSetOp("except", false, f, toFrame(t))
 	}
 	return Frame{}, evalErr(TypeError, "unknown Transform")
 }
@@ -612,47 +695,4 @@ func EvalPipelineWith(resolve Resolver, pipeline []Transform, input Table) (Tabl
 // UNRESOLVED_SOURCE).
 func EvalPipeline(pipeline []Transform, input Table) (Table, *EvalError) {
 	return EvalPipelineWith(NoResolve, pipeline, input)
-}
-
-func allNull(cells []Cell) bool {
-	for _, c := range cells {
-		if !isNull(c) {
-			return false
-		}
-	}
-	return true
-}
-
-// staticType is the column type an expression is typed at from the schema
-// alone, where that is decidable, and "" where it is not. A derive whose every
-// cell is null has no value to read a type off, and the reference evaluator
-// types it from the expression (laws/dataframeParity's derive-div-by-zero: an
-// int quotient of all-null cells is a float column).
-func staticType(cols Schema, e ColExpr) string {
-	switch x := e.(type) {
-	case Col:
-		return colType(cols, x.Name)
-	case Lit:
-		return typeOf(x.Cell)
-	case Cast:
-		return x.Type
-	case Not, IsNull, InList:
-		return TypeBool
-	case Binary:
-		switch x.Op {
-		case "eq", "ne", "lt", "le", "gt", "ge", "and", "or", "contains", "startsWith", "endsWith":
-			return TypeBool
-		case "div":
-			return TypeFloat
-		case "add", "sub", "mul", "mod":
-			l, r := staticType(cols, x.Left), staticType(cols, x.Right)
-			if l == TypeInt && r == TypeInt {
-				return TypeInt
-			}
-			if (l == TypeInt || l == TypeFloat) && (r == TypeInt || r == TypeFloat) {
-				return TypeFloat
-			}
-		}
-	}
-	return ""
 }

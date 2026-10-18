@@ -1,6 +1,8 @@
 package dataframe
 
 import (
+	"strconv"
+
 	core "github.com/fuaran-ui/fuaran-go/internal/core/dataframe"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
@@ -21,14 +23,20 @@ func typed(tag string, fields map[string]wire.Value) wire.Obj {
 }
 
 // cellValueWire is the present-value JSON payload for a cell in a column of
-// type ty (a null cell becomes the type-default; an int in a float column widens).
+// type ty (a null cell becomes the type-default; an int in a float or decimal
+// column widens to that type).
 func cellValueWire(ty string, c Cell) wire.Value {
 	present := c
 	if core.CellIsNull(c) {
 		present = core.DefaultFor(ty)
 	}
-	if present.Kind == TypeInt && ty == TypeFloat {
-		return wire.Float(float64(present.Value.(int64)))
+	if present.Kind == TypeInt {
+		switch ty {
+		case TypeFloat:
+			return wire.Float(float64(present.Value.(int64)))
+		case TypeDecimal:
+			return wire.Str(strconv.FormatInt(present.Value.(int64), 10))
+		}
 	}
 	return scalarWire(present)
 }
@@ -41,7 +49,7 @@ func scalarWire(c Cell) wire.Value {
 		return wire.Float(c.Value.(float64))
 	case TypeBool:
 		return wire.Bool(c.Value.(bool))
-	default: // string / date / timestamp
+	default: // string / date / timestamp / decimal (its text: a number token would have been through a float)
 		return wire.Str(c.Value.(string))
 	}
 }
@@ -87,14 +95,41 @@ func EncodeSourceValue(src DataSource) wire.Value {
 	return wire.Null{}
 }
 
-// EncodeSource is the canonical wire string for a DataSource.
+// EncodeSource is the canonical wire string for a DataSource — the guarded
+// encode: a decimal cell whose text is not CANONICAL decimal text is refused
+// (MALFORMED_SHAPE) rather than written, so every decimal on the wire has one
+// spelling.
 func EncodeSource(src DataSource) (string, error) {
+	if e, ok := src.(Embedded); ok {
+		for _, col := range e.Table.Columns {
+			for _, c := range col.Cells {
+				if c.Kind != TypeDecimal {
+					continue
+				}
+				text, _ := c.Value.(string)
+				if canonical, ok := core.DecimalCanonical(text); !ok || canonical != text {
+					return "", &ColumnError{Code: MalformedShape,
+						Detail: col.Name + ": decimal text '" + text + "' is not canonical decimal text"}
+				}
+			}
+		}
+	}
 	return wire.EncodeValue(EncodeSourceValue(src))
 }
 
 var litTag = map[string]string{
 	TypeInt: "Int", TypeFloat: "Float", TypeBool: "Bool",
-	TypeString: "Str", TypeDate: "Date", TypeTimestamp: "Timestamp",
+	TypeString: "Str", TypeDate: "Date", TypeTimestamp: "Timestamp", TypeDecimal: "Decimal",
+}
+
+// roundingWire is the rounding policy: the mode's spelling and the scale slot
+// (an int, or {"$param":"<name>"}).
+func roundingWire(r Rounding) wire.Obj {
+	var scale wire.Value = wire.Int(int64(r.Scale))
+	if r.ScaleParam != "" {
+		scale = wire.Obj{Fields: map[string]wire.Value{"$param": wire.Str(r.ScaleParam)}}
+	}
+	return wire.Obj{Fields: map[string]wire.Value{"mode": wire.Str(r.Mode), "scale": scale}}
 }
 
 func cellLiteralWire(c Cell) wire.Obj {
@@ -147,6 +182,12 @@ func EncodeExprValue(e ColExpr) wire.Value {
 		return typed("in", map[string]wire.Value{"expr": EncodeExprValue(x.Subject), "param": wire.Str(x.Name)})
 	case IsNull:
 		return typed("isNull", map[string]wire.Value{"expr": EncodeExprValue(x.Expr)})
+	case Quotient:
+		return typed("quotient", map[string]wire.Value{
+			"dividend": EncodeExprValue(x.Dividend), "divisor": EncodeExprValue(x.Divisor), "rounding": roundingWire(x.Rounding),
+		})
+	case Rounded:
+		return typed("rounded", map[string]wire.Value{"expr": EncodeExprValue(x.Expr), "rounding": roundingWire(x.Rounding)})
 	}
 	return wire.Null{}
 }
@@ -220,6 +261,10 @@ func EncodeTransformValue(t Transform) wire.Value {
 		return typed("limit", map[string]wire.Value{"n": wire.Int(int64(v.N)), "offset": wire.Int(int64(v.Offset))})
 	case Union:
 		return typed("union", map[string]wire.Value{"source": EncodeSourceValue(v.Source)})
+	case Intersect:
+		return typed("intersect", map[string]wire.Value{"source": EncodeSourceValue(v.Source)})
+	case Except:
+		return typed("except", map[string]wire.Value{"source": EncodeSourceValue(v.Source)})
 	}
 	return wire.Null{}
 }
