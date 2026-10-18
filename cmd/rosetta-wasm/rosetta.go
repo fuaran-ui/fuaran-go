@@ -54,13 +54,17 @@ func metric(id, label string, value float64) wire.Node {
 // flexBox builds a flex Box node with the given axis / wrap / role / heading /
 // children.
 func flexBox(id, direction string, wrap bool, role string, heading string, children ...wire.Value) wire.Node {
+	// Phase 2300 rule 1 - wrap is omit-at-default (false): the canonical form
+	// carries it only when true, so the hand-built node omits it exactly as the
+	// decoder would store it.
+	layout := map[string]wire.Value{"direction": wire.Str(direction)}
+	if wrap {
+		layout["wrap"] = wire.Bool(true)
+	}
 	fields := map[string]wire.Value{
 		"children": wire.Arr(children),
-		"layout": wire.Obj{Tag: "Flex", Fields: map[string]wire.Value{
-			"direction": wire.Str(direction),
-			"wrap":      wire.Bool(wrap),
-		}},
-		"role": wire.Str(role),
+		"layout":   wire.Obj{Tag: "Flex", Fields: layout},
+		"role":     wire.Str(role),
 	}
 	if heading != "" {
 		fields["heading"] = wire.Str(heading)

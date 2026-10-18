@@ -17,7 +17,7 @@ const referenceWire = `{"id":"rosetta-root","kind":{"$type":"Box","children":[{"
 	`{"id":"rosetta-m-c","kind":{"$type":"Metric","label":"Churn %","value":` +
 	`{"$type":"Static","value":12.4}}}],"layout":{"$type":"Flex","direction":"Horizontal",` +
 	`"wrap":true},"role":"Group"}}],"heading":"Revenue snapshot","layout":` +
-	`{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Dashboard"}}`
+	`{"$type":"Flex","direction":"Vertical"},"role":"Dashboard"}}`
 
 const defaultHoles = `{"labelA":"Signups","valueA":1280,"labelB":"Revenue","valueB":42.5,"labelC":"Churn %","valueC":12.4}`
 
