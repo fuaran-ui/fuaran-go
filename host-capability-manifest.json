@@ -59,7 +59,7 @@
     "envelope-reject": "covered",
     "envelope-round-trip": "covered",
     "formatting": {
-      "pending": "this host's suite does not yet run the number-formatting vectors"
+      "pending": "the host formatter is not yet certified against the golden; carried by fuaran#2328"
     },
     "laws/capabilityLaws": {
       "pending": "the capability twin mirrors an older Core than the vectors are stamped for, so capability_laws_test.go reports the gap and asserts nothing until the twin is raised"
