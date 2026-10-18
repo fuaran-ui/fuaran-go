@@ -28,10 +28,11 @@ import (
 )
 
 const (
-	noCardCodec    = "this host has no contract-card codec (§25) for the card fixtures to run against yet"
-	teleportUnrun  = "the teleport package is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures"
-	lawUnrun       = "this host's suite does not yet run this law family's vectors"
-	noTokenDeriver = "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
+	noCardCodec       = "this host has no contract-card codec (§25) for the card fixtures to run against yet"
+	teleportUnrun     = "the teleport package is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures"
+	lawUnrun          = "this host's suite does not yet run this law family's vectors"
+	noDesignSeamCodec = "this host has no codec for the design-provider seam's records for the design/ fixtures to run against yet"
+	noTokenDeriver    = "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
 )
 
 func familyPending(why string) map[string]string { return map[string]string{"pending": why} }
@@ -56,6 +57,8 @@ var hostCorpusFamilies = map[string]any{
 	"contract-card-reject":      familyPending(noCardCodec),
 	"teleport-decode":           familyPending(teleportUnrun),
 	"teleport-reject":           familyPending(teleportUnrun),
+	"design-seam-round-trip":    familyPending(noDesignSeamCodec),
+	"design-seam-reject":        familyPending(noDesignSeamCodec),
 	"apply/duplicateIdsApply":   "covered",
 	"apply/limitsApply":         "covered",
 	"apply/styleNormaliseApply": "covered",

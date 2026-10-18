@@ -47,6 +47,12 @@
     "decode-policy": {
       "notApplicable": "this host's decoder offers no §23 kind admission policy"
     },
+    "design-seam-reject": {
+      "pending": "this host has no codec for the design-provider seam's records for the design/ fixtures to run against yet"
+    },
+    "design-seam-round-trip": {
+      "pending": "this host has no codec for the design-provider seam's records for the design/ fixtures to run against yet"
+    },
     "devtools-relay": {
       "notApplicable": "this host ships no devtools relay endpoint"
     },
