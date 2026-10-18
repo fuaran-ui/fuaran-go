@@ -230,8 +230,8 @@ var absentLeniency = map[string]func() Value{
 	"CellKindErased.Pill.labelFn":        absentClosure,
 	"CellKindErased.Pill.toneFn":         absentClosure,
 	"CellKindErased.Progress.fractionFn": absentClosure,
-	// SegmentedChoice's orientation restores the language default.
-	"FormFieldKind.SegmentedChoice.orientation": func() Value { return Str("Horizontal") },
+	// (`FormFieldKind.SegmentedChoice.orientation` left this table with Phase 2300:
+	// the IDL declares its default, so the generated row restores `Horizontal`.)
 	// The buffer's flush trigger defaults to on-blur.
 	"Binding.Local.flushOn": func() Value { return Obj{Tag: "OnBlur", Fields: map[string]Value{}} },
 	// A message with no arguments.

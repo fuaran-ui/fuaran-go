@@ -115,26 +115,28 @@ func TestTabsStillToleratesAnUnknownKeyOnTheKind(t *testing.T) {
 	}
 }
 
-func TestStepperActiveStepIsRequired(t *testing.T) {
-	// THE DECISION, recorded as behaviour. A stepper carries no default step to
-	// fall back to: `Tabs` has one because "the first tab" is a meaningful
-	// resting state, while a stepper with no declared step has no position at
-	// all, so a host inventing 0 would be choosing a stage in someone else's
-	// workflow.
-	mustRefuse(t, `{"id":"s","kind":{"$type":"Stepper","children":[`+tabs1677Child+`]}}`,
-		CodeMissingField, "$.kind.activeStep")
-	mustAccept(t, `{"id":"s","kind":{"$type":"Stepper","activeStep":{"$type":"Static","value":1},"children":[`+tabs1677Child+`]}}`)
-}
-
-func TestStepperActiveStepIsNotOmittedAtZero(t *testing.T) {
-	// And the converse of the decision above, which is the part a requiredness
-	// change could silently take with it: `activeStep` is IDL-`required`, not
-	// omit-at-default, so an explicit `Static 0` is the document's own value and
-	// must survive. `Tabs.activeIndex` is the slot that drops it.
-	node := mustAccept(t,
+func TestStepperActiveStepOmitsAtTheDeclaredDefault(t *testing.T) {
+	// Phase 2300 — the declared-default rule: `Stepper.activeStep` is
+	// `omitDefault Static{value=0}` in the IDL (the `Tabs.activeIndex` shape),
+	// read from the generated row. An absent member decodes (the row restores
+	// the first step), an explicit member at the default normalises away, and a
+	// non-default one is the document's own value and survives. Until Phase
+	// 2300 this host required the member, on the argument that a stepper with
+	// no declared step has no position; the vocabulary now declares the
+	// position, so the decision is the row's and not this host's.
+	absent := mustAccept(t, `{"id":"s","kind":{"$type":"Stepper","children":[`+tabs1677Child+`]}}`)
+	if _, present := absent.Kind.Fields["activeStep"]; present {
+		t.Error("an absent Stepper.activeStep must stay absent on the model (the omitted form is canonical)")
+	}
+	atDefault := mustAccept(t,
 		`{"id":"s","kind":{"$type":"Stepper","activeStep":{"$type":"Static","value":0},"children":[`+tabs1677Child+`]}}`)
-	if _, present := node.Kind.Fields["activeStep"]; !present {
-		t.Error("Stepper.activeStep at 0 was dropped; it is required, not omit-at-default")
+	if _, present := atDefault.Kind.Fields["activeStep"]; present {
+		t.Error("Stepper.activeStep at the declared default Static 0 must normalise away")
+	}
+	kept := mustAccept(t,
+		`{"id":"s","kind":{"$type":"Stepper","activeStep":{"$type":"Static","value":1},"children":[`+tabs1677Child+`]}}`)
+	if _, present := kept.Kind.Fields["activeStep"]; !present {
+		t.Error("a non-default Stepper.activeStep is the document's own value and must survive")
 	}
 	tabs := mustAccept(t, tabs1677Doc(`,"activeIndex":{"$type":"Static","value":0}`))
 	if _, present := tabs.Kind.Fields["activeIndex"]; present {

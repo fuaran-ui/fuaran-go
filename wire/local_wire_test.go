@@ -19,19 +19,19 @@ const localDebounce = `{"id":"form-local-debounce","kind":{"$type":"Form","field
 const localDeclared = `{"id":"form-local-declared","kind":{"$type":"Form","fields":[{"id":"unit-price",` +
 	`"kind":{"$type":"Number","value":{"$type":"Local","codec":{"$type":"Number","decimals":2},` +
 	`"commitTo":"order.unitPrice","flushOn":{"$type":"OnBlur"},"format":"<closure>","initialFrom":` +
-	`{"$type":"State","defaultValue":0,"key":"order.unitPrice"},"parse":"<closure>"}},"label":"Unit price",` +
-	`"required":false}],"onSubmit":{"$type":"Chain","ops":[]},"submitLabel":"Save"}}`
+	`{"$type":"State","defaultValue":0,"key":"order.unitPrice"},"parse":"<closure>"}},"label":"Unit price"}],` +
+	`"onSubmit":{"$type":"Chain","ops":[]},"submitLabel":"Save"}}`
 
 const localCurrencyCodec = `{"id":"f","kind":{"$type":"Form","fields":[{"id":"amount","kind":{"$type":"Number",` +
 	`"value":{"$type":"Local","codec":{"$type":"Currency","isoCode":"GBP"},"commitTo":"order.amount",` +
 	`"flushOn":{"$type":"OnBlur"},"format":"<closure>","initialFrom":{"$type":"State","defaultValue":0,` +
-	`"key":"order.amount"},"parse":"<closure>"}},"label":"Amount","required":false}],"onSubmit":` +
+	`"key":"order.amount"},"parse":"<closure>"}},"label":"Amount"}],"onSubmit":` +
 	`{"$type":"Chain","ops":[]},"submitLabel":"Save"}}`
 
 const localBothDestinations = `{"id":"f","kind":{"$type":"Form","fields":[{"id":"email","kind":{"$type":"Text",` +
 	`"value":{"$type":"Local","commitTo":"form.email","flushOn":{"$type":"OnBlur"},"format":"<closure>",` +
 	`"initialFrom":{"$type":"Static","value":"a@b.c"},"onCommit":"<closure>","parse":"<closure>"}},` +
-	`"label":"Email","required":false}],"onSubmit":{"$type":"Chain","ops":[]},"submitLabel":"Save"}}`
+	`"label":"Email"}],"onSubmit":{"$type":"Chain","ops":[]},"submitLabel":"Save"}}`
 
 // A declared buffer round-trips both new members, and the closure sentinel is
 // emitted only when the document wrote one. The second half is the interesting

@@ -3763,16 +3763,58 @@ func (handArms) armDrawing(w *walkState, obj map[string]any, path string) Obj {
 	return s.build("Drawing")
 }
 
+// decodeSelectValue applies the Phase 1962 `value` rule (WIRE_FORMAT.md, "Select
+// multi-select"), a relation between two sibling keys the IDL row cannot state
+// (it marks `value` optional): a single-select (`multiple` absent or false)
+// REQUIRES `value`; a multi-select carries its selection in `values` and no
+// `value`. On a multi-select a present `value` is decoded exactly as before — so
+// a malformed binding still refuses as any malformed binding does — and then
+// DROPPED (a §16 lenient accept: the control never reads it, and earlier
+// documents carrying a placeholder or a real binding there keep reading). A
+// malformed `multiple` is its own defect (reported when `multiple` itself
+// decodes), so the presence rule is not applied: `value` decodes if present and
+// is not demanded. The raw `multiple` is peeked rather than decoded here so the
+// field decode order — and with it which defect surfaces first — is unchanged.
+func decodeSelectValue(s *spec) {
+	rawMultiple, hasMultiple := s.obj["multiple"]
+	isBoolMultiple := false
+	multiple := false
+	if hasMultiple {
+		// The same unwrap decodeBool applies (a Static-wrapped bool is a bool).
+		multiple, isBoolMultiple = unwrapStaticAny(rawMultiple).(bool)
+	}
+	switch {
+	case !hasMultiple || (isBoolMultiple && !multiple):
+		raw, ok := s.has("value")
+		if !ok {
+			fail(CodeMissingField, s.path+".value", "missing required field 'value'")
+		}
+		s.fields["value"] = decodeBindingStringOpt(s.w, raw, s.path+".value")
+	case !isBoolMultiple:
+		s.field("value", decodeBindingStringOpt)
+	default:
+		raw, ok := s.has("value")
+		if !ok {
+			return
+		}
+		// Decode for its defects, then drop: the value is never stored.
+		decodeBindingStringOpt(s.w, raw, s.path+".value")
+	}
+}
+
 // The handler fields are OPTIONAL: omitted on the wire when the
 // control is declarative; present as the "<closure>" sentinel when
 // closure-authored. `options` / `data` alias `source`. Phase 291 —
-// multiple omitted-when-false; values omitted when absent.
+// values omitted when absent. Phase 1962 — `value` follows the single/multi
+// rule (decodeSelectValue), and `multiple` is an ordinary optional field kept
+// AS AUTHORED: an explicit false survives the round trip (it is not
+// omit-at-default; nodes/select-multiple-false.json).
 func (handArms) armSelect(w *walkState, obj map[string]any, path string) Obj {
 	s := newKindSpec(w, obj, path, &idl.KindSelect)
 	s.field("label", decodeTextSource)
 	s.sentinel("onChange")
 	s.field("source", decodeBindingSelectOptions, "options", "data")
-	s.field("value", decodeBindingStringOpt)
+	decodeSelectValue(s)
 	s.field("disabled", decodeBindingBool)
 	s.field("placeholder", decodeTextSource)
 	s.field("multiple", decodeBool)
@@ -3838,10 +3880,11 @@ func (handArms) armFileUpload(w *walkState, obj map[string]any, path string) Obj
 	s.field("accept", decodeStringArrayField)
 	s.field("label", decodeTextSource)
 	s.field("multiple", decodeBool)
-	// The select handler is a closure slot the canonical encoder
-	// always emits as the sentinel.
-	s.take("onSelect")
-	s.set("onSelect", Str(closureSentinel))
+	// The select handler is an OPTIONAL closure slot (the IDL row and the
+	// §3.2 table have said so since the handler sweep; the spec's prose
+	// caught up in Phase 1962): present as the sentinel when closure-authored,
+	// absent on a declarative upload — kept absent, never synthesised.
+	s.sentinel("onSelect")
 	s.field("disabled", decodeBindingBool)
 	// Phase 1115 — the two ADDITIONAL ingestion gestures, each omitted
 	// at `false`. Neither replaces the picker: the `<input type=file>`
@@ -3999,17 +4042,14 @@ func (handArms) armCustom(w *walkState, obj map[string]any, path string) Obj {
 //   - `onSelect` / `onSelectTag` — `fn` slots, presence-only and
 //     normalised to the closure sentinel.
 //
-// `Stepper.activeStep` IS REQUIRED — the decision Phase 1064 declined to
-// smuggle in, taken here explicitly. The corpus IDL declares it
-// `{"$type":"required"}` where `Tabs.activeIndex` is `omitDefault`, and a
-// stepper carries no default step to fall back to: `Tabs` has one because
-// "the first tab" is a meaningful resting state, while a stepper with no
-// declared step has no position at all, so a host inventing 0 would be
-// choosing a stage in someone else's workflow. The reference host and the
-// Python host both require it. No corpus fixture pins it — which is why it
-// needed deciding rather than reading — so the decision is recorded here
-// and in `wire/tabs_stepper_test.go`, whose `Stepper` case is this host's
-// evidence for it.
+// `Stepper.activeStep` is OMIT-AT-DEFAULT `Static{value=0}` since Phase 2300
+// (the declared-default rule), the `Tabs.activeIndex` shape: the IDL row says
+// so, the generated table applies it, and this host reads the decision from
+// the row rather than recording one. (Until Phase 2300 the row was `required`
+// and this host held it so on the argument that a stepper with no declared
+// step has no position; the vocabulary now declares the position, and
+// `lenient/lenient-2300-declared-default-bindings.json` pins the explicit
+// form normalising away. `wire/tabs_stepper_test.go` carries the pin.)
 //
 // `buildStrict` is deliberately NOT used on the kind: an unknown key there
 // is still preserved structurally (§2 rule 2 tolerance). Strictness is

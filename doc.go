@@ -21,6 +21,22 @@ package fuarango
 
 // Version is the pre-release version of the fuaran-go host.
 //
+// 0.0.6-alpha also carries Phase 2300's first rule and Phase 1962, both
+// WIRE-VISIBLE: a field holding its declared default is omitted from the
+// canonical form on every kind (fifteen rows moved to omit-at-default in the
+// corpus IDL — Flex.wrap, Link.download, List.ordered, CodeBlock.lineNumbers /
+// copyable / highlightLines, FormField.required, FileUpload.multiple,
+// Modal.dismissable, Heading / Image / Badge / Button variant,
+// SegmentedChoice.orientation, Stepper.activeStep), read from the regenerated
+// wire/idl rows, so an explicit default normalises away on decode and an
+// UpdateProp that sets a member to its default stores the absent member; and a
+// multi-select Select carries `values` and no `value` (a single-select without
+// `value` is MISSING_FIELD; a decoded multi-select `value` is dropped), while
+// `Select.multiple` is an ordinary optional member emitted as authored.
+// FileUpload.onSelect and Stepper.onSelect are optional closures, written only
+// when present. Every decoder still accepts the explicit forms. It rides the
+// untagged draft: no exported signature moves.
+//
 // 0.0.6-alpha also carries the Phase 2172 BEHAVIOUR change to ops.Apply: an op
 // whose result holds an id the op installed more than once is refused with
 // DuplicateNodeId. A ReplaceRoot whose payload repeats an id, an EditNode or
