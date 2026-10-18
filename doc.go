@@ -21,6 +21,22 @@ package fuarango
 
 // Version is the pre-release version of the fuaran-go host.
 //
+// 0.0.6-alpha also carries the Phase 2001 BREAKING additions to the dataframe
+// model's closed unions: the column type set gains `decimal` (an exact decimal,
+// each cell its canonical text), the cell union gains the decimal cell, the
+// expression union gains Quotient and Rounded (with the seven rounding modes),
+// the transform union gains Intersect and Except, and the aggregate set gains
+// countDistinct. A consumer switching exhaustively over any of them has a case
+// to add. Two behaviours move with them: a derived or unpivoted column is now
+// typed by its expression wherever the schema decides it (an empty or all-null
+// frame included), and cells spanning two types no widening relates, or a
+// float beside a decimal, are refused rather than typed by the first present
+// cell. The capability twin also raises to Core 0.39.0's semantics: the
+// determinism label is a set of factors, arguments are read strictly, and a
+// declaration passes an admission gate. Conformance is the corpus's
+// transformLaws, decimal and capabilityLaws families. It rides the untagged
+// draft, which already carries a compile-breaking class.
+//
 // 0.0.6-alpha also carries the Phase 2172 BEHAVIOUR change to ops.Apply: an op
 // whose result holds an id the op installed more than once is refused with
 // DuplicateNodeId. A ReplaceRoot whose payload repeats an id, an EditNode or
