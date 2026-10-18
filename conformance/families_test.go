@@ -72,10 +72,9 @@ var hostCorpusFamilies = map[string]any{
 	"sanitization":              "covered",
 	"row-encode":                "covered",
 	"laws/dataframeParity":      "covered",
-	"laws/capabilityLaws": familyPending("the capability twin mirrors an older Core than the vectors are stamped for, " +
-		"so capability_laws_test.go reports the gap and asserts nothing until the twin is raised"),
-	"laws/decimal":   familyPending(lawUnrun),
-	"laws/fieldLaws": familyPending(lawUnrun),
+	"laws/capabilityLaws":       "covered",
+	"laws/decimal":              familyPending(lawUnrun),
+	"laws/fieldLaws":            familyPending(lawUnrun),
 	"laws/transformLaws": familyPending("the committed draw (kitVersion 0.35.0) predates the reference evaluator's typing " +
 		"of an all-null derive that dataframeParity pins, so its two div-by-zero vectors disagree with this evaluator " +
 		"until the producer re-emits the family"),
