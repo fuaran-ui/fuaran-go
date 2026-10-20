@@ -66,6 +66,7 @@ var hostCorpusFamilies = map[string]any{
 	"apply/limitsApply":         "covered",
 	"apply/styleNormaliseApply": "covered",
 	"apply/skeletonApply":       familyPending("the apply engine's suite does not yet run the skeleton-apply vectors"),
+	"chain":                     "covered", // conformance/chain_test.go
 	"dag":                       "covered",
 	"formatting":                familyPending("the host formatter is not yet certified against the golden; carried by fuaran#2328"),
 	"merge-conformance":         "covered",
@@ -75,6 +76,7 @@ var hostCorpusFamilies = map[string]any{
 	"laws/capabilityLaws":       "covered",
 	"laws/decimal":              "covered",
 	"laws/fieldLaws":            familyPending(lawUnrun),
+	"laws/propagationLaws":      familyPending(lawUnrun),
 	"laws/transformLaws":        "covered",
 	"diff/treeDiff":             "covered",
 	"decode-policy":             familyNotApplicable("this host's decoder offers no §23 kind admission policy"),
