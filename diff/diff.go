@@ -32,8 +32,8 @@
 // The recursion descends through the kinds the apply engine addresses
 // structurally — the kinds whose generated idl.json table carries an ordered
 // list-of-nodes slot (idl.OrderedChildren, the one set ops reads too, so a
-// script emitted against a parent always applies) — less the two named in
-// recursionBounded below. A granular kind-field refinement pass (matching the
+// script emitted against a parent always applies), Modal and ScrollArea
+// included. A granular kind-field refinement pass (matching the
 // Python producer's UpdateProp/UpdateState op choices) is a possible
 // follow-up.
 package diff
@@ -43,22 +43,11 @@ import (
 	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
 
-// recursionBounded are the kinds with an ordered child list that this diff
-// does NOT recurse through: a difference inside one escalates to a whole-node
-// replace at the kind's own seat. It is a granularity choice, not a
-// correctness one — the apply engine addresses both kinds' children, so a
-// recursing script would apply too — and it is kept only because the corpus
-// pins this host's output for it: diff/goldens.json's divergent entries
-// modal-interior-change and scrollarea-interior-change record the seat-level
-// replace under hosts["go"]. Lifting it is a regeneration of those two entries
-// and the deletion of this set.
-var recursionBounded = map[string]bool{"Modal": true, "ScrollArea": true}
-
 // structuralChildren returns a layout node's ordered child list, or
 // (nil, false) for a kind this diff does not recurse through.
 func structuralChildren(n wire.Node) ([]wire.Node, bool) {
 	slot, ok := idl.OrderedChildren(n.Kind.Tag)
-	if !ok || recursionBounded[n.Kind.Tag] {
+	if !ok {
 		return nil, false
 	}
 	arr, ok := n.Kind.Fields[slot].(wire.Arr)
