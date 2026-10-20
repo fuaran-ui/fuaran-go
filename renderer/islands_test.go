@@ -85,3 +85,26 @@ func TestIslandPayloadEscapesScriptBreakout(t *testing.T) {
 		t.Error("raw angle brackets inside the payload can break out of the script element")
 	}
 }
+
+// TestIslandCollectionReachesKindHeldArms pins the reference's kind-held reach
+// (fuaran#2297): an island under a Switch case, a Switch default or an
+// ErrorBoundary fallback is collected, in document order — child before
+// fallback, cases in order before the default.
+func TestIslandCollectionReachesKindHeldArms(t *testing.T) {
+	md := func(id string) string {
+		return `{"id":"` + id + `","kind":{"$type":"Markdown","text":"x"}}`
+	}
+	page := `{"id":"page","kind":{"$type":"Box","children":[` +
+		`{"id":"sw","kind":{"$type":"Switch","cases":[{"child":` + md("case-a") + `,"match":"a"},{"child":` + md("case-b") + `,"match":"b"}],"default":` + md("sw-default") + `,"stateKey":"view"}},` +
+		`{"id":"eb","kind":{"$type":"ErrorBoundary","child":` + md("eb-child") + `,"fallback":` + md("eb-fallback") + `}}` +
+		`],"layout":{"$type":"Flex","direction":"Vertical"},"role":"Group"}}`
+	islands := map[string]string{"case-a": "i1", "case-b": "i2", "sw-default": "i3", "eb-child": "i4", "eb-fallback": "i5"}
+	var got []string
+	for _, e := range collectIslands(mustDecode(t, page), islands) {
+		got = append(got, e.id)
+	}
+	want := []string{"i1", "i2", "i3", "i4", "i5"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("collected islands %v, want %v", got, want)
+	}
+}
