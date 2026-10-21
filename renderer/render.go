@@ -586,7 +586,7 @@ func (r *renderer) renderKind(node wire.Node, semanticAttrs []attr) string {
 	case "Chart":
 		return r.chart(fields)
 	case "Map":
-		return r.mapVis(fields)
+		return r.mapVis(node, fields)
 	case "ErrorBoundary":
 		if child, ok := asNode(fields["child"]); ok {
 			return r.renderNode(child)
@@ -2021,7 +2021,14 @@ func (r *renderer) form(fields map[string]wire.Value) string {
 
 func (r *renderer) formField(field wire.Obj) string {
 	fieldID := strValue(field.Fields["id"])
-	label := element("span", []attr{{"class", "fuaran-form-field-label"}}, escapeText(r.text(field.Fields["label"])))
+	// Phase 2391 — the reference host's ruled field shape (its 0.98.0 R4):
+	// `div.fuaran-form-field > label.fuaran-form-label[for] + control[id,
+	// data-fuaran-field] + help`, the label reading "Label *" when required.
+	labelText := r.text(field.Fields["label"])
+	if req, ok := field.Fields["required"].(wire.Bool); ok && bool(req) {
+		labelText += " *"
+	}
+	label := textElement("label", []attr{{"class", "fuaran-form-label"}, {"for", fieldID}}, labelText)
 	kind, _ := field.Fields["kind"].(wire.Obj)
 	var control string
 	// Phase 1677 — three kinds that used to fall through to the bare-input floor
@@ -2040,10 +2047,14 @@ func (r *renderer) formField(field wire.Obj) string {
 		control = r.tokensField(field, fieldID, kind)
 	default:
 		control = voidElement("input", []attr{
-			{"class", "fuaran-form-field-control"}, {"data-fuaran-field", fieldID},
+			{"class", "fuaran-form-field-control"}, {"id", fieldID}, {"data-fuaran-field", fieldID},
 		})
 	}
-	return element("label", []attr{{"class", "fuaran-form-field"}}, label+control)
+	help := ""
+	if h, ok := field.Fields["help"]; ok && h != nil {
+		help = textElement("div", []attr{{"class", "fuaran-form-help"}}, r.text(h))
+	}
+	return element("div", []attr{{"class", "fuaran-form-field"}}, label+control+help)
 }
 
 // combobox is THE SSR FLOOR for §3.6.9, and the whole point of it is that it is
@@ -2079,6 +2090,7 @@ func (r *renderer) combobox(field wire.Obj, fieldID string, kind wire.Obj) strin
 	}
 	inputAttrs := []attr{
 		{"class", "fuaran-form-field-control fuaran-combobox-input"},
+		{"id", fieldID},
 		{"data-fuaran-field", fieldID},
 		{"type", "text"},
 		{"list", listID},
@@ -2723,13 +2735,55 @@ func (r *renderer) chart(fields map[string]wire.Value) string {
 	}, titleHTML+body)
 }
 
-func (r *renderer) mapVis(fields map[string]wire.Value) string {
-	count := seqLen(r.source(fields["source"]))
-	return textElement("div", []attr{
+// mapVis is the reference host's ruled Map (its 0.98.0 R12, Phase 2391): the
+// loading slot while the source is unresolved, else the served placeholder,
+// carrying one `li` per marker once the markers resolve.
+func (r *renderer) mapVis(node wire.Node, fields map[string]wire.Value) string {
+	resolved := r.source(fields["source"])
+	if resolved == nil {
+		if loading, ok := r.stateLoading(node); ok {
+			return r.renderNode(loading)
+		}
+	}
+	var markers []wire.Obj
+	if arr, ok := resolved.(wire.Arr); ok {
+		for _, m := range arr {
+			if obj, ok := m.(wire.Obj); ok {
+				markers = append(markers, obj)
+			}
+		}
+	}
+	count := strconv.Itoa(len(markers))
+	inner := escapeText("[Map: " + count + " markers " + emDash + " hydrates client-side]")
+	if len(markers) > 0 {
+		var items strings.Builder
+		for _, m := range markers {
+			items.WriteString(textElement("li", []attr{{"class", "fuaran-map-marker"}}, markerText(m)))
+		}
+		inner += element("ul", []attr{{"class", "fuaran-map-marker-list"}}, items.String())
+	}
+	return element("div", []attr{
 		{"class", "fuaran-map fuaran-map-ssr-placeholder"},
 		{"data-fuaran-ssr-placeholder", "Map"},
-		{"data-fuaran-marker-count", strconv.Itoa(count)},
-	}, "[Map: "+strconv.Itoa(count)+" markers "+emDash+" hydrates client-side]")
+		{"data-fuaran-marker-count", count},
+	}, inner)
+}
+
+// markerText is one Map marker as the reference host serves it:
+// `label @ (lat, lon)`, each coordinate to four decimal places.
+func markerText(marker wire.Obj) string {
+	coord := func(v wire.Value) string {
+		f := 0.0
+		switch n := v.(type) {
+		case wire.Int:
+			f = float64(n)
+		case wire.Float:
+			f = float64(n)
+		}
+		return strconv.FormatFloat(f, 'f', 4, 64)
+	}
+	label, _ := marker.Fields["label"].(wire.Str)
+	return string(label) + " @ (" + coord(marker.Fields["latitude"]) + ", " + coord(marker.Fields["longitude"]) + ")"
 }
 
 // ── Structural ──────────────────────────────────────────────────────────────

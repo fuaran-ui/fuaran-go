@@ -195,7 +195,8 @@ func (r *renderer) colorField(field wire.Obj, fieldID string, kind wire.Obj) str
 		value = string(v)
 	}
 	attrs := []attr{
-		{"class", "fuaran-form-field-control"},
+		{"class", "fuaran-form-input fuaran-color-input"},
+		{"id", fieldID},
 		{"data-fuaran-field", fieldID},
 		{"type", "color"},
 	}
@@ -273,6 +274,7 @@ func (r *renderer) tokensField(field wire.Obj, fieldID string, kind wire.Obj) st
 
 	inputAttrs := []attr{
 		{"class", "fuaran-form-field-control fuaran-tokens-input"},
+		{"id", fieldID},
 		{"data-fuaran-field", fieldID},
 		{"type", "text"},
 	}
@@ -353,6 +355,7 @@ func (r *renderer) ratingField(field wire.Obj, fieldID string, kind wire.Obj) st
 			{"class", "fuaran-form-field-control fuaran-rating fuaran-rating-static"},
 			{"role", "img"},
 			{"aria-label", ratingValueText(max, shown)},
+			{"id", fieldID},
 			{"data-fuaran-field", fieldID},
 		}, stars.String())
 	}
@@ -376,6 +379,7 @@ func (r *renderer) ratingField(field wire.Obj, fieldID string, kind wire.Obj) st
 
 	return element("span", []attr{
 		{"class", "fuaran-form-field-control fuaran-rating fuaran-rating-choices"},
+		{"id", fieldID},
 		{"data-fuaran-field", fieldID},
 		{"data-fuaran-rating-value", ratingValueText(max, shown)},
 	}, stars.String()+choices.String())

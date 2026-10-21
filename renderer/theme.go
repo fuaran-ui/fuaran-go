@@ -55,7 +55,6 @@ var kindClassMap = map[string]string{
 	// Visualisation
 	"DataGrid": "fuaran-kind-grid",
 	"Chart":    "fuaran-kind-chart",
-	"Table":    "fuaran-kind-table",
 	"Map":      "fuaran-kind-map",
 	// Structural
 	"ErrorBoundary": "fuaran-kind-error-boundary",
