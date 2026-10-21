@@ -200,10 +200,34 @@ func compareCells(a, b Cell) (int, bool) {
 	if a.Kind == TypeBool && b.Kind == TypeBool {
 		return sign(b2i(a.Value.(bool)) - b2i(b.Value.(bool))), true
 	}
-	if a.Kind == b.Kind && (a.Kind == TypeString || a.Kind == TypeDate || a.Kind == TypeTimestamp) {
+	if a.Kind == TypeTimestamp && b.Kind == TypeTimestamp {
+		return strCmp(instantKey(a.Value.(string)), instantKey(b.Value.(string))), true
+	}
+	if a.Kind == b.Kind && (a.Kind == TypeString || a.Kind == TypeDate) {
 		return strCmp(a.Value.(string), b.Value.(string)), true
 	}
 	return 0, false
+}
+
+// instantKey orders canonical instant text by the instant it names (WIRE_FORMAT §3.6.25). The
+// text drops an all-zero fraction and every trailing zero, so a whole second ("…:00Z") and a
+// fraction of that same second ("…:00.5Z") do not order by their bytes: '.' sorts below 'Z'.
+// The key pads the fraction to nanoseconds, so its bytes order as the instants do. Text that is
+// not canonical keeps its own bytes as the key.
+func instantKey(s string) string {
+	if len(s) < 20 || s[len(s)-1] != 'Z' {
+		return s
+	}
+	fraction := ""
+	if s[19] == '.' {
+		fraction = s[20 : len(s)-1]
+	} else if len(s) != 20 {
+		return s
+	}
+	if len(fraction) > 9 {
+		return s
+	}
+	return s[:19] + fraction + strings.Repeat("0", 9-len(fraction))
 }
 
 func sign(x float64) int {

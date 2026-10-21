@@ -72,3 +72,24 @@ func TestDivByZeroIsNull(t *testing.T) {
 		t.Fatalf("1/0 should be null, got %v (err %v)", got, err)
 	}
 }
+
+// Phase 2206: timestamp cells order by the instant, not by their canonical text. A whole second
+// is written without a fraction, so "…:00Z" and "…:00.5Z" would order backwards byte-for-byte.
+func TestCompareCellsTimestampOrdersByInstant(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"2025-07-08T18:40:00Z", "2025-07-08T18:40:00.5Z", -1},
+		{"2025-07-08T18:40:00.5Z", "2025-07-08T18:40:00Z", 1},
+		{"2025-07-08T18:40:00.12Z", "2025-07-08T18:40:00.123456789Z", -1},
+		{"2025-07-08T18:40:00.9Z", "2025-07-08T18:40:01Z", -1},
+		{"2025-07-08T18:40:00.5Z", "2025-07-08T18:40:00.5Z", 0},
+	}
+	for _, c := range cases {
+		got, ok := compareCells(CellTimestamp(c.a), CellTimestamp(c.b))
+		if !ok || got != c.want {
+			t.Fatalf("compareCells(%s, %s) = %d, %v; want %d", c.a, c.b, got, ok, c.want)
+		}
+	}
+}
