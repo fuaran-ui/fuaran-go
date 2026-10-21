@@ -37,9 +37,6 @@ import (
 func findCorpusDir(t *testing.T) string {
 	t.Helper()
 	corpus := corpusroot.ForTest(t)
-	if corpus == "" {
-		t.Skip("wire-format-fixtures corpus not found; skipping (standalone checkout)")
-	}
 	return corpus
 }
 

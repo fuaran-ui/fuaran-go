@@ -26,12 +26,12 @@ func dashRoot(children ...string) string {
 
 func stack1(children ...string) string {
 	return `{"id":"stack-1","kind":{"$type":"Box","children":[` + strings.Join(children, ",") +
-		`],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}`
+		`],"layout":{"$type":"Flex","direction":"Vertical"},"role":"Group"}}`
 }
 
 func card1(children ...string) string {
 	return `{"id":"card-1","kind":{"$type":"Box","children":[` + strings.Join(children, ",") +
-		`],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Card"}}`
+		`],"layout":{"$type":"Flex","direction":"Vertical"},"role":"Card"}}`
 }
 
 // withNodeExtra appends an extras section (style / state) to a node's JSON.
@@ -61,10 +61,18 @@ func gridBase(columns ...string) string {
 // in `wire/stacked_omit_default_test.go`.
 const chartBase = `{"id":"chart-1","kind":{"$type":"Chart","kind":"Bar","source":{"$type":"Static","value":[]},"xField":"month","yFields":["revenue","cost"]}}`
 
+// formBase builds the two-field form in its canonical form: `required` omits at
+// its declared default `false` (Phase 2300), so only a `"true"` argument writes it.
 func formBase(nameRequired, ageRequired string) string {
+	required := func(v string) string {
+		if v == "true" {
+			return `,"required":true`
+		}
+		return ""
+	}
 	return `{"id":"form-1","kind":{"$type":"Form","fields":[` +
-		`{"id":"name","kind":{"$type":"Text","value":{"$type":"Static","value":""}},"label":"Name","required":` + nameRequired + `},` +
-		`{"id":"age","kind":{"$type":"Number","value":{"$type":"Static","value":0}},"label":"Age","required":` + ageRequired + `}` +
+		`{"id":"name","kind":{"$type":"Text","value":{"$type":"Static","value":""}},"label":"Name"` + required(nameRequired) + `},` +
+		`{"id":"age","kind":{"$type":"Number","value":{"$type":"Static","value":0}},"label":"Age"` + required(ageRequired) + `}` +
 		`],"onSubmit":{"$type":"Chain","ops":[]},"submitLabel":"Save"}}`
 }
 

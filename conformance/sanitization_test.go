@@ -55,9 +55,6 @@ type sanitizationManifest struct {
 func loadSanitizationManifest(t *testing.T) *sanitizationManifest {
 	t.Helper()
 	corpus := corpusroot.ForTest(t)
-	if corpus == "" {
-		return nil
-	}
 	candidate := filepath.Join(corpus, "sanitization", "manifest.json")
 	if _, err := os.Stat(candidate); err != nil {
 		return nil

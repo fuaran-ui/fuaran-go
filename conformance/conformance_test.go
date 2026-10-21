@@ -12,12 +12,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/diff"
 	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
+	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -33,10 +34,8 @@ type manifestFixture struct {
 }
 
 type corpusManifest struct {
-	Version        int               `json:"version"`
-	Kinds          []string          `json:"kinds"`
-	FormFieldKinds []string          `json:"formFieldKinds"`
-	Fixtures       []manifestFixture `json:"fixtures"`
+	Version  int               `json:"version"`
+	Fixtures []manifestFixture `json:"fixtures"`
 }
 
 // loadCorpus locates the corpus and parses its manifest, skipping the calling
@@ -44,9 +43,6 @@ type corpusManifest struct {
 func loadCorpus(t *testing.T) (string, corpusManifest) {
 	t.Helper()
 	corpus := corpusroot.ForTest(t)
-	if corpus == "" {
-		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
-	}
 	raw, err := os.ReadFile(filepath.Join(corpus, "manifest.json"))
 	if err != nil {
 		t.Fatalf("reading manifest: %v", err)
@@ -59,93 +55,6 @@ func loadCorpus(t *testing.T) (string, corpusManifest) {
 		t.Fatal("corpus manifest declares no fixtures")
 	}
 	return corpus, m
-}
-
-// TestNodeKindSetMatchesManifest is the Phase 548 kind-set attestation pin: the
-// go decoder's emittable NodeKind vocabulary (CanonicalNodeKinds) must equal the
-// generated manifest `kinds` enumeration. A vocabulary commit that skips this
-// host fails here with a *named* missing kind ("go decoder lacks Drawing"), so
-// the drift class dies at the host's next test run rather than at a later audit.
-func TestNodeKindSetMatchesManifest(t *testing.T) {
-	_, m := loadCorpus(t)
-	if len(m.Kinds) == 0 {
-		t.Fatal("manifest declares no 'kinds' array — regenerate the corpus with --emit-corpus")
-	}
-
-	manifest := make(map[string]bool, len(m.Kinds))
-	for _, k := range m.Kinds {
-		manifest[k] = true
-	}
-
-	decoder := make(map[string]bool)
-	for _, k := range wire.CanonicalNodeKinds() {
-		decoder[k] = true
-	}
-
-	var missing, extra []string
-	for k := range manifest {
-		if !decoder[k] {
-			missing = append(missing, k)
-		}
-	}
-	for k := range decoder {
-		if !manifest[k] {
-			extra = append(extra, k)
-		}
-	}
-	sort.Strings(missing)
-	sort.Strings(extra)
-
-	if len(missing) > 0 {
-		t.Errorf("manifest kinds the go decoder lacks (add the decoder arm): %v", missing)
-	}
-	if len(extra) > 0 {
-		t.Errorf("go decoder kinds the manifest omits (regenerate with --emit-corpus): %v", extra)
-	}
-}
-
-// TestFormFieldKindSetMatchesManifest is the Phase 746 control-vocabulary
-// attestation — the FormFieldKind twin of TestNodeKindSetMatchesManifest above.
-// The kind-set pin only ever covered NodeKind, so a control-vocabulary commit
-// that skipped this host stayed silent until a fixture happened to exercise it;
-// this leg names the missing case ("go decoder lacks DateRange") at the host's
-// next test run instead.
-func TestFormFieldKindSetMatchesManifest(t *testing.T) {
-	_, m := loadCorpus(t)
-	if len(m.FormFieldKinds) == 0 {
-		t.Fatal("manifest declares no 'formFieldKinds' array — regenerate the corpus with --emit-corpus")
-	}
-
-	manifest := make(map[string]bool, len(m.FormFieldKinds))
-	for _, k := range m.FormFieldKinds {
-		manifest[k] = true
-	}
-
-	decoder := make(map[string]bool)
-	for _, k := range wire.CanonicalFormFieldKinds() {
-		decoder[k] = true
-	}
-
-	var missing, extra []string
-	for k := range manifest {
-		if !decoder[k] {
-			missing = append(missing, k)
-		}
-	}
-	for k := range decoder {
-		if !manifest[k] {
-			extra = append(extra, k)
-		}
-	}
-	sort.Strings(missing)
-	sort.Strings(extra)
-
-	if len(missing) > 0 {
-		t.Errorf("manifest form-field kinds the go decoder lacks (add the decoder arm): %v", missing)
-	}
-	if len(extra) > 0 {
-		t.Errorf("go decoder form-field kinds the manifest omits (regenerate with --emit-corpus): %v", extra)
-	}
 }
 
 // readFixture reads a fixture payload, trimming at most one trailing newline
@@ -299,230 +208,70 @@ func TestReject(t *testing.T) {
 	}
 }
 
-// TestDiscriminatorExhaustiveness is the corpus-driven exhaustiveness guard —
-// the mitigation for Go's lack of compile-time totality over the closed
-// "$type" vocabularies: every kind discriminator appearing anywhere in a
-// round-trip node fixture, and every op discriminator (top-level or inside a
-// Batch), must be a case the decoder's tables recognise. When the corpus
-// grows a new case under the forward-coupling rule, this leg goes red naming
-// the missing case even before the round-trip leg does.
-func TestDiscriminatorExhaustiveness(t *testing.T) {
-	corpus, m := loadCorpus(t)
-
-	knownKinds := make(map[string]bool)
-	for _, k := range wire.KnownNodeKinds() {
-		knownKinds[k] = true
-	}
-	knownOps := make(map[string]bool)
-	for _, k := range wire.KnownOpKinds() {
-		knownOps[k] = true
-	}
-	knownControls := make(map[string]bool)
-	for _, k := range wire.CanonicalFormFieldKinds() {
-		knownControls[k] = true
-	}
-
-	seenKinds := make(map[string]bool)
-	seenOps := make(map[string]bool)
-	seenControls := make(map[string]bool)
-	for _, fx := range m.Fixtures {
-		switch fx.Kind {
-		case "node-round-trip":
-			var raw any
-			if err := json.Unmarshal([]byte(readFixture(t, corpus, fx.InputFile)), &raw); err != nil {
-				t.Fatalf("%s: %v", fx.ID, err)
-			}
-			collectNodeKinds(raw, seenKinds, seenControls)
-		case "op-round-trip":
-			var raw any
-			if err := json.Unmarshal([]byte(readFixture(t, corpus, fx.InputFile)), &raw); err != nil {
-				t.Fatalf("%s: %v", fx.ID, err)
-			}
-			collectOpKinds(raw, seenOps, seenKinds, seenControls)
-		default:
-			// lenient-accept / envelope / elicitation families land with their
-			// own roadmap tiers.
+// TestStructuralKindsApplyAndDiff — Phase 2297's acceptance for the kinds that
+// used to decode structurally (absorbing Phase 1926). Their nested nodes now
+// decode as wire.Node and the apply engine, the diff and the island walk all
+// read one layout set from the generated tables, so:
+//   - InsertChild into a decoded SplitPanel keeps the children it had;
+//   - InsertChild into a Modal (and a ScrollArea) succeeds;
+//   - Diff is non-empty for trees that differ only under an ErrorBoundary, a
+//     SplitPanel or a Disclosure, and Apply(Diff(a, b), a) == b.
+func TestStructuralKindsApplyAndDiff(t *testing.T) {
+	decode := func(doc string) wire.Node {
+		t.Helper()
+		n, err := wire.DecodeNode(doc)
+		if err != nil {
+			t.Fatalf("DecodeNode(%s): %v", doc, err)
 		}
+		return n
+	}
+	leaf := func(id, text string) string {
+		return `{"id":"` + id + `","kind":{"$type":"Markdown","text":"` + text + `"}}`
+	}
+	insert := func(parent string) wire.Obj {
+		return wire.Obj{Tag: "InsertChild", Fields: map[string]wire.Value{
+			"parentId": wire.Str(parent),
+			"child":    decode(leaf("new", "inserted")),
+		}}
 	}
 
-	for kind := range seenKinds {
-		if !knownKinds[kind] {
-			t.Errorf("corpus carries node kind %q the decoder does not recognise — add its case (forward-coupling rule)", kind)
-		}
-	}
-	for op := range seenOps {
-		if !knownOps[op] {
-			t.Errorf("corpus carries op kind %q the decoder does not recognise — add its case (forward-coupling rule)", op)
-		}
-	}
-	for control := range seenControls {
-		if !knownControls[control] {
-			t.Errorf("corpus carries form-field kind %q the decoder does not recognise — add its case (forward-coupling rule)", control)
-		}
-	}
-	if len(seenKinds) == 0 || len(seenOps) == 0 || len(seenControls) == 0 {
-		t.Fatal("exhaustiveness guard collected no discriminators")
-	}
-	t.Logf("exhaustiveness guard: %d node kinds, %d op kinds, %d form-field kinds exercised by the corpus",
-		len(seenKinds), len(seenOps), len(seenControls))
-}
-
-// collectNodeKinds treats raw as a node envelope and walks its genuine
-// node-bearing positions only (children / child / fallback / default / body /
-// switch cases / fragment-arg + mount-input slot trees / state surfaces). A
-// blanket id+kind heuristic would over-match — a Form FIELD also carries an
-// {id, kind} envelope whose kind.$type is a FormFieldKind, not a NodeKind. Those
-// control discriminators are a SEPARATE closed vocabulary, swept into `controls`
-// by collectControlKinds below rather than left unattested (Phase 746).
-func collectNodeKinds(raw any, kinds, controls map[string]bool) {
-	obj, ok := raw.(map[string]any)
-	if !ok {
-		return
-	}
-	kind, ok := obj["kind"].(map[string]any)
-	if !ok {
-		return
-	}
-	if tag, ok := kind["$type"].(string); ok {
-		kinds[tag] = true
-		collectControlKinds(kind, tag, controls)
-	}
-	if state, ok := obj["state"].(map[string]any); ok {
-		collectNodeKinds(state["onLoading"], kinds, controls)
-		collectNodeKinds(state["onEmpty"], kinds, controls)
-	}
-	if children, ok := kind["children"].([]any); ok {
-		for _, c := range children {
-			collectNodeKinds(c, kinds, controls)
-		}
-	}
-	collectNodeKinds(kind["child"], kinds, controls)
-	collectNodeKinds(kind["fallback"], kinds, controls)
-	collectNodeKinds(kind["default"], kinds, controls)
-	collectNodeKinds(kind["body"], kinds, controls)
-	if cases, ok := kind["cases"].([]any); ok {
-		for _, c := range cases {
-			if caseObj, ok := c.(map[string]any); ok {
-				collectNodeKinds(caseObj["child"], kinds, controls)
-			}
-		}
-	}
-	for _, slotMapKey := range []string{"args", "inputs"} {
-		if slots, ok := kind[slotMapKey].(map[string]any); ok {
-			for _, v := range slots {
-				if arg, ok := v.(map[string]any); ok {
-					collectNodeKinds(arg["tree"], kinds, controls)
-				}
-			}
-		}
-	}
-}
-
-// controlCarriers is the FormFieldKind carrier rule (WIRE_FORMAT §11.2), keyed
-// by the PARENT node kind's $type — never by property name. A property-name
-// heuristic attests the wrong family: DataGrid.columns[].kind.$type is a
-// CellKindErased and shares spellings (Text, Date, Checkbox) with the control
-// vocabulary, so sweeping every ".kind" under a "columns"-ish key would report
-// green while measuring a different closed set.
-var controlCarriers = map[string]string{
-	"Form":    "fields",
-	"Filters": "items",
-}
-
-// collectControlKinds records the FormFieldKind discriminators carried by one
-// node kind, when that kind is a control carrier. Post-unification forms and
-// filter chips share ONE control vocabulary, so both carriers feed one set.
-func collectControlKinds(kind map[string]any, tag string, controls map[string]bool) {
-	carrier, ok := controlCarriers[tag]
-	if !ok {
-		return
-	}
-	items, ok := kind[carrier].([]any)
-	if !ok {
-		return
-	}
-	for _, item := range items {
-		itemObj, ok := item.(map[string]any)
-		if !ok {
+	for _, c := range []struct{ name, tree, parent, want string }{
+		{"split panel keeps its children",
+			`{"id":"p","kind":{"$type":"SplitPanel","children":[` + leaf("a", "A") + `],"weight":0.5}}`, "p",
+			`{"id":"p","kind":{"$type":"SplitPanel","children":[` + leaf("a", "A") + `,` + leaf("new", "inserted") + `],"weight":0.5}}`},
+		{"modal",
+			`{"id":"m","kind":{"$type":"Modal","children":[],"open":{"$type":"Static","value":true}}}`, "m",
+			`{"id":"m","kind":{"$type":"Modal","children":[` + leaf("new", "inserted") + `],"open":{"$type":"Static","value":true}}}`},
+		{"scroll area",
+			`{"id":"s","kind":{"$type":"ScrollArea","children":[],"orientation":"Vertical"}}`, "s",
+			`{"id":"s","kind":{"$type":"ScrollArea","children":[` + leaf("new", "inserted") + `],"orientation":"Vertical"}}`},
+	} {
+		got, err := ops.Apply(insert(c.parent), decode(c.tree))
+		if err != nil {
+			t.Errorf("%s: InsertChild refused: %v", c.name, err)
 			continue
 		}
-		control, ok := itemObj["kind"].(map[string]any)
-		if !ok {
+		if enc := encNode(t, got); enc != c.want {
+			t.Errorf("%s: InsertChild gave\n %s\nwant\n %s", c.name, enc, c.want)
+		}
+	}
+
+	for _, c := range []struct{ name, a, b string }{
+		{"under an ErrorBoundary",
+			`{"id":"e","kind":{"$type":"ErrorBoundary","child":` + leaf("c", "before") + `,"fallback":` + leaf("f", "F") + `}}`,
+			`{"id":"e","kind":{"$type":"ErrorBoundary","child":` + leaf("c", "after") + `,"fallback":` + leaf("f", "F") + `}}`},
+		{"under a SplitPanel",
+			`{"id":"p","kind":{"$type":"SplitPanel","children":[` + leaf("a", "before") + `],"weight":0.5}}`,
+			`{"id":"p","kind":{"$type":"SplitPanel","children":[` + leaf("a", "after") + `],"weight":0.5}}`},
+		{"under a Disclosure",
+			`{"id":"d","kind":{"$type":"Disclosure","children":[` + leaf("a", "before") + `],"defaultOpen":true,"heading":"H","open":{"$type":"Static","value":true}}}`,
+			`{"id":"d","kind":{"$type":"Disclosure","children":[` + leaf("a", "after") + `],"defaultOpen":true,"heading":"H","open":{"$type":"Static","value":true}}}`},
+	} {
+		a, b := decode(c.a), decode(c.b)
+		if len(diff.Diff(a, b)) == 0 {
+			t.Errorf("%s: the diff of two different trees is empty", c.name)
 			continue
 		}
-		if controlTag, ok := control["$type"].(string); ok {
-			controls[controlTag] = true
-		}
-	}
-}
-
-// collectOpKinds records an op fixture's top-level discriminator, recursing
-// into Batch members and sweeping the node-bearing op fields for kinds.
-func collectOpKinds(raw any, ops, kinds, controls map[string]bool) {
-	obj, ok := raw.(map[string]any)
-	if !ok {
-		return
-	}
-	if tag, ok := obj["$type"].(string); ok {
-		ops[tag] = true
-	}
-	if members, ok := obj["ops"].([]any); ok {
-		for _, m := range members {
-			collectOpKinds(m, ops, kinds, controls)
-		}
-	}
-	collectNodeKinds(obj["child"], kinds, controls)     // InsertChild
-	collectNodeKinds(obj["node"], kinds, controls)      // ReplaceRoot
-	if state, ok := obj["state"].(map[string]any); ok { // UpdateState
-		collectNodeKinds(state["onLoading"], kinds, controls)
-		collectNodeKinds(state["onEmpty"], kinds, controls)
-	}
-}
-
-// TestCorpusFamiliesBeyondTheFloorAreNamed prints, by name and count, every
-// corpus family this host does not run.
-//
-// A declared lag and a silent omission are indistinguishable from a green
-// suite, and only one of them is honest. The contract-card family is a
-// deliberate lag here, as it is on the Python host — but a reader has no way to
-// tell that from a suite which simply never mentions it. The Rust host has
-// printed this list since Phase 553; this is the same declaration.
-//
-// It always passes: the output IS the declaration. The one assertion guards the
-// list going stale in the other direction — a family named as covered that the
-// corpus no longer holds, which would mean this list, and not the corpus, is
-// what changed.
-func TestCorpusFamiliesBeyondTheFloorAreNamed(t *testing.T) {
-	_, m := loadCorpus(t)
-	covered := map[string]bool{
-		"node-round-trip":           true,
-		"op-round-trip":             true,
-		"reject":                    true,
-		"lenient-accept":            true,
-		"envelope-round-trip":       true,
-		"envelope-reject":           true,
-		"elicitation-round-trip":    true,
-		"elicitation-reject":        true,
-		"elicitation-answer-accept": true,
-		"elicitation-answer-reject": true,
-	}
-	present := map[string]int{}
-	for _, fx := range m.Fixtures {
-		present[fx.Kind]++
-	}
-	kinds := make([]string, 0, len(present))
-	for kind := range present {
-		kinds = append(kinds, kind)
-	}
-	sort.Strings(kinds)
-	for _, kind := range kinds {
-		if !covered[kind] {
-			t.Logf("skipped family (declared lag, not covered by this host): %s x %d", kind, present[kind])
-		}
-	}
-	for kind := range covered {
-		if present[kind] == 0 {
-			t.Errorf("named as covered but absent from the corpus: %s", kind)
-		}
+		assertRoundTrip(t, a, b)
 	}
 }

@@ -2,8 +2,14 @@ package wire
 
 import (
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
 
 func mustEncode(t *testing.T, v Value) string {
@@ -213,32 +219,226 @@ func TestOpRejectsSentinelValue(t *testing.T) {
 	}
 }
 
-// Every kind with a typed decoder must be a recognised kind, and the
-// special-cased handler (Box) must not also carry a builder — a builder for an
-// unroutable kind would be dead code. The
-// validator's required-fields registry must likewise name only routable kinds.
-func TestKindSchemasAreRegistered(t *testing.T) {
-	for kind := range kindBuilders {
-		if !knownKinds.has(kind) {
-			t.Errorf("kindBuilders[%q] is not in knownKinds", kind)
+// Phase 2291 — PatchStyle's StyleDelta keeps every member it sets, a default
+// token included: absence means "leave the field as it is", so a default must
+// survive the round trip where a SemanticStyle would normalise it away.
+func TestPatchStyleRoundTrip(t *testing.T) {
+	for _, in := range []string{
+		`{"$type":"PatchStyle","style":{"tone":"Success","voice":"Display"},"target":"metric-1"}`,
+		`{"$type":"PatchStyle","style":{"tone":"Default"},"target":"metric-1"}`,
+		`{"$type":"PatchStyle","style":{"direction":"auto","emphasis":"Normal","role":"None","tone":"Default","voice":"Default","weight":"Standard"},"target":"metric-1"}`,
+		`{"$type":"Batch","ops":[{"$type":"PatchStyle","style":{"weight":"Spacious"},"target":"a"}]}`,
+	} {
+		op, err := DecodeOp(in)
+		if err != nil {
+			t.Fatalf("DecodeOp(%s): %v", in, err)
 		}
-		if kind == "Box" {
-			t.Errorf("kindBuilders[%q] is shadowed by a dedicated handler", kind)
+		out, err := EncodeOp(op)
+		if err != nil {
+			t.Fatalf("EncodeOp: %v", err)
+		}
+		if out != in {
+			t.Errorf("round trip diverged:\n got %s\nwant %s", out, in)
 		}
 	}
-	for kind := range requiredKindFields {
-		if !knownKinds.has(kind) {
-			t.Errorf("requiredKindFields[%q] is not in knownKinds", kind)
-		}
+	// The same payload as an UpdateStyle still normalises the default away.
+	op, err := DecodeOp(`{"$type":"UpdateStyle","style":{"tone":"Default"},"target":"metric-1"}`)
+	if err != nil {
+		t.Fatalf("DecodeOp: %v", err)
 	}
-	for op := range opSchemas {
-		if !opCases.has(op) {
-			t.Errorf("opSchemas[%q] is not in opCases", op)
-		}
+	if out, _ := EncodeOp(op); out != `{"$type":"UpdateStyle","style":{},"target":"metric-1"}` {
+		t.Errorf("UpdateStyle default normalisation changed: %s", out)
 	}
-	for _, op := range KnownOpKinds() {
-		if _, ok := opSchemas[op]; !ok {
-			t.Errorf("op case %q has no schema", op)
+}
+
+func TestPatchStyleRejects(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		code  DecodeErrorCode
+		path  string
+	}{
+		{"empty delta", `{"$type":"PatchStyle","style":{},"target":"n1"}`, CodeWrongType, "$.style"},
+		{"only unknown keys", `{"$type":"PatchStyle","style":{"colour":"red"},"target":"n1"}`, CodeWrongType, "$.style"},
+		{"unknown token", `{"$type":"PatchStyle","style":{"tone":"Neon"},"target":"n1"}`, CodeUnknownDUCase, "$.style.tone"},
+		{"non-string token", `{"$type":"PatchStyle","style":{"direction":true},"target":"n1"}`, CodeWrongType, "$.style.direction"},
+		{"missing style", `{"$type":"PatchStyle","target":"n1"}`, CodeMissingField, "$.style"},
+		{"missing target", `{"$type":"PatchStyle","style":{"tone":"Brand"}}`, CodeMissingField, "$.target"},
+		{"style not an object", `{"$type":"PatchStyle","style":"Brand","target":"n1"}`, CodeWrongType, "$.style"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := DecodeOp(c.input)
+			var derr *DecodeError
+			if !errors.As(err, &derr) {
+				t.Fatalf("expected a *DecodeError, got %v", err)
+			}
+			if derr.Code != c.code || derr.Path != c.path {
+				t.Errorf("got %s at %s, want %s at %s", derr.Code, derr.Path, c.code, c.path)
+			}
+		})
+	}
+}
+
+// TestHandDecodersReadOnlyDeclaredRows — the union-case and record twin of
+// TestHandArmsReadOnlyDeclaredRows (Phase 2330). Every hand union or record
+// decoder reads its fields through a spec bound to its row set, and every key it
+// reads by name is a row of that set: of the record, or of the union case named
+// by the switch clause the read sits in (of any case of the union where the
+// read is outside a literal clause). spec.field and spec.has read an undeclared
+// key as optional, so this is what keeps that path empty.
+func TestHandDecodersReadOnlyDeclaredRows(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "decode.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	specs, reads := 0, 0
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
 		}
+		// The row set the function's spec is bound to.
+		var record *idl.Record
+		var union *idl.Union
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) < 4 {
+				return true
+			}
+			name, ok := call.Fun.(*ast.Ident)
+			if !ok || (name.Name != "newCaseSpec" && name.Name != "newRecordSpec") {
+				return true
+			}
+			sel, ok := call.Args[3].(*ast.UnaryExpr)
+			if !ok {
+				return true
+			}
+			ref, ok := sel.X.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			specs++
+			switch {
+			case strings.HasPrefix(ref.Sel.Name, "Record"):
+				record, _ = idl.RecordByName(strings.TrimPrefix(ref.Sel.Name, "Record"))
+			case strings.HasPrefix(ref.Sel.Name, "Union"):
+				union, _ = idl.UnionByName(strings.TrimPrefix(ref.Sel.Name, "Union"))
+			}
+			if record == nil && union == nil {
+				t.Errorf("%s binds a spec to %s, which idl.json does not declare", fn.Name.Name, ref.Sel.Name)
+			}
+			return true
+		})
+		if record == nil && union == nil {
+			continue
+		}
+		var clauses []*ast.CaseClause
+		var visit func(n ast.Node) bool
+		visit = func(n ast.Node) bool {
+			if cc, ok := n.(*ast.CaseClause); ok {
+				clauses = append(clauses, cc)
+				for _, stmt := range cc.Body {
+					ast.Inspect(stmt, visit)
+				}
+				clauses = clauses[:len(clauses)-1]
+				return false
+			}
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) == 0 {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || (sel.Sel.Name != "field" && sel.Sel.Name != "has") {
+				return true
+			}
+			if x, ok := sel.X.(*ast.Ident); !ok || x.Name != "s" {
+				return true
+			}
+			lit, ok := call.Args[0].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			key, _ := strconv.Unquote(lit.Value)
+			reads++
+			if record != nil {
+				if _, ok := record.Field(key); !ok {
+					t.Errorf("%s reads %q, which is not a row of idl.json's %s", fn.Name.Name, key, record.Name)
+				}
+				return true
+			}
+			var tags []string
+			if len(clauses) > 0 {
+				for _, e := range clauses[len(clauses)-1].List {
+					if l, ok := e.(*ast.BasicLit); ok && l.Kind == token.STRING {
+						tag, _ := strconv.Unquote(l.Value)
+						if _, declared := union.Case(tag); declared {
+							tags = append(tags, tag)
+						}
+					}
+				}
+			}
+			if len(tags) == 0 {
+				tags = union.CaseTags()
+			}
+			for _, tag := range tags {
+				if c, _ := union.Case(tag); c != nil {
+					if _, ok := c.Field(key); ok {
+						return true
+					}
+				}
+			}
+			t.Errorf("%s reads %q, which is not a row of idl.json's %s %v", fn.Name.Name, key, union.Name, tags)
+			return true
+		}
+		ast.Inspect(fn.Body, visit)
+	}
+	if specs < 30 || reads < 150 {
+		t.Fatalf("found only %d row-bound specs and %d reads — the guard is not looking at the decoders", specs, reads)
+	}
+}
+
+// TestNoHandStatedRequiredness — the acceptance of Phase 2330, held: no union or
+// record decoder states a required field by hand. Required-ness is the table's
+// answer (spec.field / spec.has, and absentLeniency for decode policy), so the
+// only direct presence refusals left in decode.go are the two that are not a
+// row's required-ness: Bound, a section-16 lenient spelling with no row, and
+// Switch's `on` / `stateKey` pair, a relational rule over two optional rows.
+// Before the phase decode.go held 140 such reads, 136 of them in 33 union and
+// record decoders.
+func TestNoHandStatedRequiredness(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "decode.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			switch f := call.Fun.(type) {
+			case *ast.Ident:
+				if f.Name == "require" {
+					found = append(found, fn.Name.Name+":require")
+				}
+			case *ast.SelectorExpr:
+				if f.Sel.Name == "req" {
+					found = append(found, fn.Name.Name+":req")
+				}
+			}
+			return true
+		})
+	}
+	want := []string{"decodeBindingTyped:require", "armSwitch:req"}
+	if strings.Join(found, ",") != strings.Join(want, ",") {
+		t.Errorf("hand-stated required reads in decode.go: got %v, want %v", found, want)
 	}
 }

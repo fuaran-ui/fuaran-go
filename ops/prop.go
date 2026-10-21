@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/fuaran-ui/fuaran-go/wire"
+	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
 
 // The UpdateProp surface: the per-kind field-coercion tables, the
@@ -297,8 +298,29 @@ func withKindField(kind wire.Obj, key string, value wire.Value) wire.Obj {
 	for k, v := range kind.Fields {
 		fields[k] = v
 	}
-	fields[key] = value
+	k, _ := idl.KindByTag(kind.Tag)
+	var row *idl.Field
+	if k != nil {
+		row, _ = k.Field(key)
+	}
+	storeMember(fields, key, value, row)
 	return wire.Obj{Tag: kind.Tag, Fields: fields}
+}
+
+// storeMember stores an updated member in the decoder's canonical form: a
+// member whose IDL row is omit-at-default and whose new value IS that default
+// is stored as the ABSENT member (WIRE_FORMAT §3.1, the storeStyle posture),
+// never as an explicit default — Phase 2300 made the omitted form canonical for
+// every such row, and an apply that wrote the explicit one would leave a tree
+// no conformant encoder emits. Any other row stores the value as given.
+func storeMember(fields map[string]wire.Value, key string, value wire.Value, row *idl.Field) {
+	if row != nil && row.Optionality == idl.OmitDefault {
+		if enc, err := wire.EncodeValue(value); err == nil && enc == row.Default {
+			delete(fields, key)
+			return
+		}
+	}
+	fields[key] = value
 }
 
 // updateBox is the Box UpdateProp surface: the retired container kinds' field
@@ -315,7 +337,13 @@ func updateBox(field string, value wire.Value, kind wire.Obj) fieldOutcome {
 		for k, lv := range layout.Fields {
 			newLayout[k] = lv
 		}
-		newLayout[camel] = v
+		var row *idl.Field
+		if u, ok := idl.UnionByName("BoxLayout"); ok {
+			if c, ok := u.Case(layout.Tag); ok {
+				row, _ = c.Field(camel)
+			}
+		}
+		storeMember(newLayout, camel, v, row)
 		return fieldOutcome{tag: outcomeUpdated, kind: withKindField(kind, "layout", wire.Obj{Tag: layout.Tag, Fields: newLayout})}
 	}
 
@@ -616,9 +644,30 @@ func updateNested(segs []pathSeg, value wire.Value, kind wire.Obj) nestedOutcome
 	for k, v := range element.Fields {
 		elementFields[k] = v
 	}
-	elementFields[leafEntry.wireKey] = result.value
+	storeMember(elementFields, leafEntry.wireKey, result.value, nestedLeafRow(kind.Tag, entry.wireKey, leafEntry.wireKey))
 	items[head.index] = wire.Obj{Tag: element.Tag, Fields: elementFields}
 	return nestedOutcome{tag: nestedUpdated, kind: withKindField(kind, entry.wireKey, items)}
+}
+
+// nestedLeafRow finds the IDL row of a record leaf addressed through a kind's
+// list member (Form.fields[i].required → FormField.required), so the nested
+// store normalises by the same table the decoder reads. Nil when the list's
+// element is not an IDL record, or the leaf is not one of its rows.
+func nestedLeafRow(kindTag, listKey, leafKey string) *idl.Field {
+	k, ok := idl.KindByTag(kindTag)
+	if !ok {
+		return nil
+	}
+	list, ok := k.Field(listKey)
+	if !ok || list.Type.Kind != idl.TList || list.Type.Elem == nil || list.Type.Elem.Kind != idl.TRecord {
+		return nil
+	}
+	rec, ok := idl.RecordByName(list.Type.Elem.Name)
+	if !ok {
+		return nil
+	}
+	row, _ := rec.Field(leafKey)
+	return row
 }
 
 // ── ReplaceBinding slot surface ─────────────────────────────────────────────

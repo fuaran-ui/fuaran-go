@@ -20,43 +20,37 @@
 // accessibility). It favours a localised edit over replacing the whole tree,
 // but never at the cost of correctness.
 //
-// Granularity divergence from the Rust producer (documented, correctness-
-// neutral): the recursion descends only through the kinds the Go apply engine
-// addresses structurally — the six layout kinds in layoutKinds below, matching
-// ops.layoutKinds. The Rust producer additionally recurses through Modal and
-// ScrollArea; the Go apply engine has no structural-child surface for those, so
-// a difference inside one escalates here to a whole-node replace at the nearest
-// layout ancestor (or ReplaceRoot). The emitted script stays applyable by every
-// conformant host and still satisfies the round-trip law; only the op count can
-// be coarser. A granular-field refinement pass (matching the Python producer's
-// UpdateProp/UpdateStyle/UpdateState op choices) is a possible follow-up.
+// A style change is the one granular facet (Phase 2314, the reference engine's
+// rule since Phase 2291): when a matched node differs from its counterpart in
+// its style and nothing else of its own, the diff emits the style edit —
+// PatchStyle naming exactly the members that moved, the whole-record
+// UpdateStyle only when all six did — instead of the replace, and a layout
+// node's children are then recursed as usual. Every host's diff records a
+// restyle as the same op, so two restyles of different members of one node
+// carry disjoint member sets wherever they were recorded.
+//
+// The recursion descends through the kinds the apply engine addresses
+// structurally — the kinds whose generated idl.json table carries an ordered
+// list-of-nodes slot (idl.OrderedChildren, the one set ops reads too, so a
+// script emitted against a parent always applies), Modal and ScrollArea
+// included. A granular kind-field refinement pass (matching the
+// Python producer's UpdateProp/UpdateState op choices) is a possible
+// follow-up.
 package diff
 
 import (
 	"github.com/fuaran-ui/fuaran-go/wire"
+	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
 
-// layoutKinds are the kinds carrying an ordered "children" array — the only
-// kinds the structural child ops (InsertChild / RemoveNode) address, and the
-// only kinds this diff recurses through. It MUST stay in step with
-// ops/traverse.go's layoutKinds (the apply engine's structural-child set); a
-// script emitted against a parent outside this set would not apply.
-var layoutKinds = map[string]bool{
-	"Box":         true,
-	"SplitPanel":  true,
-	"Tabs":        true,
-	"Stepper":     true,
-	"SummaryList": true,
-	"Disclosure":  true,
-}
-
 // structuralChildren returns a layout node's ordered child list, or
-// (nil, false) for a kind with no addressable structural children.
+// (nil, false) for a kind this diff does not recurse through.
 func structuralChildren(n wire.Node) ([]wire.Node, bool) {
-	if !layoutKinds[n.Kind.Tag] {
+	slot, ok := idl.OrderedChildren(n.Kind.Tag)
+	if !ok {
 		return nil, false
 	}
-	arr, ok := n.Kind.Fields["children"].(wire.Arr)
+	arr, ok := n.Kind.Fields[slot].(wire.Arr)
 	if !ok {
 		return nil, false
 	}
@@ -80,7 +74,8 @@ func stripStructuralChildren(n wire.Node) wire.Node {
 	for k, v := range n.Kind.Fields {
 		fields[k] = v
 	}
-	fields["children"] = wire.Arr{}
+	slot, _ := idl.OrderedChildren(n.Kind.Tag)
+	fields[slot] = wire.Arr{}
 	return wire.Node{ID: n.ID, Kind: wire.Obj{Tag: n.Kind.Tag, Fields: fields}, Extras: n.Extras}
 }
 
@@ -108,6 +103,74 @@ func ownContentSame(a, b wire.Node) bool {
 	return encode(stripStructuralChildren(a)) == encode(stripStructuralChildren(b))
 }
 
+// withStyleOf returns n carrying src's style slot (absent when src's is), so
+// comparing it against src isolates every difference that is NOT the style.
+func withStyleOf(n, src wire.Node) wire.Node {
+	extras := make(map[string]wire.Value, len(n.Extras)+1)
+	for k, v := range n.Extras {
+		extras[k] = v
+	}
+	if style, ok := src.Extras["style"]; ok {
+		extras["style"] = style
+	} else {
+		delete(extras, "style")
+	}
+	return wire.Node{ID: n.ID, Kind: n.Kind, Extras: extras}
+}
+
+// styleRecord is a node's whole style record with every member materialised:
+// an absent slot, or a member omitted at its identity, reads as that member's
+// default token (WIRE_FORMAT §3.1/§3.6).
+func styleRecord(n wire.Node) map[string]wire.Value {
+	identity := wire.StyleIdentity()
+	present, _ := n.Extras["style"].(wire.Obj)
+	record := make(map[string]wire.Value, len(identity))
+	for member, def := range identity {
+		if v, ok := present.Fields[member]; ok {
+			record[member] = v
+		} else {
+			record[member] = wire.Str(def)
+		}
+	}
+	return record
+}
+
+func sameValue(a, b wire.Value) bool {
+	ea, errA := wire.EncodeValue(a)
+	eb, errB := wire.EncodeValue(b)
+	return errA == nil && errB == nil && ea == eb
+}
+
+// styleEdit is the op taking a's style to b's: none when the records are
+// equal; PatchStyle naming exactly the members that moved (a member returning
+// to its default is spelled with the default token — in a delta that is an
+// edit, not an omission); and the whole-record UpdateStyle only when every
+// member moved.
+func styleEdit(a, b wire.Node) []wire.Obj {
+	before, after := styleRecord(a), styleRecord(b)
+	moved := make(map[string]wire.Value, len(after))
+	for member, v := range after {
+		if !sameValue(before[member], v) {
+			moved[member] = v
+		}
+	}
+	switch len(moved) {
+	case 0:
+		return nil
+	case len(after):
+		identity := wire.StyleIdentity()
+		record := make(map[string]wire.Value, len(after))
+		for member, v := range after {
+			if s, ok := v.(wire.Str); !ok || string(s) != identity[member] {
+				record[member] = v
+			}
+		}
+		return []wire.Obj{styleOp("UpdateStyle", b.ID, record)}
+	default:
+		return []wire.Obj{styleOp("PatchStyle", b.ID, moved)}
+	}
+}
+
 // ── op constructors (the decoded wire.Obj form ops.Apply consumes) ───────────
 
 func replaceRoot(node wire.Node) wire.Obj {
@@ -122,6 +185,13 @@ func insertChild(parentID string, child wire.Node) wire.Obj {
 	return wire.Obj{Tag: "InsertChild", Fields: map[string]wire.Value{
 		"parentId": wire.Str(parentID),
 		"child":    child,
+	}}
+}
+
+func styleOp(tag, target string, style map[string]wire.Value) wire.Obj {
+	return wire.Obj{Tag: tag, Fields: map[string]wire.Value{
+		"target": wire.Str(target),
+		"style":  wire.Obj{Fields: style},
 	}}
 }
 
@@ -153,13 +223,20 @@ func diffNode(a, b wire.Node, parent *seat, script *[]wire.Obj) {
 	if encode(a) == encode(b) {
 		return // identical subtree — nothing to do
 	}
+	// a restyled to b's style: what still differs from b is everything else.
+	restyled := withStyleOf(a, b)
+	if encode(restyled) == encode(b) {
+		*script = append(*script, styleEdit(a, b)...) // the style is the only difference
+		return
+	}
 	ak, aOK := structuralChildren(a)
 	bk, bOK := structuralChildren(b)
 	// Recurse only when both sides are layout kinds, their own content is
-	// unchanged, and their children line up id-for-id in order — every other
-	// difference (kind change, style/state drift, insert / remove / reorder)
-	// escalates to a whole-node replace at this seat.
-	if aOK && bOK && ownContentSame(a, b) && sameChildIDs(ak, bk) {
+	// unchanged but for the style, and their children line up id-for-id in
+	// order — every other difference (kind change, state drift, insert / remove
+	// / reorder) escalates to a whole-node replace at this seat.
+	if aOK && bOK && ownContentSame(restyled, b) && sameChildIDs(ak, bk) {
+		*script = append(*script, styleEdit(a, b)...)
 		for i := range ak {
 			child := seat{parentID: a.ID, position: i, siblingIDs: childIDs(bk)}
 			diffNode(ak[i], bk[i], &child, script)

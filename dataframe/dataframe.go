@@ -2,9 +2,11 @@
 // surface — the typed null-aware Cell/Column/Table model, the DataSource codec,
 // and the reference evaluator that runs a serialisable Binding.Transform
 // pipeline (filter / project / derive / groupBy / join / window / pivot /
-// unpivot / sort / distinct / limit / union over the scalar ColExpr algebra) to
-// produce result rows. The pipeline is data on the wire; every host's evaluator
-// runs it identically. This is the substrate for the Living Sheet and the data
+// unpivot / sort / distinct / limit / union / intersect / except over the scalar
+// ColExpr algebra) to produce result rows. The pipeline is data on the wire;
+// every host's evaluator runs it identically. A decimal column carries EXACT
+// decimal text (Phase 2001: exact arithmetic, quotient and rounded under seven
+// rounding modes, and the derived-column typing rule). This is the substrate for the Living Sheet and the data
 // behind the Pandas dashboard.
 //
 // Host-local: no wire change. The pipeline round-trip is already corpus-
@@ -32,10 +34,23 @@ const (
 	TypeString    = core.TypeString
 	TypeDate      = core.TypeDate
 	TypeTimestamp = core.TypeTimestamp
+	TypeDecimal   = core.TypeDecimal
 	// The three sub-second timestamp units (Phase 2206, fuaran-core#422).
 	TypeTimestampMs = core.TypeTimestampMs
 	TypeTimestampUs = core.TypeTimestampUs
 	TypeTimestampNs = core.TypeTimestampNs
+)
+
+// The seven rounding modes' wire spellings, and the largest rounding scale.
+const (
+	RoundHalfEven    = core.RoundHalfEven
+	RoundHalfUp      = core.RoundHalfUp
+	RoundHalfDown    = core.RoundHalfDown
+	RoundUp          = core.RoundUp
+	RoundDown        = core.RoundDown
+	RoundCeiling     = core.RoundCeiling
+	RoundFloor       = core.RoundFloor
+	MaxRoundingScale = core.MaxRoundingScale
 )
 
 // Error codes: the ColumnError decode codes and the EvalError evaluation codes.
@@ -77,11 +92,13 @@ type (
 	Distinct    = core.Distinct
 	Embedded    = core.Embedded
 	EvalError   = core.EvalError
+	Except      = core.Except
 	Filter      = core.Filter
 	Frame       = core.Frame
 	GroupBy     = core.GroupBy
 	InList      = core.InList
 	InParam     = core.InParam
+	Intersect   = core.Intersect
 	IsNull      = core.IsNull
 	Join        = core.Join
 	Limit       = core.Limit
@@ -93,8 +110,11 @@ type (
 	Pivot       = core.Pivot
 	PivotSpec   = core.PivotSpec
 	Project     = core.Project
+	Quotient    = core.Quotient
 	Ref         = core.Ref
 	Resolver    = core.Resolver
+	Rounded     = core.Rounded
+	Rounding    = core.Rounding
 	Schema      = core.Schema
 	SchemaEntry = core.SchemaEntry
 	Sort        = core.Sort
@@ -124,6 +144,25 @@ func CellDate(v string) Cell { return core.CellDate(v) }
 
 // CellTimestamp constructs a timestamp cell.
 func CellTimestamp(v string) Cell { return core.CellTimestamp(v) }
+
+// CellDecimal constructs a decimal cell holding the CANONICAL form of text, or
+// ok=false where text is not decimal text (-?[0-9]+(\.[0-9]+)?).
+func CellDecimal(text string) (Cell, bool) { return core.CellDecimal(text) }
+
+// DecimalCanonical is the canonical form of decimal text, or ok=false.
+func DecimalCanonical(text string) (string, bool) { return core.DecimalCanonical(text) }
+
+// DecimalCompare is the exact numeric order (-1 / 0 / 1) of two decimal texts,
+// or ok=false where either is not decimal text.
+func DecimalCompare(a, b string) (int, bool) { return core.DecimalCompare(a, b) }
+
+// DecimalAdd is the exact sum of two decimal texts in canonical form, or
+// ok=false where either is not decimal text.
+func DecimalAdd(a, b string) (string, bool) { return core.DecimalAdd(a, b) }
+
+// DecimalToFloat is the nearest float64 to a decimal text, or ok=false where it
+// is not decimal text or is past the float range.
+func DecimalToFloat(text string) (float64, bool) { return core.DecimalToFloat(text) }
 
 // BindParams substitutes the bound scalar parameters of a pipeline.
 func BindParams(pipeline []Transform, env map[string]Cell, unbound map[string]bool) []Transform {

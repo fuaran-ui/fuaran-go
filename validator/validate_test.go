@@ -61,6 +61,33 @@ func TestDuplicateChildIDIsFlagged(t *testing.T) {
 	}
 }
 
+// Phase 1962 — `value` is required on a single-select only: a multi-select
+// carries its selection in `values` and no `value`.
+func TestSelectValueRequiredOnlyOnSingleSelect(t *testing.T) {
+	missingValue := func(multiple bool) bool {
+		fields := map[string]wire.Value{
+			"label":  wire.Obj{Tag: "Literal", Fields: map[string]wire.Value{"text": wire.Str("Tags")}},
+			"source": wire.Obj{Tag: "Static", Fields: map[string]wire.Value{"value": wire.Arr{}}},
+		}
+		if multiple {
+			fields["multiple"] = wire.Bool(true)
+			fields["values"] = wire.Obj{Tag: "State", Fields: map[string]wire.Value{"key": wire.Str("tags")}}
+		}
+		for _, f := range ValidateNode(wire.Node{ID: "s", Kind: wire.Obj{Tag: "Select", Fields: fields}}) {
+			if f.Code == "MISSING_REQUIRED_FIELD" && f.Path == "$.kind.value" {
+				return true
+			}
+		}
+		return false
+	}
+	if !missingValue(false) {
+		t.Error("a single-select without value must report MISSING_REQUIRED_FIELD at $.kind.value")
+	}
+	if missingValue(true) {
+		t.Error("a multi-select without value must not report MISSING_REQUIRED_FIELD at $.kind.value")
+	}
+}
+
 func TestUnknownKindIsFlagged(t *testing.T) {
 	node := wire.Node{ID: "a", Kind: wire.Obj{Tag: "Sparkler", Fields: map[string]wire.Value{}}}
 	findings := ValidateNode(node)
@@ -156,21 +183,21 @@ func codesOf(findings []Finding) []string {
 
 func TestInertControlDisclosure(t *testing.T) {
 	inertNode := wire.Node{ID: "d1", Kind: wire.Obj{Tag: "Disclosure", Fields: map[string]wire.Value{
-		"heading": wire.Str("H"), "open": staticBinding(), "children": wire.Arr{},
+		"heading": wire.Str("H"), "defaultOpen": wire.Bool(false), "open": staticBinding(), "children": wire.Arr{},
 	}}}
 	if got := codesOf(ValidateNode(inertNode)); len(got) != 1 || got[0] != "FUARAN069" {
 		t.Errorf("inert disclosure: got %v; want [FUARAN069]", got)
 	}
 
 	live := wire.Node{ID: "d1", Kind: wire.Obj{Tag: "Disclosure", Fields: map[string]wire.Value{
-		"heading": wire.Str("H"), "open": stateBinding(), "children": wire.Arr{},
+		"heading": wire.Str("H"), "defaultOpen": wire.Bool(false), "open": stateBinding(), "children": wire.Arr{},
 	}}}
 	if got := codesOf(ValidateNode(live)); len(got) != 0 {
 		t.Errorf("writable slot is live: got %v; want none", got)
 	}
 
 	handled := wire.Node{ID: "d1", Kind: wire.Obj{Tag: "Disclosure", Fields: map[string]wire.Value{
-		"heading": wire.Str("H"), "open": staticBinding(),
+		"heading": wire.Str("H"), "defaultOpen": wire.Bool(false), "open": staticBinding(),
 		"onToggle": wire.Str("<closure>"), "children": wire.Arr{},
 	}}}
 	if got := codesOf(ValidateNode(handled)); len(got) != 0 {
@@ -359,7 +386,7 @@ func corpusNodesDir(t *testing.T) string {
 	t.Helper()
 	corpus := corpusroot.ForTest(t)
 	candidate := filepath.Join(corpus, "nodes")
-	if info, err := os.Stat(candidate); corpus == "" || err != nil || !info.IsDir() {
+	if info, err := os.Stat(candidate); err != nil || !info.IsDir() {
 		t.Skip("wire-format-fixtures/nodes not found")
 	}
 	return candidate

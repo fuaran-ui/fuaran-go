@@ -13,6 +13,9 @@ const (
 	TypeString    = "string"
 	TypeDate      = "date"
 	TypeTimestamp = "timestamp"
+	// TypeDecimal is the exact decimal (fuaran-core Phase 276): a cell carries its
+	// canonical decimal TEXT (see decimal.go), never a host decimal or float.
+	TypeDecimal = "decimal"
 	// The three sub-second timestamp units (Phase 2206, fuaran-core#422).
 	TypeTimestampMs = "timestamp_ms"
 	TypeTimestampUs = "timestamp_us"
@@ -21,6 +24,7 @@ const (
 
 var columnTypes = map[string]bool{
 	TypeInt: true, TypeFloat: true, TypeBool: true, TypeString: true, TypeDate: true, TypeTimestamp: true,
+	TypeDecimal:     true,
 	TypeTimestampMs: true, TypeTimestampUs: true, TypeTimestampNs: true,
 }
 
@@ -40,7 +44,7 @@ func IsTimestampType(ty string) bool {
 
 // Cell is one realised scalar, or the first-class null marker. Kind is a column
 // type tag or "null"; Value is the native payload (int64 / float64 / bool /
-// string, or nil for null). The explicit Kind keeps Date distinct from Str and
+// string — a decimal's canonical text — or nil for null). The explicit Kind keeps Date distinct from Str and
 // bool distinct from int under the structural equality grouping/distinct rely on.
 type Cell struct {
 	Kind  string
@@ -56,6 +60,17 @@ func CellBool(v bool) Cell        { return Cell{Kind: TypeBool, Value: v} }
 func CellStr(v string) Cell       { return Cell{Kind: TypeString, Value: v} }
 func CellDate(v string) Cell      { return Cell{Kind: TypeDate, Value: v} }
 func CellTimestamp(v string) Cell { return Cell{Kind: TypeTimestamp, Value: v} }
+
+// CellDecimal is a decimal cell holding the CANONICAL form of text, or ok=false
+// where text is not decimal text — the way to build one, so a cell built here
+// is canonical by construction.
+func CellDecimal(text string) (Cell, bool) {
+	c, ok := DecimalCanonical(text)
+	if !ok {
+		return Cell{}, false
+	}
+	return Cell{Kind: TypeDecimal, Value: c}, true
+}
 
 func isNull(c Cell) bool { return c.Kind == "null" }
 
@@ -86,6 +101,8 @@ func defaultFor(ty string) Cell {
 		return CellFloat(0)
 	case TypeBool:
 		return CellBool(false)
+	case TypeDecimal:
+		return Cell{Kind: TypeDecimal, Value: "0"}
 	default: // string / date / timestamp
 		return Cell{Kind: ty, Value: ""}
 	}
@@ -179,6 +196,36 @@ type InParam struct {
 // IsNull is the honest presence test — total: always Bool, never null.
 type IsNull struct{ Expr ColExpr }
 
+// Rounding is a rounding policy (Phase 277): a SCALE — decimal places, a literal
+// or a named param, as the wire's integer slot carries it — and a MODE, one of the
+// seven Round* spellings. ScaleParam non-empty is the param form
+// ({"$param":"<name>"}); Scale is then unused. A scale outside 0..MaxRoundingScale
+// is refused by name at evaluation.
+type Rounding struct {
+	Scale      int
+	ScaleParam string
+	Mode       string
+}
+
+// Quotient is the quotient of two EXACT numbers (decimal or int), correctly
+// rounded to Rounding — computed by exact long division, the remainder deciding
+// the last digit under the mode, never a double rounding. A float operand is
+// refused by name; a zero divisor answers null; a null operand propagates.
+// Wire: {"$type":"quotient","dividend":…,"divisor":…,"rounding":{"mode":…,"scale":…}}.
+type Quotient struct {
+	Dividend ColExpr
+	Divisor  ColExpr
+	Rounding Rounding
+}
+
+// Rounded is an exact number (decimal or int) brought to Rounding — the one
+// general place a decimal loses digits. A float operand is refused by name.
+// Wire: {"$type":"rounded","expr":…,"rounding":{"mode":…,"scale":…}}.
+type Rounded struct {
+	Expr     ColExpr
+	Rounding Rounding
+}
+
 func (Col) isColExpr()      {}
 func (Lit) isColExpr()      {}
 func (Binary) isColExpr()   {}
@@ -191,6 +238,8 @@ func (Param) isColExpr()    {}
 func (InList) isColExpr()   {}
 func (InParam) isColExpr()  {}
 func (IsNull) isColExpr()   {}
+func (Quotient) isColExpr() {}
+func (Rounded) isColExpr()  {}
 
 // Closed vocabularies (wire tags) — additive only. The string predicates
 // (contains / startsWith / endsWith) and the string/date scalar fns (concat /
@@ -206,7 +255,7 @@ var (
 		"abs", "round", "floor", "ceil", "length", "lower", "upper", "substr", "datePart",
 		"concat", "trim", "replace", "dateDiffDays",
 	)
-	aggFns    = set("sum", "mean", "min", "max", "count", "median", "stddev", "first", "last")
+	aggFns    = set("sum", "mean", "min", "max", "count", "median", "stddev", "first", "last", "countDistinct")
 	joinKinds = set("inner", "left", "right", "outer")
 	windowFns = set("rowNumber", "rank", "lag", "lead", "cumulSum", "rollingMean")
 	sortDirs  = set("asc", "desc")
@@ -284,18 +333,29 @@ type Limit struct {
 }
 type Union struct{ Source DataSource }
 
-func (Filter) isTransform()   {}
-func (Project) isTransform()  {}
-func (Derive) isTransform()   {}
-func (GroupBy) isTransform()  {}
-func (Join) isTransform()     {}
-func (Window) isTransform()   {}
-func (Pivot) isTransform()    {}
-func (Unpivot) isTransform()  {}
-func (Sort) isTransform()     {}
-func (Distinct) isTransform() {}
-func (Limit) isTransform()    {}
-func (Union) isTransform()    {}
+// Intersect keeps the left rows whose FULL ROW also appears in Source, in the
+// left's order and multiplicity (SQL INTERSECT ALL). Row identity is the
+// grouping key, so a null matches a null and an int never matches a float.
+type Intersect struct{ Source DataSource }
+
+// Except keeps the left rows whose full row does NOT appear in Source (SQL
+// EXCEPT ALL) — Intersect's complement.
+type Except struct{ Source DataSource }
+
+func (Filter) isTransform()    {}
+func (Project) isTransform()   {}
+func (Derive) isTransform()    {}
+func (GroupBy) isTransform()   {}
+func (Join) isTransform()      {}
+func (Window) isTransform()    {}
+func (Pivot) isTransform()     {}
+func (Unpivot) isTransform()   {}
+func (Sort) isTransform()      {}
+func (Distinct) isTransform()  {}
+func (Limit) isTransform()     {}
+func (Union) isTransform()     {}
+func (Intersect) isTransform() {}
+func (Except) isTransform()    {}
 
 // ── Error envelopes ──────────────────────────────────────────────────────────
 

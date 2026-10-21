@@ -395,7 +395,7 @@ func cellToWire(c dataframe.Cell) wire.Value {
 		return wire.Float(c.Value.(float64))
 	case dataframe.TypeBool:
 		return wire.Bool(c.Value.(bool))
-	case dataframe.TypeString, dataframe.TypeDate, dataframe.TypeTimestamp:
+	case dataframe.TypeString, dataframe.TypeDate, dataframe.TypeTimestamp, dataframe.TypeDecimal:
 		return wire.Str(c.Value.(string))
 	}
 	return wire.Null{}

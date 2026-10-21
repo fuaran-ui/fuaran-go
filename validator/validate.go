@@ -92,6 +92,20 @@ func walk(node wire.Node, path string, findings *[]Finding, seen map[string]bool
 			}
 		}
 	}
+	// Phase 1962 — the Select `value` rule is a relation between two sibling
+	// slots the IDL row cannot state (it marks `value` optional): a single-select
+	// requires `value`; a multi-select carries its selection in `values` and no
+	// `value`. The decoder refuses the former MISSING_FIELD on every conformant
+	// host, so a constructed tree is told before emit.
+	if node.Kind.Tag == "Select" && !isMultiSelect(node.Kind) {
+		if _, present := node.Kind.Fields["value"]; !present {
+			*findings = append(*findings, Finding{
+				Code: "MISSING_REQUIRED_FIELD", Path: kindPath + ".value",
+				Message:  "kind 'Select' requires field 'value' unless multiple is true",
+				Severity: SeverityError,
+			})
+		}
+	}
 
 	switch node.Kind.Tag {
 	case "Switch":
@@ -647,4 +661,13 @@ func checkFilterEdges(root wire.Node, findings *[]Finding) {
 			})
 		}
 	}
+}
+
+// isMultiSelect reports a Select whose `multiple` is true (Phase 1962).
+func isMultiSelect(kind wire.Obj) bool {
+	if kind.Tag != "Select" {
+		return false
+	}
+	multiple, ok := kind.Fields["multiple"].(wire.Bool)
+	return ok && bool(multiple)
 }

@@ -90,9 +90,6 @@ type mergeManifest struct {
 
 func TestMergeCorpus(t *testing.T) {
 	corpus := corpusroot.ForTest(t)
-	if corpus == "" {
-		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
-	}
 	root := filepath.Join(corpus, "merge-conformance")
 	raw, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
@@ -159,9 +156,6 @@ func TestMergeCorpus(t *testing.T) {
 // could satisfy by emitting both from one side.
 func TestMergeRefusalCorpus(t *testing.T) {
 	corpus := corpusroot.ForTest(t)
-	if corpus == "" {
-		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
-	}
 	root := filepath.Join(corpus, "merge-conformance")
 	raw, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
@@ -353,9 +347,6 @@ func encodeVerdict(defects []mergeDefect) string {
 // pair — which is the property the separate key exists to buy.
 func TestMergeTotalityCorpus(t *testing.T) {
 	corpus := corpusroot.ForTest(t)
-	if corpus == "" {
-		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
-	}
 	root := filepath.Join(corpus, "merge-conformance")
 	raw, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {

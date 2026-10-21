@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/fuaran-ui/fuaran-go/canonical"
+	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
 
 // The canonical encoder (WIRE_FORMAT.md §2). This is the load-bearing half of
@@ -114,6 +115,11 @@ func appendFloat(sb *strings.Builder, f float64) {
 }
 
 func appendObj(sb *strings.Builder, o Obj) error {
+	if isRowFeedKind(o) {
+		if err := checkRowFeed(o.Fields["source"]); err != nil {
+			return err
+		}
+	}
 	keys := make([]string, 0, len(o.Fields)+1)
 	for k := range o.Fields {
 		keys = append(keys, k)
@@ -160,7 +166,7 @@ func appendNode(sb *strings.Builder, n Node) error {
 		case "id":
 			err = appendValue(sb, Str(n.ID))
 		case "kind":
-			err = appendValue(sb, n.Kind)
+			err = appendObj(sb, omitDefaults(n.Kind))
 		default:
 			err = appendValue(sb, n.Extras[k])
 		}
@@ -170,4 +176,38 @@ func appendNode(sb *strings.Builder, n Node) error {
 	}
 	sb.WriteByte('}')
 	return nil
+}
+
+// omitDefaults applies the canonical form's omit-at-default rule to a kind
+// object on the ENCODE boundary: a field whose table row is omit-at-default
+// and whose value is that default is not written. A decoded tree has already
+// dropped such fields (spec.field drops them on the way in), so this changes
+// nothing for it; it is what makes a CONSTRUCTED tree — built in code, or
+// edited by an op that set a field back to its default — encode to the one
+// canonical form rather than to a second spelling of the same document.
+func omitDefaults(kind Obj) Obj {
+	k, ok := idl.KindByTag(kind.Tag)
+	if !ok {
+		return kind
+	}
+	var drop []string
+	for _, f := range k.Fields {
+		if f.Optionality != idl.OmitDefault {
+			continue
+		}
+		if v, present := kind.Fields[f.Name]; present && matchesDefault(v, f.Default) {
+			drop = append(drop, f.Name)
+		}
+	}
+	if len(drop) == 0 {
+		return kind
+	}
+	fields := make(map[string]Value, len(kind.Fields))
+	for name, v := range kind.Fields {
+		fields[name] = v
+	}
+	for _, name := range drop {
+		delete(fields, name)
+	}
+	return Obj{Tag: kind.Tag, Fields: fields}
 }

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/fuaran-ui/fuaran-go/wire"
+	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
 
 // Islands partial hydration — static-by-default pages with selectively
@@ -43,16 +44,47 @@ func escapeForScript(json string) string {
 }
 
 // islandChildrenOf enumerates the container children the island collection
-// walks (layout children + an ErrorBoundary's child + a FragmentDecl's body —
-// the reference walk basis).
+// walks — the reference's kind-held reach: the ordered child list of every
+// kind whose generated idl.json table carries one (the one layout set the apply
+// engine and the diff read), a FragmentDecl's body, and the nodes a kind holds
+// in a named arm: an ErrorBoundary's child then its fallback, and every Switch
+// case's child in case order then the Switch's default.
 func islandChildrenOf(node wire.Node) []wire.Node {
-	switch node.Kind.Tag {
-	case "Box", "SplitPanel", "Tabs", "Stepper", "SummaryList", "Disclosure":
-		return childNodesOf(node.Kind.Fields)
-	case "ErrorBoundary":
-		if child, ok := asNode(node.Kind.Fields["child"]); ok {
-			return []wire.Node{child}
+	if slot, ok := idl.OrderedChildren(node.Kind.Tag); ok {
+		var out []wire.Node
+		if arr, ok := node.Kind.Fields[slot].(wire.Arr); ok {
+			for _, item := range arr {
+				if n, ok := asNode(item); ok {
+					out = append(out, n)
+				}
+			}
 		}
+		return out
+	}
+	switch node.Kind.Tag {
+	case "ErrorBoundary":
+		var out []wire.Node
+		for _, arm := range []string{"child", "fallback"} {
+			if n, ok := asNode(node.Kind.Fields[arm]); ok {
+				out = append(out, n)
+			}
+		}
+		return out
+	case "Switch":
+		var out []wire.Node
+		if cases, ok := node.Kind.Fields["cases"].(wire.Arr); ok {
+			for _, c := range cases {
+				if rec, ok := c.(wire.Obj); ok {
+					if n, ok := asNode(rec.Fields["child"]); ok {
+						out = append(out, n)
+					}
+				}
+			}
+		}
+		if n, ok := asNode(node.Kind.Fields["default"]); ok {
+			out = append(out, n)
+		}
+		return out
 	case "FragmentDecl":
 		if body, ok := asNode(node.Kind.Fields["body"]); ok {
 			return []wire.Node{body}

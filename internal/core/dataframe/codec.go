@@ -272,6 +272,8 @@ func decodeCellValue(col, ty string, v any) (Cell, *ColumnError) {
 		if s, ok := v.(string); ok {
 			return CellDate(s), nil
 		}
+	case TypeDecimal:
+		return decodeDecimalValue(col, v)
 	case TypeTimestamp, TypeTimestampMs, TypeTimestampUs, TypeTimestampNs:
 		text, malformed, mismatch := ReadInstant(col, ty, v)
 		if malformed != "" {
@@ -282,6 +284,48 @@ func decodeCellValue(col, ty string, v any) (Cell, *ColumnError) {
 		}
 	}
 	return Cell{}, cerr(TypeMismatch, "column '"+col+"': expected "+ty+" value")
+}
+
+// int53Max is the largest magnitude a whole-valued number token carries exactly.
+const int53Max = 9007199254740992
+
+// decodeDecimalValue reads one present value of a decimal column. A decimal is a
+// JSON STRING of decimal text on the wire, canonicalised on read (12.50 reads as
+// 12.5). A number token is read only where it is EXACT: a whole-valued token of
+// magnitude at most 2^53, whose value is its digits. A fractional token, or a
+// whole one past 2^53, has been through a float by the time it arrives, and a
+// type whose purpose is exactness cannot vouch for it — refused.
+func decodeDecimalValue(col string, v any) (Cell, *ColumnError) {
+	switch t := v.(type) {
+	case string:
+		if c, ok := CellDecimal(t); ok {
+			return c, nil
+		}
+		return Cell{}, cerr(MalformedShape, col+": a decimal value must be decimal text — an optional '-', digits, "+
+			"and an optional '.' followed by digits, with no exponent, sign '+', separator or white space")
+	case json.Number:
+		if text, ok := exactWholeToken(t); ok {
+			return Cell{Kind: TypeDecimal, Value: text}, nil
+		}
+	}
+	return Cell{}, cerr(TypeMismatch, "column '"+col+"': expected decimal value")
+}
+
+// exactWholeToken is the integer digits of a whole-valued number token of
+// magnitude at most 2^53, or ok=false.
+func exactWholeToken(n json.Number) (string, bool) {
+	if isIntToken(n) {
+		i, err := n.Int64()
+		if err != nil || i > int53Max || i < -int53Max {
+			return "", false
+		}
+		return strconv.FormatInt(i, 10), true
+	}
+	f, err := n.Float64()
+	if err != nil || f != math.Floor(f) || math.Abs(f) > int53Max {
+		return "", false
+	}
+	return strconv.FormatInt(int64(f), 10), true
 }
 
 func decodeSchema(el any) (Schema, *ColumnError) {
@@ -529,6 +573,19 @@ func decodeCellLiteral(el any) (Cell, *ColumnError) {
 		if s, ok := v.(string); ok {
 			return CellTimestamp(s), nil
 		}
+	case "Decimal":
+		// Decimal text, canonicalised on read; an exact integer token is read too,
+		// and anything else — a fractional number token included — is refused.
+		switch t := v.(type) {
+		case string:
+			if c, ok := CellDecimal(t); ok {
+				return c, nil
+			}
+		case json.Number:
+			if text, ok := exactWholeToken(t); ok && isIntToken(t) {
+				return Cell{Kind: TypeDecimal, Value: text}, nil
+			}
+		}
 	}
 	return Cell{}, cerr(TypeMismatch, "lit: bad value for "+tag)
 }
@@ -734,6 +791,42 @@ func DecodeExpr(el any) (ColExpr, *ColumnError) {
 			return nil, ce
 		}
 		return IsNull{Expr: inner}, nil
+	case "quotient":
+		dividendV, e := field(el, "dividend")
+		if e != nil {
+			return nil, e
+		}
+		dividend, ce := DecodeExpr(dividendV)
+		if ce != nil {
+			return nil, ce
+		}
+		divisorV, e := field(el, "divisor")
+		if e != nil {
+			return nil, e
+		}
+		divisor, ce := DecodeExpr(divisorV)
+		if ce != nil {
+			return nil, ce
+		}
+		r, ce := decodeRounding(el)
+		if ce != nil {
+			return nil, ce
+		}
+		return Quotient{Dividend: dividend, Divisor: divisor, Rounding: r}, nil
+	case "rounded":
+		v, e := field(el, "expr")
+		if e != nil {
+			return nil, e
+		}
+		inner, ce := DecodeExpr(v)
+		if ce != nil {
+			return nil, ce
+		}
+		r, ce := decodeRounding(el)
+		if ce != nil {
+			return nil, ce
+		}
+		return Rounded{Expr: inner, Rounding: r}, nil
 	// Expression-level string-predicate spellings:
 	// {"$type":"contains","expr":X,"other":Y} (also left/right) denotes
 	// exactly Binary(contains, X, Y); same for startsWith/endsWith. Canonical
@@ -791,6 +884,45 @@ func DecodeExpr(el any) (ColExpr, *ColumnError) {
 		return ApplyFn{Fn: k, Args: []ColExpr{inner}}, nil
 	}
 	return nil, cerr(UnknownType, "unknown ColExpr '"+k+"'")
+}
+
+// decodeRounding reads the "rounding" member: "mode" one of the seven
+// spellings (anything else is UNKNOWN_TYPE naming them), "scale" an integer
+// slot — an int token, or {"$param":"<name>"}.
+func decodeRounding(el any) (Rounding, *ColumnError) {
+	rv, e := field(el, "rounding")
+	if e != nil {
+		return Rounding{}, e
+	}
+	mv, e := field(rv, "mode")
+	if e != nil {
+		return Rounding{}, e
+	}
+	mode, ok := mv.(string)
+	if !ok {
+		return Rounding{}, cerr(MalformedShape, "rounding.mode: expected string")
+	}
+	if !roundingModes[mode] {
+		return Rounding{}, cerr(UnknownType, "unknown rounding mode '"+mode+"' (expected one of "+
+			strings.Join([]string{RoundHalfEven, RoundHalfUp, RoundHalfDown, RoundUp, RoundDown, RoundCeiling, RoundFloor}, ", ")+")")
+	}
+	sv, e := field(rv, "scale")
+	if e != nil {
+		return Rounding{}, e
+	}
+	if obj, isObj := sv.(map[string]any); isObj {
+		pv, has := obj["$param"]
+		name, isStr := pv.(string)
+		if !has || !isStr {
+			return Rounding{}, cerr(MalformedShape, "rounding scale: an object here is a parameter slot and must carry a string \"$param\"")
+		}
+		return Rounding{ScaleParam: name, Mode: mode}, nil
+	}
+	n, ok := intToken(sv)
+	if !ok || n < math.MinInt32 || n > math.MaxInt32 {
+		return Rounding{}, cerr(MalformedShape, "rounding scale: expected int")
+	}
+	return Rounding{Scale: int(n), Mode: mode}, nil
 }
 
 // flatBinary decodes the flat two-operand spelling ({left|expr, right|other})
@@ -1263,6 +1395,19 @@ func DecodeTransform(el any) (Transform, *ColumnError) {
 			return nil, ce
 		}
 		return Union{Source: src}, nil
+	case "intersect", "except":
+		v, e := field(el, "source")
+		if e != nil {
+			return nil, e
+		}
+		src, ce := decodeSourceJSON(v)
+		if ce != nil {
+			return nil, ce
+		}
+		if k == "intersect" {
+			return Intersect{Source: src}, nil
+		}
+		return Except{Source: src}, nil
 	}
 	return nil, cerr(UnknownType, "unknown Transform '"+k+"'")
 }

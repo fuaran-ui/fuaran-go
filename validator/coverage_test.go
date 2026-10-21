@@ -119,7 +119,7 @@ func canonicalVocabulary(t *testing.T) map[string]bool {
 	t.Helper()
 	corpus := corpusroot.ForTest(t)
 	vocabPath := filepath.Join(corpus, "validator", "defect-vocabulary.json")
-	if _, err := os.Stat(vocabPath); corpus == "" || err != nil {
+	if _, err := os.Stat(vocabPath); err != nil {
 		t.Skip("wire-format-fixtures/validator not found")
 	}
 	raw, err := os.ReadFile(vocabPath)

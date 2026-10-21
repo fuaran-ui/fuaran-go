@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
 
 // Decode canonical wire JSON into the structural model (WIRE_FORMAT.md §3,
@@ -412,34 +414,6 @@ func require(obj map[string]any, key, path string) any {
 	return raw
 }
 
-// requireAliased reads the canonical key, else the first present alias (the
-// lenient-ingest FIELD-NAME aliases, §3.6 — decode-only; the canonical name
-// wins when both are present; error paths always name the canonical key).
-func requireAliased(obj map[string]any, key, path string, aliases ...string) any {
-	if raw, ok := obj[key]; ok {
-		return raw
-	}
-	for _, a := range aliases {
-		if raw, ok := obj[a]; ok {
-			return raw
-		}
-	}
-	fail(CodeMissingField, path+"."+key, "missing required field '"+key+"'")
-	return nil
-}
-
-func optAliased(obj map[string]any, key string, aliases ...string) (any, bool) {
-	if raw, ok := obj[key]; ok {
-		return raw, true
-	}
-	for _, a := range aliases {
-		if raw, ok := obj[a]; ok {
-			return raw, true
-		}
-	}
-	return nil, false
-}
-
 // dispatch reads + validates a "$type" discriminator, returning the case name.
 func dispatch(obj map[string]any, path string, valid caseSet, unknownCode DecodeErrorCode) string {
 	raw, ok := obj["$type"]
@@ -555,36 +529,41 @@ func fromJSONStrict(w *walkState, raw any, path string) Value {
 }
 
 // ── Bare-string enum vocabularies (WIRE_FORMAT.md §3.5) ─────────────────────
+//
+// Every set below is a generated idl.json row (wire/idl), so a case added to
+// the IDL reaches this decoder by regeneration alone. The two sets carrying a
+// spelling the IDL does not declare say so where they are built: Binding's
+// lenient "Bound" unwrap and CellFormat's pre-rename "Date" alias.
 
 var (
-	toneCases           = newCaseSet("Default", "Subdued", "Brand", "Success", "Warning", "Critical", "Info")
-	weightCases         = newCaseSet("Compact", "Standard", "Spacious")
-	emphasisCases       = newCaseSet("Quiet", "Normal", "Loud")
-	orientationCases    = newCaseSet("Vertical", "Horizontal")
-	badgeVariantCases   = newCaseSet("Neutral", "Brand", "Success", "Warning", "Critical", "Info")
-	buttonVariantCases  = newCaseSet("Primary", "Secondary", "Tertiary", "Destructive")
-	headingVariantCases = newCaseSet("Standard", "Eyebrow", "Caption", "Lead")
+	toneCases           = newCaseSet(idl.EnumToneVariant.Cases...)
+	weightCases         = newCaseSet(idl.EnumStyleWeight.Cases...)
+	emphasisCases       = newCaseSet(idl.EnumEmphasis.Cases...)
+	orientationCases    = newCaseSet(idl.EnumOrientation.Cases...)
+	badgeVariantCases   = newCaseSet(idl.EnumBadgeVariant.Cases...)
+	buttonVariantCases  = newCaseSet(idl.EnumButtonVariant.Cases...)
+	headingVariantCases = newCaseSet(idl.EnumHeadingVariant.Cases...)
 	// Phase 1811 — DateTimeVariant (was DateVariant); the three cases did not move.
-	dateTimeVariantCases = newCaseSet("Date", "Time", "DateTime")
-	styleRoleCases       = newCaseSet("None", "Eyebrow", "Data", "Lede", "Caption")
-	fontVoiceCases       = newCaseSet("Default", "Display", "Structural")
-	liveRegionCases      = newCaseSet("polite", "assertive", "off")
-	imageVariantCases    = newCaseSet("Default", "Avatar", "Rounded")
+	dateTimeVariantCases = newCaseSet(idl.EnumDateTimeVariant.Cases...)
+	styleRoleCases       = newCaseSet(idl.EnumStyleRole.Cases...)
+	fontVoiceCases       = newCaseSet(idl.EnumFontVoice.Cases...)
+	liveRegionCases      = newCaseSet(idl.EnumLiveRegionKind.Cases...)
+	imageVariantCases    = newCaseSet(idl.EnumImageVariant.Cases...)
 	// Phase 1077 — §3.6.2. Three closed TOKEN vocabularies, never CSS values:
 	// `aspectRatio` names one of four ratios and can never carry "16 / 9",
 	// "16:9" or 1.7778, which is the free-form escape the tokens exist to
 	// close. Each is omitted-when-default on BOTH boundaries, so a pre-phase
 	// document decodes to today's behaviour and re-encodes to the bytes it
 	// already had.
-	imageFitCases     = newCaseSet("Natural", "Cover", "Contain")
-	imageAspectCases  = newCaseSet("Natural", "Square", "FourThree", "ThreeTwo", "SixteenNine")
-	imageLoadingCases = newCaseSet("Eager", "Lazy")
+	imageFitCases     = newCaseSet(idl.EnumImageFit.Cases...)
+	imageAspectCases  = newCaseSet(idl.EnumImageAspect.Cases...)
+	imageLoadingCases = newCaseSet(idl.EnumImageLoading.Cases...)
 	// Phase 1110 — §3.6.6's `TrackKind`, a BARE enum (§3.5), so an unrecognised
 	// token reports at the array element's own path with no `.$type` suffix.
 	// Closed at four: `metadata` is deliberately NOT admitted, because its cues
 	// are rendered by no user agent and read only by script, so a declarative
 	// document naming it would state an intent no conformant host could honour.
-	trackKindCases = newCaseSet("Subtitles", "Captions", "Descriptions", "Chapters")
+	trackKindCases = newCaseSet(idl.EnumTrackKind.Cases...)
 	// Phase 1111 — §3.6.8's `EmbedPermission`, likewise a BARE enum. Closed at
 	// four, and the two omissions are DESIGN rather than reservation: a
 	// top-level-navigation relaxation is the drive-by redirect, and a downloads
@@ -592,30 +571,30 @@ var (
 	// MUST NOT silently drop an unrecognised token — that would turn a document
 	// asking for something this vocabulary cannot name into one asking for
 	// LESS, which reads as success.
-	embedPermissionCases = newCaseSet("AllowScripts", "AllowSameOrigin", "AllowForms", "AllowFullscreen")
+	embedPermissionCases = newCaseSet(idl.EnumEmbedPermission.Cases...)
 	// Phase 1076 — §3.6.6. ONE kind, two variants: everything a video surface
 	// and an audio surface share is stated once on the record, and only the
 	// slots that genuinely differ live in the variant. Discriminated by
 	// `$type`, so an unknown case reports at `$.kind.kind.$type` — the
 	// Binding / TextSource position, not the bare-enum one (§6).
-	mediaKindCases         = newCaseSet("Video", "Audio")
-	linkProtectionCases    = newCaseSet("email") // Phase 812 — anti-scraper render strategy
-	scrollOrientationCases = newCaseSet("Vertical", "Horizontal", "Both")
-	mathDisplayCases       = newCaseSet("Inline", "Block")
-	chartKindCases         = newCaseSet("Line", "Bar", "Area", "Pie", "Scatter", "Heatmap")
-	boxRoleCases           = newCaseSet("Group", "Card", "Dashboard", "Separator")
-	boxLayoutCases         = newCaseSet("Flex", "Grid", "Masonry", "Auto")
-	channelDirectionCases  = newCaseSet("OutOnly", "TwoWay")
-	textAnchorCases        = newCaseSet("Start", "Middle", "End")
+	mediaKindCases         = newCaseSet(idl.UnionMediaKind.CaseTags()...)
+	linkProtectionCases    = newCaseSet(idl.EnumLinkProtection.Cases...) // Phase 812 — anti-scraper render strategy
+	scrollOrientationCases = newCaseSet(idl.EnumScrollOrientation.Cases...)
+	mathDisplayCases       = newCaseSet(idl.EnumMathDisplay.Cases...)
+	chartKindCases         = newCaseSet(idl.EnumChartKind.Cases...)
+	boxRoleCases           = newCaseSet(idl.EnumBoxRole.Cases...)
+	boxLayoutCases         = newCaseSet(idl.UnionBoxLayout.CaseTags()...)
+	channelDirectionCases  = newCaseSet(idl.EnumChannelDirection.Cases...)
+	textAnchorCases        = newCaseSet(idl.EnumTextAnchor.Cases...)
 	// Phase 801 — the closed two-value sort direction on staticRows.defaultSort.
 	// Lower-case on the wire, unlike most enums here.
-	sortDirectionCases = newCaseSet("asc", "desc")
+	sortDirectionCases = newCaseSet(idl.EnumSortDirection.Cases...)
 	// Phase 867 — Metric.trendPolarity: which way the measured quantity IMPROVES.
 	// TWO cases, and the absence of a third is deliberate: `Neutral` is RESERVED
 	// and is not admitted, which is the whole reason the slot is an enum rather
 	// than an `inverted: bool` — admitting it later is then a bare-string
 	// addition here, not a type replacement across every host.
-	trendPolarityCases = newCaseSet("HigherIsBetter", "LowerIsBetter")
+	trendPolarityCases = newCaseSet(idl.EnumTrendPolarity.Cases...)
 	// Phase 1472 — §3.1's `TextDirection`, the ONE `SemanticStyle` member that
 	// is not presentational: it declares one value's own base direction, which
 	// the bidirectional algorithm otherwise infers from the value's first
@@ -626,73 +605,65 @@ var (
 	// existed. An unrecognised token is REFUSED, never coerced to the default —
 	// a misspelled `"rtl"` would otherwise render as reordered digits with
 	// nothing said anywhere, which is the failure the member exists to prevent.
-	textDirectionCases = newCaseSet("auto", "ltr", "rtl")
+	textDirectionCases = newCaseSet(idl.EnumTextDirection.Cases...)
 	// Phase 1119 — §3.6.11's `Modality`, a closed PAIR. A sheet, a drawer and a
 	// menu are all PRESENTATIONS of one of the two rather than a third, so the
 	// answer to an unknown token is to say which of the two was meant, not to
 	// widen the enum. `Modal` is the identity and omits at it.
-	modalityCases = newCaseSet("Modal", "Popover")
+	modalityCases = newCaseSet(idl.EnumModalityKind.Cases...)
 	// Phase 1536 — which browsing context an `Action.Navigate` lands in. A bare
 	// enum (§3.5), omitted at `Self`. Two cases and NO lenient spelling: HTML's
 	// `_self` / `_blank` / `_parent` / `_top` are not accepted as aliases, because
 	// two of them are frame-busting gestures a hosted tree must not be able to ask
 	// for and accepting the two harmless ones would teach an emitter that the HTML
 	// vocabulary is the one in force here.
-	navigateTargetCases = newCaseSet("Self", "Blank")
+	navigateTargetCases = newCaseSet(idl.EnumNavigateTarget.Cases...)
 	// Phase 1116 — §3.6.10's `CaptureSource`, a closed pair. `Screen` is
 	// deliberately absent: the HTML capture attribute cannot ask for a display
 	// at all, and a screen capture is a standing grant reaching every window the
 	// reader has open rather than a third device behind the same picker
 	// permission. A later admission would be an ADDITION, never a re-meaning.
-	captureSourceCases = newCaseSet("Camera", "Microphone")
+	captureSourceCases = newCaseSet(idl.EnumCaptureSource.Cases...)
 
 	// Drawing (Phase 524) — the closed Shape / CurveCommand DUs. An unrecognised
 	// discriminator is UNKNOWN_DU_CASE (the typed-surface default-deny).
-	shapeCases        = newCaseSet("Group", "Rectangle", "Line", "Polyline", "Polygon", "Curve", "Circle", "Ellipse", "Label")
-	curveCommandCases = newCaseSet("MoveTo", "LineTo", "CubicTo", "QuadraticTo", "Close")
+	shapeCases        = newCaseSet(idl.UnionShape.CaseTags()...)
+	curveCommandCases = newCaseSet(idl.UnionCurveCommand.CaseTags()...)
 
-	textSourceCases = newCaseSet("Literal", "Bound", "I18n")
+	textSourceCases = newCaseSet(idl.UnionTextSource.CaseTags()...)
 	// The binding vocabulary includes the compute-layer cases (Transform /
 	// Invoke) plus "Bound" — the TextSource-wrapper convention transferred to
 	// a bare-Binding slot, accepted leniently and unwrapped in place.
-	bindingCases = newCaseSet(
-		"Static", "Query", "Filter", "Selection", "State", "Now", "Computed",
-		"I18n", "Local", "Format", "Data", "Transform", "Expr", "Invoke", "Bound",
-	)
+	bindingCases = newCaseSet(append(idl.UnionBinding.CaseTags(), "Bound")...)
 	// Phase 1811 — DateTime is canonical; Date is its section-16 lenient alias (the
 	// pre-rename spelling), admitted here and normalised in decodeCellFormat.
-	cellFormatCases = newCaseSet("None", "Number", "Currency", "Percent", "SignificantDigits", "DateTime", "Date", "Duration", "RelativeTime", "Custom")
+	cellFormatCases = newCaseSet(append(idl.UnionCellFormat.CaseTags(), "Date")...)
 	// Phase 819 — the Duration / RelativeTime format enums (shared by the
 	// CellFormat vocabulary; the binding-level Format object still decodes
 	// structurally).
-	durationUnitCases     = newCaseSet("Seconds", "Minutes", "Hours")
-	durationStyleCases    = newCaseSet("Compact", "Clock", "Long")
-	relativeTimeUnitCases = newCaseSet("Second", "Minute", "Hour", "Day", "Week", "Month", "Year")
+	durationUnitCases     = newCaseSet(idl.EnumDurationUnit.Cases...)
+	durationStyleCases    = newCaseSet(idl.EnumDurationStyle.Cases...)
+	relativeTimeUnitCases = newCaseSet(idl.EnumRelativeTimeUnit.Cases...)
 	// Phase 1533 — the resolution a `Binding.Now` declares for the
 	// host-furnished instant. A strict SUBSET of relativeTimeUnitCases: `Week`
 	// / `Month` / `Year` are refused rather than quietly accepted, because this
 	// is a truncation of a calendar instant and those three have no truncation
 	// every host agrees on (which weekday starts a week; which calendar).
-	timeGrainCases = newCaseSet("Second", "Minute", "Hour", "Day")
+	timeGrainCases = newCaseSet(idl.EnumTimeGrain.Cases...)
 	// Phase 821 — the standalone Icon display kind's size enum.
-	iconSizeCases    = newCaseSet("Small", "Medium", "Large")
-	columnWidthCases = newCaseSet("Auto", "Fixed", "Flex")
-	cellKindCases    = newCaseSet("Text", "Numeric", "Date", "Editable", "Checkbox", "Button", "ButtonGroup", "Link", "Pill", "TonedPill", "Progress", "Custom")
+	iconSizeCases    = newCaseSet(idl.EnumIconSize.Cases...)
+	columnWidthCases = newCaseSet(idl.UnionColumnWidth.CaseTags()...)
+	cellKindCases    = newCaseSet(idl.UnionCellKindErased.CaseTags()...)
 	// Phase 1113 — `Combobox` is the searchable form of `Choice`: a LARGE,
 	// searchable or asynchronous option set, or one that admits a value not on
 	// the list. Its `value` / `onChange` contract IS Choice's, deliberately, so
 	// a document migrating between the two changes its `$type` and nothing else.
 	//
 	// Phase 1121's `Tokens` and Phase 1130's `Rating` / `Color` join them.
-	formFieldCases    = newCaseSet("Text", "Number", "RangedNumber", "Checkbox", "Toggle", "Choice", "SegmentedChoice", "Combobox", "TextArea", "Range", "DateTime", "DateTimeRange", "Tokens", "Rating", "Color")
-	flushTriggerCases = newCaseSet("OnBlur", "OnSubmit", "OnDebounce", "OnCommitAction")
-	actionCases       = newCaseSet(
-		"Chain", "Dispatch", "Navigate", "SetState", "Notify", "WriteToClipboard",
-		"ReadFileBody", "Call", "AiTool", "CommitLocal", "Invoke", "Print",
-		// Phase 1537 — the confirm-before-action dialogue and the focus move.
-		"Confirm", "Focus",
-	)
-	callTargetCases = newCaseSet("State", "Query")
+	formFieldCases    = newCaseSet(idl.UnionFormFieldKind.CaseTags()...)
+	flushTriggerCases = newCaseSet(idl.UnionLocalFlushTrigger.CaseTags()...)
+	actionCases       = newCaseSet(idl.UnionAction.CaseTags()...)
+	callTargetCases   = newCaseSet(idl.UnionCallResultTarget.CaseTags()...)
 )
 
 // Lenient-ingest enum-value aliases (§3.6, decode-only; never encoded —
@@ -720,30 +691,10 @@ var (
 	noAliases = map[string]string(nil)
 )
 
-// knownKinds is every recognised node-kind discriminator (WIRE_FORMAT.md §3.2),
-// including the retired legacy container tags that decode-upgrade on read
-// (they never re-encode to their old form). A kind not in this set is
-// WRONG_NODE_KIND; a kind in this set but absent from the typed decoders is
-// accepted structurally.
-var knownKinds = newCaseSet(
-	// Layout
-	"Box", "SplitPanel", "Tabs", "Stepper", "SummaryList", "Disclosure", "Modal", "ScrollArea",
-	// Display
-	"Heading", "Markdown", "Metric", "Fact", "Badge", "Sparkline", "Callout", "Progress", "Skeleton",
-	"Icon", "LabelValueRow", "Link", "Image", "Media", "List", "Toast", "CodeBlock", "Math", "Drawing",
-	// Phase 1111 / 1120 — the sandboxed third-party embed, and recursive
-	// disclosure with tree semantics. Both are Display kinds; `Tree` is the
-	// format's first self-referential shape (its rows are `TreeItem` records,
-	// not `Node`s, so the hierarchy costs no node depth and is bounded on its
-	// own axis — §21.5).
-	"Embed", "Tree",
-	// Input
-	"Form", "Button", "FileUpload", "Select", "Filters",
-	// Visualisation
-	"DataGrid", "Chart", "Map",
-	// Structural
-	"Custom", "ErrorBoundary", "Switch", "FragmentDecl", "FragmentRef", "Mount",
-)
+// knownKinds is every node-kind discriminator idl.json declares
+// (WIRE_FORMAT.md §3.2). A kind not in this set is WRONG_NODE_KIND; every kind
+// in it has a typed decoder arm (kindarms_gen.go).
+var knownKinds = newCaseSet(idl.KindTags()...)
 
 // KnownNodeKinds returns the sorted set of recognised kind.$type discriminators
 // (the conformance exhaustiveness guard keys off it).
@@ -769,23 +720,6 @@ func CanonicalFormFieldKinds() []string {
 }
 
 // ── Value-shape predicates (the omit-when-default seam, §3.6) ──────────────
-
-func isTagOnly(v Value, tag string) bool {
-	o, ok := v.(Obj)
-	return ok && o.Tag == tag && len(o.Fields) == 0
-}
-
-// isPureDeterministicEffect reports the identity `EffectClass` — the one
-// `FragmentDecl.effect` omits (Phase 1670). Both members are required by the
-// spec, so an object carrying anything else, or carrying a third key, is NOT the
-// identity and rides to the wire unchanged.
-func isPureDeterministicEffect(v Value) bool {
-	obj, ok := v.(Obj)
-	if !ok || obj.Tag != "" || len(obj.Fields) != 2 {
-		return false
-	}
-	return isStr(obj.Fields["determinism"], "Deterministic") && isStr(obj.Fields["hostEffect"], "Pure")
-}
 
 func isStr(v Value, s string) bool {
 	t, ok := v.(Str)
@@ -821,20 +755,22 @@ func decodeTextSource(w *walkState, raw any, path string) Value {
 	}
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, textSourceCases, CodeUnknownDUCase)
+	s := newCaseSpec(w, obj, path, &idl.UnionTextSource, tag)
 	switch tag {
 	case "Literal":
-		return Str(expectString(require(obj, "text", path), path+".text"))
-	case "I18n":
-		key := expectString(require(obj, "key", path), path+".key")
-		args := Value(Obj{Fields: map[string]Value{}})
-		if raw, ok := obj["args"]; ok {
-			args = decodeI18nArgs(w, raw, path+".args")
+		// The transparent case: its canonical form is the bare text itself.
+		if raw, ok := s.has("text"); ok {
+			return Str(expectString(raw, path+".text"))
 		}
-		return Obj{Tag: "I18n", Fields: map[string]Value{"args": args, "key": Str(key)}}
-	default: // Bound
-		binding := decodeBinding(w, require(obj, "binding", path), path+".binding")
-		return Obj{Tag: "Bound", Fields: map[string]Value{"binding": binding}}
+	case "I18n":
+		s.field("key", decodeString)
+		s.field("args", decodeI18nArgs)
+	case "Bound":
+		s.field("binding", decodeBinding)
+	default:
+		return s.build(tag)
 	}
+	return s.buildStrict(tag)
 }
 
 // decodeI18nArgs decodes a TextSource.I18n argument bag, discriminated BY
@@ -939,10 +875,10 @@ func decodeSelectOption(w *walkState, raw any, path string) Value {
 	if s, ok := raw.(string); ok {
 		return Obj{Fields: map[string]Value{"label": Str(s), "value": Str(s)}}
 	}
-	obj := expectObject(raw, path)
-	label := decodeTextSource(w, require(obj, "label", path), path+".label")
-	value := expectString(require(obj, "value", path), path+".value")
-	return Obj{Fields: map[string]Value{"label": label, "value": Str(value)}}
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordSelectOption)
+	s.field("label", decodeTextSource)
+	s.field("value", decodeString)
+	return s.buildStrict("")
 }
 
 // selectOptionsStatic — the typed option-list payload; "<opaque>" → a tagged
@@ -996,11 +932,11 @@ func floatSeqStatic(w *walkState, raw any, path string) Value {
 }
 
 func decodeMapMarker(w *walkState, raw any, path string) Value {
-	obj := expectObject(raw, path)
-	label := decodeTextSource(w, require(obj, "label", path), path+".label")
-	lat := expectNumber(w, require(obj, "latitude", path), path+".latitude")
-	lon := expectNumber(w, require(obj, "longitude", path), path+".longitude")
-	return Obj{Fields: map[string]Value{"label": label, "latitude": lat, "longitude": lon}}
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordMapMarker)
+	s.field("label", decodeTextSource)
+	s.field("latitude", expectNumber)
+	s.field("longitude", expectNumber)
+	return s.buildStrict("")
 }
 
 // markerSeqStatic — both "<opaque>" and null → the empty typed array.
@@ -1078,11 +1014,9 @@ func rowSeqStatic(w *walkState, raw any, path string) Value {
 func decodeLocalFlushTrigger(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, flushTriggerCases, CodeUnknownDUCase)
-	if tag == "OnDebounce" {
-		ms := expectInt(require(obj, "milliseconds", path), path+".milliseconds")
-		return Obj{Tag: tag, Fields: map[string]Value{"milliseconds": Int(ms)}}
-	}
-	return Obj{Tag: tag, Fields: map[string]Value{}}
+	// Every case is read from its rows (OnDebounce's milliseconds included);
+	// unknown members are dropped.
+	return newCaseSpec(w, obj, path, &idl.UnionLocalFlushTrigger, tag).buildStrict(tag)
 }
 
 // decodeInvokeArgs — the [{"addr","value"}] scalar pairs of Binding.Invoke /
@@ -1092,10 +1026,10 @@ func decodeInvokeArgs(w *walkState, raw any, path string) Value {
 	out := make(Arr, len(arr))
 	for i, item := range arr {
 		p := path + "[" + strconv.Itoa(i) + "]"
-		obj := expectObject(item, p)
-		addr := expectString(require(obj, "addr", p), p+".addr")
-		value := expectString(require(obj, "value", p), p+".value")
-		out[i] = Obj{Fields: map[string]Value{"addr": Str(addr), "value": Str(value)}}
+		s := newRecordSpec(w, expectObject(item, p), p, &idl.RecordInvokeArg)
+		s.field("addr", decodeString)
+		s.field("value", decodeString)
+		out[i] = s.buildStrict("")
 	}
 	return out
 }
@@ -1132,6 +1066,15 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 	}
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, bindingCases, CodeUnknownDUCase)
+	if tag == "Bound" {
+		// The TextSource-wrapper convention transferred to a bare-Binding
+		// slot: Bound carries exactly one payload field, so the unwrap is
+		// one-to-one — decode the inner binding in place. Decode-only: Bound is
+		// a section-16 lenient spelling, not a Binding case, so it has no row.
+		return decodeBindingWith(w, require(obj, "binding", path), path+".binding", parse)
+	}
+	// Every case reads its fields' required-ness from its table row (Phase 2330).
+	s := newCaseSpec(w, obj, path, &idl.UnionBinding, tag)
 	switch tag {
 	case "Static":
 		// Phase 677 — absence is structural: a MISSING `value` means the binding
@@ -1140,57 +1083,44 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		// is omitted entirely; where it yields a typed empty (options normalise to
 		// []) that empty is emitted, so "no selection" and "selected nothing" stay
 		// distinguishable.
-		raw := obj["value"]
+		raw, _ := s.has("value")
 		decoded := parse(w, raw, path+".value")
-
-		if _, isNull := decoded.(Null); isNull {
-			return Obj{Tag: "Static", Fields: map[string]Value{}}
+		if _, isNull := decoded.(Null); !isNull {
+			s.set("value", decoded)
 		}
-
-		return Obj{Tag: "Static", Fields: map[string]Value{"value": decoded}}
 	case "Query":
-		name := expectString(require(obj, "name", path), path+".name")
-		fields := map[string]Value{"name": Str(name)}
+		s.field("name", decodeString)
 		// Field aliases: deps / dependencies. The accessor closure sentinel is
 		// wire-omitted (0.2.0) — dropped on decode. dependsOn is
 		// omitted-when-empty so the degenerate Query is byte-stable.
-		if raw, ok := optAliased(obj, "dependsOn", "deps", "dependencies"); ok {
+		if raw, ok := s.has("dependsOn", "deps", "dependencies"); ok {
 			arr := expectArray(raw, path+".dependsOn")
 			if len(arr) > 0 {
 				out := make(Arr, len(arr))
 				for i, item := range arr {
 					out[i] = Str(expectString(item, path+".dependsOn["+strconv.Itoa(i)+"]"))
 				}
-				fields["dependsOn"] = out
+				s.set("dependsOn", out)
 			}
 		}
-		return Obj{Tag: "Query", Fields: fields}
 	case "Filter":
-		name := expectString(require(obj, "name", path), path+".name")
-		fields := map[string]Value{"name": Str(name)}
-		if raw, ok := obj["defaultValue"]; ok {
-			fields["defaultValue"] = decodeDefault(raw, path+".defaultValue")
+		s.field("name", decodeString)
+		if raw, ok := s.has("defaultValue"); ok {
+			s.set("defaultValue", decodeDefault(raw, path+".defaultValue"))
 		}
-		return Obj{Tag: "Filter", Fields: fields}
 	case "Selection":
-		nodeID := expectString(require(obj, "nodeId", path), path+".nodeId")
-		fields := map[string]Value{"nodeId": Str(nodeID)}
-		if raw, ok := obj["defaultValue"]; ok {
-			fields["defaultValue"] = decodeDefault(raw, path+".defaultValue")
+		s.field("nodeId", decodeString)
+		if raw, ok := s.has("defaultValue"); ok {
+			s.set("defaultValue", decodeDefault(raw, path+".defaultValue"))
 		}
-		if raw, ok := obj["field"]; ok {
-			fields["field"] = Str(expectString(raw, path+".field"))
-		}
-		return Obj{Tag: "Selection", Fields: fields}
+		s.field("field", decodeString)
 	case "State":
-		key := expectString(require(obj, "key", path), path+".key")
-		fields := map[string]Value{"key": Str(key)}
+		s.field("key", decodeString)
 		// Field aliases: initialValue / default — the React useState prior.
 		// Phase 677 — an explicit null default is absence, same as omitting it.
-		if raw, ok := optAliased(obj, "defaultValue", "initialValue", "default"); ok && raw != nil {
-			fields["defaultValue"] = decodeDefault(raw, path+".defaultValue")
+		if raw, ok := s.has("defaultValue", "initialValue", "default"); ok && raw != nil {
+			s.set("defaultValue", decodeDefault(raw, path+".defaultValue"))
 		}
-		return Obj{Tag: "State", Fields: fields}
 	case "Now":
 		// Phase 765 — the host-furnished current INSTANT is never on the wire:
 		// the clock lives in the host, never the tree. Phase 1533 — the declared
@@ -1200,25 +1130,19 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		// Present-but-unreadable is a REFUSAL rather than a silent fallback to
 		// the default: a document that names a grain the host cannot honour must
 		// not be rendered at a neighbouring resolution in silence.
-		if raw, ok := obj["grain"]; ok {
-			grain := enumStr(raw, path+".grain", timeGrainCases, "grain", noAliases)
-			return Obj{Tag: "Now", Fields: map[string]Value{"grain": Str(grain)}}
-		}
-		return Obj{Tag: "Now", Fields: map[string]Value{}}
+		s.field("grain", enumDecoder(timeGrainCases, "grain", noAliases))
 	case "Computed":
-		return Obj{Tag: "Computed", Fields: map[string]Value{"fn": Str(closureSentinel)}}
+		s.field("fn", decodeClosure)
 	case "I18n":
-		key := expectString(require(obj, "key", path), path+".key")
-		fields := map[string]Value{"key": Str(key)}
-		if raw, ok := obj["args"]; ok {
+		s.field("key", decodeString)
+		if raw, ok := s.has("args"); ok {
 			argsObj := expectObject(raw, path+".args")
 			args := make(map[string]Value, len(argsObj))
 			for k, v := range argsObj {
 				args[k] = decodeBinding(w, v, path+".args."+k)
 			}
-			fields["args"] = Obj{Fields: args}
+			s.set("args", Obj{Fields: args})
 		}
-		return Obj{Tag: "I18n", Fields: fields}
 	case "Local":
 		// The declarative half of the buffer (WIRE_FORMAT.md Section 3.3.3).
 		// `format` / `onCommit` / `parse` are still the closure sentinels this
@@ -1234,11 +1158,9 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		// refused for a narrower reason worth recording, since it looks
 		// admissible: its inverse needs a x100 scale whose IEEE round-trip is not
 		// exact.
-		localFields := map[string]Value{
-			"format": Str(closureSentinel),
-			"parse":  Str(closureSentinel),
-		}
-		if raw, ok := obj["codec"]; ok {
+		s.field("format", decodeClosure)
+		s.field("parse", decodeClosure)
+		if raw, ok := s.has("codec"); ok {
 			codecObj := expectObject(raw, path+".codec")
 			tag, _ := codecObj["$type"].(string)
 			if tag != "Number" {
@@ -1249,14 +1171,14 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 					`use {"$type":"Number","decimals":2}, or drop the codec and let the buffer use the identity; a locale-rendered format (Currency / Date / RelativeTime / Since / Duration) cannot be parsed back from what the reader typed`,
 				)
 			}
-			localFields["codec"] = fromJSON(raw)
+			s.set("codec", fromJSON(raw))
 		}
 		// Two commit destinations. Not resolved by a precedence rule, because
 		// the wire cannot carry the closure at all: a host honouring `onCommit`
 		// and a host honouring `commitTo` would write to different places from
 		// identical bytes.
-		_, onCommitPresent := obj["onCommit"]
-		if raw, ok := obj["commitTo"]; ok {
+		_, onCommitPresent := s.has("onCommit")
+		if raw, ok := s.has("commitTo"); ok {
 			if onCommitPresent {
 				failExpecting(
 					CodeWrongType,
@@ -1265,32 +1187,36 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 					"either 'onCommit' (a host closure, which crosses the wire only as the closure sentinel) or 'commitTo' (the State key the flush writes); a decoding host can honour only the second, so keeping both makes the same document commit to two different places depending on who read it",
 				)
 			}
-			localFields["commitTo"] = Str(expectString(raw, path+".commitTo"))
+			s.set("commitTo", Str(expectString(raw, path+".commitTo")))
 		}
 		// PRESENCE, not a constant: this arm used to emit the sentinel
 		// unconditionally, so a document that never wrote the key gained one on
 		// re-encode — invisible while every Local carried a closure, and a
 		// byte divergence the moment one declared `commitTo` instead.
 		if onCommitPresent {
-			localFields["onCommit"] = Str(closureSentinel)
+			s.set("onCommit", Str(closureSentinel))
 		}
-		localFields["initialFrom"] = decodeBindingWith(w, require(obj, "initialFrom", path), path+".initialFrom", parse)
-		localFields["flushOn"] = Value(Obj{Tag: "OnBlur", Fields: map[string]Value{}})
-		if raw, ok := obj["flushOn"]; ok {
-			localFields["flushOn"] = decodeLocalFlushTrigger(w, raw, path+".flushOn")
+		if raw, ok := s.has("initialFrom"); ok {
+			s.set("initialFrom", decodeBindingWith(w, raw, path+".initialFrom", parse))
 		}
-		return Obj{Tag: "Local", Fields: localFields}
+		s.field("flushOn", decodeLocalFlushTrigger)
 	case "Format":
-		format := fromJSON(require(obj, "format", path))
-		if o, ok := format.(Obj); ok && o.Tag == "Date" {
-			// Phase 1811 — Format.DateTime is canonical; Date (the pre-rename
-			// spelling) is a section-16 lenient alias and re-encodes canonical.
-			o.Tag = "DateTime"
-			format = o
+		if raw, ok := s.has("format"); ok {
+			format := fromJSON(raw)
+			if o, ok := format.(Obj); ok && o.Tag == "Date" {
+				// Phase 1811 — Format.DateTime is canonical; Date (the pre-rename
+				// spelling) is a section-16 lenient alias and re-encodes canonical.
+				o.Tag = "DateTime"
+				format = o
+			}
+			s.set("format", format)
 		}
-		locale := fromJSON(require(obj, "locale", path))
-		source := decodeBindingWith(w, require(obj, "source", path), path+".source", floatStatic)
-		return Obj{Tag: "Format", Fields: map[string]Value{"format": format, "locale": locale, "source": source}}
+		if raw, ok := s.has("locale"); ok {
+			s.set("locale", fromJSON(raw))
+		}
+		if raw, ok := s.has("source"); ok {
+			s.set("source", decodeBindingWith(w, raw, path+".source", floatStatic))
+		}
 	case "Transform":
 		// Phase 815 — normalise the two observed organic shapes (Static/Bound
 		// wrapper; row-major rows) to canonical columnar before the frame
@@ -1304,7 +1230,7 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		// source over the EMPTY initial snapshot (§16), and a State wrapper's
 		// carried data is snapshot-VALIDATED at decode so
 		// the ragged-rows didactic stays byte-identical to the snapshot era.
-		srcRawOrig := require(obj, "source", path)
+		srcRawOrig, hasSource := s.has("source")
 		liveTag := ""
 		if m, ok := srcRawOrig.(map[string]any); ok {
 			if t, ok := m["$type"].(string); ok && (t == "State" || t == "Selection" || t == "Query") {
@@ -1313,6 +1239,8 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		}
 		var source Value
 		switch {
+		case !hasSource:
+			// Reachable only if the table stops requiring a source.
 		case liveTag != "":
 			b := decodeBinding(w, srcRawOrig, path+".source")
 			carried, carriedPresent := srcRawOrig.(map[string]any)["defaultValue"]
@@ -1388,20 +1316,23 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 			srcRaw := normaliseTransformSource(srcRawOrig)
 			source = atComputePath(path+".source", func() Value { return decodeFrameSource(srcRaw) })
 		}
-		pipeRaw := require(obj, "pipeline", path)
-		pipeline := atComputePath(path+".pipeline", func() Value { return decodeComputePipeline(pipeRaw) })
-		// Phase 1662 — §21.8's expression-node bound over the pipeline's own
-		// embedded expressions, at DECODE and not at validation: a document that
-		// decodes must not be able to name an unbounded evaluation.
-		checkPipelineExprBound(pipeline, path)
-		fields := map[string]Value{"pipeline": pipeline, "source": source}
-		if raw, ok := obj["params"]; ok {
+		if source != nil {
+			s.set("source", source)
+		}
+		if pipeRaw, ok := s.has("pipeline"); ok {
+			pipeline := atComputePath(path+".pipeline", func() Value { return decodeComputePipeline(pipeRaw) })
+			// Phase 1662 — §21.8's expression-node bound over the pipeline's own
+			// embedded expressions, at DECODE and not at validation: a document that
+			// decodes must not be able to name an unbounded evaluation.
+			checkPipelineExprBound(pipeline, path)
+			s.set("pipeline", pipeline)
+		}
+		if raw, ok := s.has("params"); ok {
 			params := decodeTransformParams(w, raw, path+".params")
 			if len(params) > 0 {
-				fields["params"] = params
+				s.set("params", params)
 			}
 		}
-		return Obj{Tag: "Transform", Fields: fields}
 	case "Expr":
 		// Phase 1534 — the scalar expression binding (WIRE_FORMAT §3.3.2). One
 		// ColExpr in the SAME encoding the pipeline's steps carry — the case
@@ -1415,24 +1346,24 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 		// statically here where it is NOT for Transform, whose unbound filter
 		// params are pruned under the deliberate unset-chip leniency), and an
 		// expression over MaxExprNodes.
-		exprRaw := require(obj, "expr", path)
-		expr := atComputePath(path+".expr", func() Value { return decodeComputeExpr(exprRaw) })
 		var names []string
-		count := 0
-		sawCol := exprWalk(expr, &names, &count)
-		if sawCol {
-			failExpecting(CodeWrongType, path+".expr",
-				"a `col` reference is not admitted inside an Expr binding — an Expr evaluates against its params alone and has no row for a column name to read. Use `Binding.Transform`, whose source supplies the frame, and put the column expression in a `derive` step",
-				"a ColExpr over `param` / `lit` / operators only (no `col`)")
+		if exprRaw, ok := s.has("expr"); ok {
+			expr := atComputePath(path+".expr", func() Value { return decodeComputeExpr(exprRaw) })
+			count := 0
+			if exprWalk(expr, &names, &count) {
+				failExpecting(CodeWrongType, path+".expr",
+					"a `col` reference is not admitted inside an Expr binding — an Expr evaluates against its params alone and has no row for a column name to read. Use `Binding.Transform`, whose source supplies the frame, and put the column expression in a `derive` step",
+					"a ColExpr over `param` / `lit` / operators only (no `col`)")
+			}
+			if count > MaxExprNodes {
+				failExpecting(CodeLimitExceeded, path+".expr",
+					fmt.Sprintf("expression exceeds the maximum of %d expression nodes (WIRE_FORMAT 21)", MaxExprNodes),
+					fmt.Sprintf("at most %d ColExpr nodes in one Expr binding", MaxExprNodes))
+			}
+			s.set("expr", expr)
 		}
-		if count > MaxExprNodes {
-			failExpecting(CodeLimitExceeded, path+".expr",
-				fmt.Sprintf("expression exceeds the maximum of %d expression nodes (WIRE_FORMAT 21)", MaxExprNodes),
-				fmt.Sprintf("at most %d ColExpr nodes in one Expr binding", MaxExprNodes))
-		}
-		exprFields := map[string]Value{"expr": expr}
 		bound := map[string]bool{}
-		if raw, ok := obj["params"]; ok {
+		if raw, ok := s.has("params"); ok {
 			params := decodeTransformParams(w, raw, path+".params")
 			for _, p := range params {
 				if po, ok := p.(Obj); ok {
@@ -1442,7 +1373,7 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 				}
 			}
 			if len(params) > 0 {
-				exprFields["params"] = params
+				s.set("params", params)
 			}
 		}
 		var missing []string
@@ -1456,19 +1387,15 @@ func decodeBindingTyped(w *walkState, raw any, path string, parse staticParser, 
 				"the expression reads param(s) "+strings.Join(missing, ", ")+" that this binding's `params` does not bind — an Expr has no rows and no filter to prune, so an unbound param has no value to take; add a params entry naming each, or drop the reference",
 				`{"$type":"Expr","expr":{…},"params":[{"name":"<name>","from":<Binding>}]}`)
 		}
-		return Obj{Tag: "Expr", Fields: exprFields}
 	case "Invoke":
-		capabilityID := expectString(require(obj, "capabilityId", path), path+".capabilityId")
-		args := decodeInvokeArgs(w, require(obj, "args", path), path+".args")
-		return Obj{Tag: "Invoke", Fields: map[string]Value{"args": args, "capabilityId": Str(capabilityID)}}
-	case "Bound":
-		// The TextSource-wrapper convention transferred to a bare-Binding
-		// slot: Bound carries exactly one payload field, so the unwrap is
-		// one-to-one — decode the inner binding in place. Decode-only.
-		return decodeBindingWith(w, require(obj, "binding", path), path+".binding", parse)
-	default: // "Data" — structural pass-through with a validated discriminator.
-		return fromJSON(raw)
+		s.field("capabilityId", decodeString)
+		s.field("args", decodeInvokeArgs)
+	default:
+		// A case idl.json declares that has no hand arm above: read from its
+		// table row, so a new Binding case decodes typed on regeneration.
+		return s.build(tag)
 	}
+	return s.buildStrict(tag)
 }
 
 // decodeTransformParams — Transform's [{ "from": <Binding>, "name": <string> }]
@@ -1495,10 +1422,13 @@ func decodeTransformParams(w *walkState, raw any, path string) Arr {
 	out := make(Arr, len(arr))
 	for i, item := range arr {
 		p := path + "[" + strconv.Itoa(i) + "]"
-		obj := expectObject(item, p)
-		name := expectString(require(obj, "name", p), p+".name")
-		from := decodeBinding(w, requireAliased(obj, "from", p, "value"), path+"."+name+".from")
-		out[i] = Obj{Fields: map[string]Value{"from": from, "name": Str(name)}}
+		s := newRecordSpec(w, expectObject(item, p), p, &idl.RecordTransformParam)
+		s.field("name", decodeString)
+		if raw, ok := s.has("from", "value"); ok {
+			name, _ := s.fields["name"].(Str)
+			s.set("from", decodeBinding(w, raw, path+"."+string(name)+".from"))
+		}
+		out[i] = s.buildStrict("")
 	}
 	return out
 }
@@ -1562,15 +1492,15 @@ func decodeBindingRows(w *walkState, raw any, path string) Value {
 // array) into the canonical bare pair object.
 func decodeRangePair(w *walkState, raw any, path string) Value {
 	if m, ok := raw.(map[string]any); ok {
-		mn, hasMin := m["min"]
-		mx, hasMax := m["max"]
-		if hasMin && hasMax {
-			return Obj{Fields: map[string]Value{
-				"max": expectNumber(w, mx, path+".max"),
-				"min": expectNumber(w, mn, path+".min"),
-			}}
+		// An incomplete pair object is refused as a whole (the reference
+		// host's verdict), which rows it needs is the table's answer.
+		if !requiredRowsPresent(idl.RecordRangePair.Fields, m) {
+			fail(CodeWrongType, path, "expected an object with min and max numbers at "+path)
 		}
-		fail(CodeWrongType, path, "expected an object with min and max numbers at "+path)
+		s := newRecordSpec(w, m, path, &idl.RecordRangePair)
+		s.field("max", expectNumber)
+		s.field("min", expectNumber)
+		return s.buildStrict("")
 	}
 	if arr, ok := raw.([]any); ok && len(arr) == 2 {
 		return Obj{Fields: map[string]Value{
@@ -1625,30 +1555,37 @@ const dateRangePairShape = `ordered ISO-8601 pair ({"from": <iso>, "to": <iso>} 
 // here for every variant — no date parsing, no locale. Only a literal pair is
 // checked; a bound pair's ordering is a runtime concern.
 func decodeDateRangePair(w *walkState, raw any, path string) Value {
-	ordered := func(from, to string) Value {
-		if strings.Compare(from, to) > 0 {
+	checkOrdered := func(from, to Value) {
+		f, hasFrom := from.(Str)
+		t, hasTo := to.(Str)
+		if hasFrom && hasTo && strings.Compare(string(f), string(t)) > 0 {
 			failExpecting(
 				CodeWrongType,
 				path,
-				"date-range start '"+from+"' is after end '"+to+"' — a DateRange pair is ordered "+
+				"date-range start '"+string(f)+"' is after end '"+string(t)+"' — a DateRange pair is ordered "+
 					"(from <= to); ISO-8601 strings of one variant compare lexicographically, so swap the two values",
 				dateRangePairShape,
 			)
 		}
-		return Obj{Fields: map[string]Value{"from": Str(from), "to": Str(to)}}
 	}
 	if m, ok := raw.(map[string]any); ok {
-		f, hasFrom := m["from"]
-		t, hasTo := m["to"]
-		if hasFrom && hasTo {
-			// Argument evaluation is left-to-right, so a malformed `from`
-			// surfaces before a malformed `to` — the F# host's order.
-			return ordered(expectString(f, path+".from"), expectString(t, path+".to"))
+		// An incomplete pair object is refused as a whole (the reference
+		// host's verdict), which rows it needs is the table's answer.
+		if !requiredRowsPresent(idl.RecordDateTimeRangePair.Fields, m) {
+			fail(CodeWrongType, path, "expected an object with from and to ISO-8601 strings at "+path)
 		}
-		fail(CodeWrongType, path, "expected an object with from and to ISO-8601 strings at "+path)
+		// A malformed `from` surfaces before a malformed `to` — the F# host's order.
+		s := newRecordSpec(w, m, path, &idl.RecordDateTimeRangePair)
+		s.field("from", decodeString)
+		s.field("to", decodeString)
+		checkOrdered(s.fields["from"], s.fields["to"])
+		return s.buildStrict("")
 	}
 	if arr, ok := raw.([]any); ok && len(arr) == 2 {
-		return ordered(expectString(arr[0], path+"[0]"), expectString(arr[1], path+"[1]"))
+		from := Str(expectString(arr[0], path+"[0]"))
+		to := Str(expectString(arr[1], path+"[1]"))
+		checkOrdered(from, to)
+		return Obj{Fields: map[string]Value{"from": from, "to": to}}
 	}
 	fail(CodeWrongType, path, "expected a date-range pair ({from, to} object or [from, to] array) at "+path)
 	return nil
@@ -1692,33 +1629,19 @@ func decodeDateRangeValue(w *walkState, raw any, path string) Value {
 func decodeAction(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, actionCases, CodeUnknownDUCase)
+	// Every case reads its fields' required-ness from its table row (Phase 2330).
+	s := newCaseSpec(w, obj, path, &idl.UnionAction, tag)
 	switch tag {
 	case "Dispatch":
-		return Obj{Tag: tag, Fields: map[string]Value{}}
+		// The msg closure is host-only: never on the wire.
 	case "Call":
 		// Field alias: url — the fetch prior for the same concept.
-		endpoint := expectString(requireAliased(obj, "endpoint", path, "url"), path+".endpoint")
-		fields := map[string]Value{"endpoint": Str(endpoint)}
-		if _, ok := obj["onResult"]; ok {
-			fields["onResult"] = Str(closureSentinel)
-		}
-		if raw, ok := obj["into"]; ok {
-			intoPath := path + ".into"
-			intoObj := expectObject(raw, intoPath)
-			intoTag := dispatch(intoObj, intoPath, callTargetCases, CodeUnknownDUCase)
-			if intoTag == "State" {
-				key := expectString(require(intoObj, "key", intoPath), intoPath+".key")
-				fields["into"] = Obj{Tag: "State", Fields: map[string]Value{"key": Str(key)}}
-			} else {
-				name := expectString(require(intoObj, "name", intoPath), intoPath+".name")
-				fields["into"] = Obj{Tag: "Query", Fields: map[string]Value{"name": Str(name)}}
-			}
-		}
-		return Obj{Tag: tag, Fields: fields}
+		s.field("endpoint", decodeString, "url")
+		s.field("onResult", decodeClosure)
+		s.field("into", decodeCallResultTarget)
 	case "Notify":
-		channel := expectString(require(obj, "channel", path), path+".channel")
-		payload := fromJSONStrict(w, require(obj, "payload", path), path+".payload")
-		return Obj{Tag: tag, Fields: map[string]Value{"channel": Str(channel), "payload": payload}}
+		s.field("channel", decodeString)
+		s.field("payload", decodeJSONValue)
 	case "Navigate":
 		// Field aliases: href / url / to — the HTML / router prior.
 		//
@@ -1731,23 +1654,16 @@ func decodeAction(w *walkState, raw any, path string) Value {
 		// reached through.
 		//
 		// `target` is omitted at `Self`, so absence is the pre-1536 behaviour.
-		route := decodeTextSource(w, requireAliased(obj, "route", path, "href", "url", "to"), path+".route")
-		fields := map[string]Value{"route": route}
-		if rawTarget, ok := obj["target"]; ok {
-			target := enumStr(rawTarget, path+".target", navigateTargetCases, "target", noAliases)
-			if target != "Self" {
-				fields["target"] = Str(target)
-			}
-		}
-		return Obj{Tag: tag, Fields: fields}
+		s.field("route", decodeTextSource, "href", "url", "to")
+		s.field("target", enumDecoder(navigateTargetCases, "target", noAliases))
 	case "SetState":
 		// Phase 818 — `value` (a literal JSON value, written verbatim) XOR
 		// `valueFrom` (a Binding evaluated at dispatch time inside the
 		// existing gate). Exactly one must be present; both / neither error
 		// didactically naming both fields.
-		key := expectString(require(obj, "key", path), path+".key")
-		rawValue, hasValue := obj["value"]
-		rawFrom, hasFrom := obj["valueFrom"]
+		s.field("key", decodeString)
+		rawValue, hasValue := s.has("value")
+		rawFrom, hasFrom := s.has("valueFrom")
 		if hasValue && hasFrom {
 			fail(CodeWrongType, path+".valueFrom",
 				"SetState carries both 'value' and 'valueFrom' — exactly one is allowed: 'value' is a literal JSON value written verbatim; 'valueFrom' derives the written value from a Binding at dispatch time; remove one")
@@ -1756,28 +1672,26 @@ func decodeAction(w *walkState, raw any, path string) Value {
 			fail(CodeMissingField, path+".value",
 				"missing required field 'value' — provide 'value' (a literal JSON value) or 'valueFrom' (a Binding evaluated at dispatch time)")
 		}
-		fields := map[string]Value{"key": Str(key)}
 		if hasValue {
-			fields["value"] = fromJSONStrict(w, rawValue, path+".value")
+			s.set("value", fromJSONStrict(w, rawValue, path+".value"))
 		}
 		if hasFrom {
-			fields["valueFrom"] = decodeBinding(w, rawFrom, path+".valueFrom")
+			s.set("valueFrom", decodeBinding(w, rawFrom, path+".valueFrom"))
 		}
-		return Obj{Tag: tag, Fields: fields}
 	case "AiTool":
-		name := expectString(require(obj, "toolName", path), path+".toolName")
-		args := fromJSONStrict(w, require(obj, "args", path), path+".args")
-		return Obj{Tag: tag, Fields: map[string]Value{"args": args, "toolName": Str(name)}}
+		s.field("toolName", decodeString)
+		s.field("args", decodeJSONValue)
 	case "Chain":
-		arr := expectArray(require(obj, "ops", path), path+".ops")
-		ops := make(Arr, len(arr))
-		for i, item := range arr {
-			ops[i] = decodeAction(w, item, path+".ops["+strconv.Itoa(i)+"]")
+		if raw, ok := s.has("ops"); ok {
+			arr := expectArray(raw, path+".ops")
+			ops := make(Arr, len(arr))
+			for i, item := range arr {
+				ops[i] = decodeAction(w, item, path+".ops["+strconv.Itoa(i)+"]")
+			}
+			s.set("ops", ops)
 		}
-		return Obj{Tag: tag, Fields: map[string]Value{"ops": ops}}
 	case "CommitLocal":
-		nodeID := expectString(require(obj, "nodeId", path), path+".nodeId")
-		return Obj{Tag: tag, Fields: map[string]Value{"nodeId": Str(nodeID)}}
+		s.field("nodeId", decodeString)
 	case "WriteToClipboard":
 		// Phase 1126 — the payload is a `TextSource`. The bare JSON string IS
 		// `Literal`'s canonical form, so every document written before the
@@ -1788,8 +1702,7 @@ func decodeAction(w *walkState, raw any, path string) Value {
 		// widening as "this member is now open" would put a JSON literal on the
 		// reader's clipboard, and a clipboard is a channel the reader later
 		// pastes somewhere with authority.
-		text := decodeTextSource(w, require(obj, "text", path), path+".text")
-		return Obj{Tag: tag, Fields: map[string]Value{"text": text}}
+		s.field("text", decodeTextSource)
 	case "Print":
 		// Phase 1124 — the payload-free case. This is the ONE `Action` arm that
 		// is strict about unrecognised members, and the asymmetry is
@@ -1814,7 +1727,6 @@ func decodeAction(w *walkState, raw any, path string) Value {
 			fail(CodeWrongType, path+"."+extras[0],
 				"no member beside $type — Print takes no payload (WIRE_FORMAT.md §3.6.14)")
 		}
-		return Obj{Tag: tag, Fields: map[string]Value{}}
 	case "Confirm":
 		// Phase 1537 — ask, then act. `prompt` is a `TextSource` (so the question
 		// can name what the reader selected), `onConfirm` is required and
@@ -1831,36 +1743,41 @@ func decodeAction(w *walkState, raw any, path string) Value {
 		// WRONG_TYPE follows the `SetState` value/valueFrom and Print-with-
 		// payload precedents: a decoder POLICY refusal reuses it rather than
 		// minting a code every host in the roster would owe an adoption for.
-		prompt := decodeTextSource(w, require(obj, "prompt", path), path+".prompt")
-		onConfirm := decodeAction(w, require(obj, "onConfirm", path), path+".onConfirm")
-		refuseNestedConfirm(onConfirm, path+".onConfirm")
-		fields := map[string]Value{"onConfirm": onConfirm, "prompt": prompt}
-		if rawCancel, ok := obj["onCancel"]; ok {
-			onCancel := decodeAction(w, rawCancel, path+".onCancel")
-			refuseNestedConfirm(onCancel, path+".onCancel")
-			fields["onCancel"] = onCancel
+		s.field("prompt", decodeTextSource)
+		for _, key := range [...]string{"onConfirm", "onCancel"} {
+			if raw, ok := s.has(key); ok {
+				continuation := decodeAction(w, raw, path+"."+key)
+				refuseNestedConfirm(continuation, path+"."+key)
+				s.set(key, continuation)
+			}
 		}
-		return Obj{Tag: tag, Fields: fields}
 	case "Focus":
 		// Phase 1537 — a bare node id, the `CommitLocal` shape above. It
 		// addresses a node in THIS document, so there is nothing for a binding
 		// to compute and no `TextSource` here.
-		focusNodeID := expectString(require(obj, "nodeId", path), path+".nodeId")
-		return Obj{Tag: tag, Fields: map[string]Value{"nodeId": Str(focusNodeID)}}
+		s.field("nodeId", decodeString)
 	case "ReadFileBody":
-		fileRef := expectString(require(obj, "fileRef", path), path+".fileRef")
-		encoding := enumStr(require(obj, "encoding", path), path+".encoding",
-			newCaseSet("Text", "Base64", "DataUrl"), "encoding", noAliases)
-		return Obj{Tag: tag, Fields: map[string]Value{
-			"encoding": Str(encoding),
-			"fileRef":  Str(fileRef),
-			"onRead":   Str(closureSentinel),
-		}}
-	default: // Invoke
-		capabilityID := expectString(require(obj, "capabilityId", path), path+".capabilityId")
-		args := decodeInvokeArgs(w, require(obj, "args", path), path+".args")
-		return Obj{Tag: tag, Fields: map[string]Value{"args": args, "capabilityId": Str(capabilityID)}}
+		s.field("fileRef", decodeString)
+		s.field("encoding", enumDecoder(enumCases(&idl.EnumFileReadEncoding), "encoding", noAliases))
+		// onRead is an optional row, but the reference decoder restores the
+		// continuation on every decoded tree, so it re-encodes as the sentinel
+		// whether or not it was written. Decode policy, not required-ness.
+		s.has("onRead")
+		s.set("onRead", Str(closureSentinel))
+	case "Invoke":
+		s.field("capabilityId", decodeString)
+		s.field("args", decodeInvokeArgs)
+	default:
+		return s.build(tag)
 	}
+	return s.buildStrict(tag)
+}
+
+// decodeCallResultTarget — Action.Call's `into`, read from its case's rows.
+func decodeCallResultTarget(w *walkState, raw any, path string) Value {
+	obj := expectObject(raw, path)
+	tag := dispatch(obj, path, callTargetCases, CodeUnknownDUCase)
+	return newCaseSpec(w, obj, path, &idl.UnionCallResultTarget, tag).buildStrict(tag)
 }
 
 // refuseNestedConfirm fails when a `Confirm` is reachable from `action`
@@ -1895,15 +1812,6 @@ func refuseNestedConfirm(action Value, path string) {
 
 type fieldDecoder func(w *walkState, raw any, path string) Value
 
-// fieldSpec drives simple table-driven decode (the TreeOp schemas): (field,
-// required, decoder), walked in declaration order so which defect surfaces
-// first is deterministic.
-type fieldSpec struct {
-	name     string
-	required bool
-	dec      fieldDecoder
-}
-
 // spec accumulates one kind object's decoded fields, tracking which input
 // keys were consumed so the unconsumed remainder can be preserved
 // structurally (§2 rule 2 tolerance) without resurrecting renamed aliases.
@@ -1916,6 +1824,12 @@ type spec struct {
 	path     string
 	fields   map[string]Value
 	consumed map[string]bool
+	// rows is the generated field table the object is decoded against (a
+	// kind's, a union case's or a record's), or nil for a hand-only shape.
+	rows []idl.Field
+	// owner names the row set for absentLeniency: "<Union>.<Case>" or
+	// "<Record>" ("" for a kind, which declares no leniency).
+	owner string
 }
 
 func newSpec(w *walkState, obj map[string]any, path string) *spec {
@@ -1953,24 +1867,6 @@ func (s *spec) req(key string, dec fieldDecoder, aliases ...string) Value {
 	return v
 }
 
-func (s *spec) opt(key string, dec fieldDecoder, aliases ...string) {
-	if raw, ok := s.take(key, aliases...); ok {
-		s.fields[key] = dec(s.w, raw, s.path+"."+key)
-	}
-}
-
-// optDrop decodes an optional field and DROPS it when it decodes to its
-// identity default — the §3.6 omit-when-default seam, applied on the decode
-// boundary so an explicit default normalises to the omitted canonical form.
-func (s *spec) optDrop(key string, dec fieldDecoder, isDefault func(Value) bool, aliases ...string) {
-	if raw, ok := s.take(key, aliases...); ok {
-		v := dec(s.w, raw, s.path+"."+key)
-		if !isDefault(v) {
-			s.fields[key] = v
-		}
-	}
-}
-
 // sentinel normalises a present closure-slot key to the "<closure>" sentinel.
 func (s *spec) sentinel(key string) {
 	if _, ok := s.take(key); ok {
@@ -1980,8 +1876,11 @@ func (s *spec) sentinel(key string) {
 
 func (s *spec) set(key string, v Value) { s.fields[key] = v }
 
-// build finishes the kind object, preserving unconsumed keys structurally.
+// build finishes the object: every table row the hand arm did not read is
+// decoded by its declared type, and the keys no row names are preserved
+// structurally (rule 2 tolerance).
 func (s *spec) build(tag string) Obj {
+	s.decodeRemainingRows()
 	for k, v := range s.obj {
 		if !s.consumed[k] {
 			s.fields[k] = fromJSON(v)
@@ -1990,8 +1889,11 @@ func (s *spec) build(tag string) Obj {
 	return Obj{Tag: tag, Fields: s.fields}
 }
 
-// buildStrict finishes a fully-typed shape, dropping unconsumed keys.
+// buildStrict finishes a fully-typed shape: every table row the hand decoder
+// did not read is decoded by its declared type, and keys no row names are
+// dropped.
 func (s *spec) buildStrict(tag string) Obj {
+	s.decodeRemainingRows()
 	return Obj{Tag: tag, Fields: s.fields}
 }
 
@@ -1999,31 +1901,36 @@ func (s *spec) buildStrict(tag string) Obj {
 
 func decodeCellFormat(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
-	switch dispatch(obj, path, cellFormatCases, CodeUnknownDUCase) {
+	tag := dispatch(obj, path, cellFormatCases, CodeUnknownDUCase)
+	if tag == "Date" {
+		// Phase 1811 — DateTime is canonical; Date (the pre-rename spelling) is a
+		// section-16 lenient alias, decoded to the same value and re-encoded canonical.
+		tag = "DateTime"
+	}
+	s := newCaseSpec(w, obj, path, &idl.UnionCellFormat, tag)
+	switch tag {
 	case "Duration":
 		// Phase 819 — trendable duration cells: raw float counts `unit`s,
-		// rendered per `style`. Both fields required, closed vocabularies.
-		style := enumStr(require(obj, "style", path), path+".style", durationStyleCases, "style", noAliases)
-		unit := enumStr(require(obj, "unit", path), path+".unit", durationUnitCases, "unit", noAliases)
-		return Obj{Tag: "Duration", Fields: map[string]Value{"style": Str(style), "unit": Str(unit)}}
+		// rendered per `style`. Closed vocabularies.
+		s.field("style", enumDecoder(durationStyleCases, "style", noAliases))
+		s.field("unit", enumDecoder(durationUnitCases, "unit", noAliases))
 	case "RelativeTime":
 		// Phase 819 — cell-vocabulary parity with the binding-level Format's
 		// RelativeTime case.
-		unit := enumStr(require(obj, "unit", path), path+".unit", relativeTimeUnitCases, "unit", noAliases)
-		return Obj{Tag: "RelativeTime", Fields: map[string]Value{"unit": Str(unit)}}
-	case "DateTime", "Date":
-		// Phase 1811 — DateTime is canonical; Date (the pre-rename spelling) is a
-		// section-16 lenient alias, decoded to the same value and re-encoded canonical.
-		format := expectString(require(obj, "format", path), path+".format")
-		return Obj{Tag: "DateTime", Fields: map[string]Value{"format": Str(format)}}
+		s.field("unit", enumDecoder(relativeTimeUnitCases, "unit", noAliases))
+	case "DateTime":
+		s.field("format", decodeString)
+	default:
+		// The remaining cases read from their rows, unknown members preserved.
+		return s.build(tag)
 	}
-	return fromJSON(raw)
+	return s.buildStrict(tag)
 }
 
 func decodeColumnWidth(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
-	dispatch(obj, path, columnWidthCases, CodeUnknownDUCase)
-	return fromJSON(raw)
+	tag := dispatch(obj, path, columnWidthCases, CodeUnknownDUCase)
+	return tableCase(w, obj, path, &idl.UnionColumnWidth, tag)
 }
 
 // decodeEmphasisEnum — the Emphasis style DU, with the §3.6 value aliases and
@@ -2151,10 +2058,10 @@ func decodeSingleNode(w *walkState, raw any, path string) Value {
 // no condition has no rendering that could be right: skipping it renders the
 // `default` and reports nothing.
 func decodeSwitchCase(w *walkState, raw any, path string) Value {
-	obj := expectObject(raw, path)
-	child := decodeNodeValue(w, require(obj, "child", path), path+".child")
-	matchRaw, hasMatch := obj["match"]
-	whenRaw, hasWhen := obj["when"]
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordSwitchCase)
+	s.field("child", decodeSingleNode)
+	matchRaw, hasMatch := s.has("match")
+	whenRaw, hasWhen := s.has("when")
 	if hasMatch && hasWhen {
 		fail(CodeWrongType, path+".when",
 			"Switch case carries both 'match' and 'when' — exactly one is allowed: either 'match' "+
@@ -2168,10 +2075,11 @@ func decodeSwitchCase(w *walkState, raw any, path string) Value {
 				"predicate evaluated at render time)")
 	}
 	if hasMatch {
-		match := expectString(matchRaw, path+".match")
-		return Obj{Fields: map[string]Value{"child": child, "match": Str(match)}}
+		s.set("match", Str(expectString(matchRaw, path+".match")))
+	} else {
+		s.set("when", decodeBinding(w, whenRaw, path+".when"))
 	}
-	return Obj{Fields: map[string]Value{"child": child, "when": decodeBinding(w, whenRaw, path+".when")}}
+	return s.buildStrict("")
 }
 
 func decodeSwitchCases(w *walkState, raw any, path string) Value {
@@ -2186,9 +2094,9 @@ func decodeSwitchCases(w *walkState, raw any, path string) Value {
 // ── Chart annotations (Phase 1490/1491/1492 — §4l) ──────────────────────────
 
 var (
-	chartAnnotationCases      = newCaseSet("ReferenceLine", "EventMarker", "RangeBand")
-	chartAnnotationXCases     = newCaseSet("Category", "Date")
-	chartAnnotationRangeCases = newCaseSet("ValueRange", "XRange")
+	chartAnnotationCases      = newCaseSet(idl.UnionChartAnnotation.CaseTags()...)
+	chartAnnotationXCases     = newCaseSet(idl.UnionChartAnnotationX.CaseTags()...)
+	chartAnnotationRangeCases = newCaseSet(idl.UnionChartAnnotationRange.CaseTags()...)
 )
 
 // isCanonicalISODay reports whether text is a canonical ISO-8601 date the
@@ -2252,29 +2160,24 @@ func isCanonicalISODay(text string) bool {
 // the whole picture.
 func decodeChartAnnotationX(w *walkState, raw any, path string) (Value, string) {
 	obj := expectObject(raw, path)
-	s := newSpec(w, obj, path)
-	switch dispatch(obj, path, chartAnnotationXCases, CodeUnknownDUCase) {
+	tag := dispatch(obj, path, chartAnnotationXCases, CodeUnknownDUCase)
+	s := newCaseSpec(w, obj, path, &idl.UnionChartAnnotationX, tag)
+	iso := ""
+	switch tag {
 	case "Category":
-		s.req("key", decodeString)
-		return s.buildStrict("Category"), ""
-	default:
-		iso := expectString(requireChartAnnotationField(obj, path, "iso"), path+".iso")
-		if !isCanonicalISODay(iso) {
-			failExpecting(CodeWrongType, path+".iso",
-				"expected a canonical ISO-8601 date (YYYY-MM-DD, optionally followed by a time) naming a real calendar day at "+path+".iso",
-				"a canonical ISO-8601 date — an event marker's date is the address it is drawn at, and an unreadable one would place the marker at 1970-01-01 and drag the axis back with it")
+		s.field("key", decodeString)
+	case "Date":
+		if raw, ok := s.has("iso"); ok {
+			iso = expectString(raw, path+".iso")
+			if !isCanonicalISODay(iso) {
+				failExpecting(CodeWrongType, path+".iso",
+					"expected a canonical ISO-8601 date (YYYY-MM-DD, optionally followed by a time) naming a real calendar day at "+path+".iso",
+					"a canonical ISO-8601 date — an event marker's date is the address it is drawn at, and an unreadable one would place the marker at 1970-01-01 and drag the axis back with it")
+			}
+			s.set("iso", Str(iso))
 		}
-		s.req("iso", decodeString)
-		return s.buildStrict("Date"), iso
 	}
-}
-
-func requireChartAnnotationField(obj map[string]any, path, key string) any {
-	raw, ok := obj[key]
-	if !ok {
-		fail(CodeMissingField, path+"."+key, "missing required field '"+key+"'")
-	}
-	return raw
+	return s.buildStrict(tag), iso
 }
 
 // decodeChartAnnotationRange — a range band's PAIR (Phase 1492, §4l). The case
@@ -2293,22 +2196,42 @@ func requireChartAnnotationField(obj map[string]any, path, key string) any {
 // ROWS' order, a cross-reference rather than a local property of the address.
 func decodeChartAnnotationRange(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
-	s := newSpec(w, obj, path)
-	switch dispatch(obj, path, chartAnnotationRangeCases, CodeUnknownDUCase) {
+	tag := dispatch(obj, path, chartAnnotationRangeCases, CodeUnknownDUCase)
+	s := newCaseSpec(w, obj, path, &idl.UnionChartAnnotationRange, tag)
+	switch tag {
 	case "ValueRange":
-		from := chartAnnotationFinite(w, requireChartAnnotationField(obj, path, "from"), path+".from")
-		to := chartAnnotationFinite(w, requireChartAnnotationField(obj, path, "to"), path+".to")
-		if from > to {
+		var from, to float64
+		fromRaw, hasFrom := s.has("from")
+		if hasFrom {
+			from = chartAnnotationFinite(w, fromRaw, path+".from")
+		}
+		toRaw, hasTo := s.has("to")
+		if hasTo {
+			to = chartAnnotationFinite(w, toRaw, path+".to")
+		}
+		if hasFrom && hasTo && from > to {
 			failExpecting(CodeWrongType, path,
 				"expected an ORDERED pair at "+path,
 				"a range band runs from its lower value to its upper one, and this pair runs backwards; swapping the ends silently would draw a band the author did not describe")
 		}
-		s.req("from", expectNumberField)
-		s.req("to", expectNumberField)
-		return s.buildStrict("ValueRange")
-	default:
-		fromV, fromISO := decodeChartAnnotationX(w, requireChartAnnotationField(obj, path, "from"), path+".from")
-		toV, toISO := decodeChartAnnotationX(w, requireChartAnnotationField(obj, path, "to"), path+".to")
+		if hasFrom {
+			s.set("from", expectNumber(w, fromRaw, path+".from"))
+		}
+		if hasTo {
+			s.set("to", expectNumber(w, toRaw, path+".to"))
+		}
+	case "XRange":
+		var fromISO, toISO string
+		if fromRaw, ok := s.has("from"); ok {
+			var v Value
+			v, fromISO = decodeChartAnnotationX(w, fromRaw, path+".from")
+			s.set("from", v)
+		}
+		if toRaw, ok := s.has("to"); ok {
+			var v Value
+			v, toISO = decodeChartAnnotationX(w, toRaw, path+".to")
+			s.set("to", v)
+		}
 		// Both dates are already known canonical and calendar-valid (the address
 		// decoder refused anything else), and a canonical YYYY-MM-DD sorts
 		// lexicographically exactly as it sorts chronologically — so no calendar
@@ -2318,12 +2241,8 @@ func decodeChartAnnotationRange(w *walkState, raw any, path string) Value {
 				"expected an ORDERED pair at "+path,
 				"a range band runs from its earlier date to its later one, and this pair runs backwards; swapping the ends silently would draw a band the author did not describe")
 		}
-		s.take("from")
-		s.take("to")
-		s.set("from", fromV)
-		s.set("to", toV)
-		return s.buildStrict("XRange")
 	}
+	return s.buildStrict(tag)
 }
 
 // chartAnnotationFinite reads a float slot and NARROWS §7 at it. §7 admits the
@@ -2359,24 +2278,27 @@ func chartAnnotationFloatOf(v Value) (float64, bool) {
 // One closed $type-discriminated union.
 func decodeChartAnnotation(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
-	s := newSpec(w, obj, path)
 	tag := dispatch(obj, path, chartAnnotationCases, CodeUnknownDUCase)
+	s := newCaseSpec(w, obj, path, &idl.UnionChartAnnotation, tag)
 	// Every label rides the Phase 1143 text contract — carried, never resolved.
-	s.opt("label", decodeTextSource)
+	s.field("label", decodeTextSource)
 	switch tag {
 	case "ReferenceLine":
-		chartAnnotationFinite(w, requireChartAnnotationField(obj, path, "value"), path+".value")
-		s.req("value", expectNumberField)
-		return s.buildStrict("ReferenceLine")
+		if raw, ok := s.has("value"); ok {
+			chartAnnotationFinite(w, raw, path+".value")
+			s.set("value", expectNumber(w, raw, path+".value"))
+		}
 	case "EventMarker":
-		at, _ := decodeChartAnnotationX(w, requireChartAnnotationField(obj, path, "at"), path+".at")
-		s.take("at")
-		s.set("at", at)
-		return s.buildStrict("EventMarker")
+		if raw, ok := s.has("at"); ok {
+			at, _ := decodeChartAnnotationX(w, raw, path+".at")
+			s.set("at", at)
+		}
+	case "RangeBand":
+		s.field("range", decodeChartAnnotationRange)
 	default:
-		s.req("range", decodeChartAnnotationRange)
-		return s.buildStrict("RangeBand")
+		return s.build(tag)
 	}
+	return s.buildStrict(tag)
 }
 
 func decodeChartAnnotationArray(w *walkState, raw any, path string) Value {
@@ -2392,7 +2314,7 @@ func decodeTextSourceArray(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = decodeTextSource(w, item, path+"."+strconv.Itoa(i))
+		out[i] = decodeTextSource(w, item, path+"["+strconv.Itoa(i)+"]")
 	}
 	return out
 }
@@ -2401,7 +2323,7 @@ func decodeIntArray(w *walkState, raw any, path string) Value {
 	arr := expectArray(raw, path)
 	out := make(Arr, len(arr))
 	for i, item := range arr {
-		out[i] = Int(expectInt(item, path+"."+strconv.Itoa(i)))
+		out[i] = Int(expectInt(item, path+"["+strconv.Itoa(i)+"]"))
 	}
 	return out
 }
@@ -2431,21 +2353,21 @@ func decodeJSONPassthrough(w *walkState, raw any, _ string) Value {
 // decodeGuestChannel decodes Mount's guest channel: direction is a closed DU
 // (OutOnly | TwoWay); messageShape is an optional string riding on TwoWay.
 func decodeGuestChannel(w *walkState, raw any, path string) Value {
-	obj := expectObject(raw, path)
-	direction := expectString(require(obj, "direction", path), path+".direction")
-	if !channelDirectionCases.has(direction) {
-		failExpecting(
-			CodeUnknownDUCase,
-			path+".direction",
-			"unknown channel direction '"+direction+"'",
-			"OutOnly | TwoWay",
-		)
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordGuestChannel)
+	if raw, ok := s.has("direction"); ok {
+		direction := expectString(raw, path+".direction")
+		if !channelDirectionCases.has(direction) {
+			failExpecting(
+				CodeUnknownDUCase,
+				path+".direction",
+				"unknown channel direction '"+direction+"'",
+				"OutOnly | TwoWay",
+			)
+		}
+		s.set("direction", Str(direction))
 	}
-	fields := map[string]Value{"direction": Str(direction)}
-	if raw, ok := obj["messageShape"]; ok {
-		fields["messageShape"] = Str(expectString(raw, path+".messageShape"))
-	}
-	return Obj{Fields: fields}
+	s.field("messageShape", decodeString)
+	return s.buildStrict("")
 }
 
 // ── Drawing (Phases 524 / 642) — closed Shape / CurveCommand DUs ────────────
@@ -2457,21 +2379,20 @@ func decodeGuestChannel(w *walkState, raw any, path string) Value {
 // ($.kind.shapes[0].$type / $.kind.shapes[0].commands[0].$type).
 
 func decodeViewBox(w *walkState, raw any, path string) Value {
-	obj := expectObject(raw, path)
-	return Obj{Fields: map[string]Value{
-		"height": expectNumber(w, require(obj, "height", path), path+".height"),
-		"minX":   expectNumber(w, require(obj, "minX", path), path+".minX"),
-		"minY":   expectNumber(w, require(obj, "minY", path), path+".minY"),
-		"width":  expectNumber(w, require(obj, "width", path), path+".width"),
-	}}
+	return decodeRecordStrict(w, raw, path, &idl.RecordViewBox)
 }
 
 func decodeDrawPoint(w *walkState, raw any, path string) Value {
-	obj := expectObject(raw, path)
-	return Obj{Fields: map[string]Value{
-		"x": expectNumber(w, require(obj, "x", path), path+".x"),
-		"y": expectNumber(w, require(obj, "y", path), path+".y"),
-	}}
+	return decodeRecordStrict(w, raw, path, &idl.RecordDrawPoint)
+}
+
+// decodeRecordStrict reads a record whose every field decodes by its declared
+// type, in Ordinal key order (the order the first of several defects is
+// reported at, WIRE_FORMAT.md section 29.3); unknown members are dropped.
+func decodeRecordStrict(w *walkState, raw any, path string, r *idl.Record) Value {
+	s := newRecordSpec(w, expectObject(raw, path), path, r)
+	s.readRowsOrdinal()
+	return s.buildStrict("")
 }
 
 func decodeDrawPointArray(w *walkState, raw any, path string) Value {
@@ -2488,74 +2409,39 @@ func decodeDrawPointArray(w *walkState, raw any, path string) Value {
 // text-only fields (Label) are bare enum / number / string; markId (Phase 642)
 // is the keyed mark identity.
 func decodeDrawStyle(w *walkState, raw any, path string) Value {
-	obj := expectObject(raw, path)
-	fields := map[string]Value{}
-	for _, key := range []string{"fill", "stroke"} {
-		if v, ok := obj[key]; ok {
-			fields[key] = decodeBindingString(w, v, path+"."+key)
-		}
-	}
-	for _, key := range []string{"opacity", "strokeWidth"} {
-		if v, ok := obj[key]; ok {
-			fields[key] = decodeBindingFloat(w, v, path+"."+key)
-		}
-	}
-	if v, ok := obj["textAnchor"]; ok {
-		fields["textAnchor"] = Str(enumStr(v, path+".textAnchor", textAnchorCases, "textAnchor", noAliases))
-	}
-	if v, ok := obj["fontSize"]; ok {
-		fields["fontSize"] = expectNumber(w, v, path+".fontSize")
-	}
-	if v, ok := obj["emphasis"]; ok {
-		fields["emphasis"] = decodeEmphasisEnum(w, v, path+".emphasis")
-	}
-	if v, ok := obj["fontFamily"]; ok {
-		fields["fontFamily"] = Str(expectString(v, path+".fontFamily"))
-	}
-	if v, ok := obj["markId"]; ok {
-		fields["markId"] = Str(expectString(v, path+".markId"))
-	}
-	// rotation (Phase 877) — Label text rotation in degrees, clockwise.
-	// Optional with no default: absent means upright, and an explicit 0 is a
-	// distinct present value, so this must key off presence in the object and
-	// never off the decoded number being non-zero.
-	if v, ok := obj["rotation"]; ok {
-		fields["rotation"] = expectNumber(w, v, path+".rotation")
-	}
-	// tip (Phase 883) — the per-mark hover readout, a full TextSource (so a
-	// Bound envelope decodes here as well as the canonical bare-string
-	// Literal). Optional; absent means untipped. Keys off presence for the same
-	// reason rotation does, and the trap is sharper here: an explicitly EMPTY
-	// tip is a distinct present value, so a non-empty test would drop it and
-	// re-encode to different bytes.
-	if v, ok := obj["tip"]; ok {
-		fields["tip"] = decodeTextSource(w, v, path+".tip")
-	}
-	return Obj{Fields: fields}
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordDrawStyle)
+	s.field("fill", decodeBindingString)
+	s.field("stroke", decodeBindingString)
+	s.field("opacity", decodeBindingFloat)
+	s.field("strokeWidth", decodeBindingFloat)
+	s.field("textAnchor", enumDecoder(textAnchorCases, "textAnchor", noAliases))
+	s.field("fontSize", expectNumber)
+	s.field("emphasis", decodeEmphasisEnum)
+	s.field("fontFamily", decodeString)
+	s.field("markId", decodeString)
+	// rotation (Phase 877) — Label text rotation in degrees, clockwise. Absent
+	// means upright, and an explicit 0 is a distinct present value. tip (Phase
+	// 883) — the per-mark hover readout, a full TextSource; an explicitly EMPTY
+	// tip is a distinct present value. Both key off presence, which is what a
+	// row read does.
+	s.field("rotation", expectNumber)
+	s.field("tip", decodeTextSource)
+	return s.buildStrict("")
 }
 
 func decodeCurveCommand(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, curveCommandCases, CodeUnknownDUCase)
-	switch tag {
-	case "MoveTo", "LineTo":
-		return Obj{Tag: tag, Fields: map[string]Value{
-			"to": decodeDrawPoint(w, require(obj, "to", path), path+".to"),
-		}}
-	case "CubicTo":
-		return Obj{Tag: tag, Fields: map[string]Value{
-			"control1": decodeDrawPoint(w, require(obj, "control1", path), path+".control1"),
-			"control2": decodeDrawPoint(w, require(obj, "control2", path), path+".control2"),
-			"to":       decodeDrawPoint(w, require(obj, "to", path), path+".to"),
-		}}
-	case "QuadraticTo":
-		return Obj{Tag: tag, Fields: map[string]Value{
-			"control": decodeDrawPoint(w, require(obj, "control", path), path+".control"),
-			"to":      decodeDrawPoint(w, require(obj, "to", path), path+".to"),
-		}}
-	default: // Close
-		return Obj{Tag: "Close", Fields: map[string]Value{}}
-	}
+	return decodeCaseStrict(w, obj, path, &idl.UnionCurveCommand, tag)
+}
+
+// decodeCaseStrict reads a union case whose every field decodes by its
+// declared type, in Ordinal key order (the order the first of several defects
+// is reported at, WIRE_FORMAT.md section 29.3); unknown members are dropped.
+func decodeCaseStrict(w *walkState, obj map[string]any, path string, u *idl.Union, tag string) Value {
+	s := newCaseSpec(w, obj, path, u, tag)
+	s.readRowsOrdinal()
+	return s.buildStrict(tag)
 }
 
 func decodeCurveCommandArray(w *walkState, raw any, path string) Value {
@@ -2570,69 +2456,12 @@ func decodeCurveCommandArray(w *walkState, raw any, path string) Value {
 func decodeShape(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, shapeCases, CodeUnknownDUCase)
-	var style Value = Obj{Fields: map[string]Value{}}
-	if v, ok := obj["style"]; ok {
-		style = decodeDrawStyle(w, v, path+".style")
-	}
-	switch tag {
-	case "Group":
-		return Obj{Tag: tag, Fields: map[string]Value{
-			"children": decodeShapeArray(w, require(obj, "children", path), path+".children"),
-			"style":    style,
-		}}
-	case "Rectangle":
-		fields := map[string]Value{
-			"height": expectNumber(w, require(obj, "height", path), path+".height"),
-			"style":  style,
-			"width":  expectNumber(w, require(obj, "width", path), path+".width"),
-			"x":      expectNumber(w, require(obj, "x", path), path+".x"),
-			"y":      expectNumber(w, require(obj, "y", path), path+".y"),
-		}
-		if v, ok := obj["cornerRadius"]; ok {
-			fields["cornerRadius"] = expectNumber(w, v, path+".cornerRadius")
-		}
-		return Obj{Tag: tag, Fields: fields}
-	case "Line":
-		return Obj{Tag: tag, Fields: map[string]Value{
-			"style": style,
-			"x1":    expectNumber(w, require(obj, "x1", path), path+".x1"),
-			"x2":    expectNumber(w, require(obj, "x2", path), path+".x2"),
-			"y1":    expectNumber(w, require(obj, "y1", path), path+".y1"),
-			"y2":    expectNumber(w, require(obj, "y2", path), path+".y2"),
-		}}
-	case "Polyline", "Polygon":
-		return Obj{Tag: tag, Fields: map[string]Value{
-			"points": decodeDrawPointArray(w, require(obj, "points", path), path+".points"),
-			"style":  style,
-		}}
-	case "Curve":
-		return Obj{Tag: tag, Fields: map[string]Value{
-			"commands": decodeCurveCommandArray(w, require(obj, "commands", path), path+".commands"),
-			"style":    style,
-		}}
-	case "Circle":
-		return Obj{Tag: tag, Fields: map[string]Value{
-			"cx":    expectNumber(w, require(obj, "cx", path), path+".cx"),
-			"cy":    expectNumber(w, require(obj, "cy", path), path+".cy"),
-			"r":     expectNumber(w, require(obj, "r", path), path+".r"),
-			"style": style,
-		}}
-	case "Ellipse":
-		return Obj{Tag: tag, Fields: map[string]Value{
-			"cx":    expectNumber(w, require(obj, "cx", path), path+".cx"),
-			"cy":    expectNumber(w, require(obj, "cy", path), path+".cy"),
-			"rx":    expectNumber(w, require(obj, "rx", path), path+".rx"),
-			"ry":    expectNumber(w, require(obj, "ry", path), path+".ry"),
-			"style": style,
-		}}
-	default: // Label
-		return Obj{Tag: tag, Fields: map[string]Value{
-			"style": style,
-			"text":  decodeTextSource(w, require(obj, "text", path), path+".text"),
-			"x":     expectNumber(w, require(obj, "x", path), path+".x"),
-			"y":     expectNumber(w, require(obj, "y", path), path+".y"),
-		}}
-	}
+	s := newCaseSpec(w, obj, path, &idl.UnionShape, tag)
+	// The style is read first (an absent one is the empty style,
+	// absentLeniency); every other field follows in Ordinal key order.
+	s.field("style", decodeDrawStyle)
+	s.readRowsOrdinal()
+	return s.buildStrict(tag)
 }
 
 func decodeShapeArray(w *walkState, raw any, path string) Value {
@@ -2762,9 +2591,11 @@ func canonicalTemporalTag(tag string) string {
 // than resolved to either, the 0.28.0 column-member posture applied to a $type.
 func temporalVariant(s *spec, rawTag, timeAlias string) {
 	if rawTag != timeAlias {
-		s.req("variant", enumDecoder(dateTimeVariantCases, "variant", noAliases))
+		s.field("variant", enumDecoder(dateTimeVariantCases, "variant", noAliases))
 		return
 	}
+	// The alias spelling itself supplies the variant, so its absence here is
+	// not the row's absence: read the key directly.
 	raw, ok := s.take("variant")
 	if !ok {
 		s.set("variant", Str("Time"))
@@ -2780,13 +2611,13 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 	obj := expectObject(raw, path)
 	rawTag := dispatch(obj, path, formFieldCasesLenient, CodeUnknownDUCase)
 	tag := canonicalTemporalTag(rawTag)
-	s := newSpec(w, obj, path)
+	s := newCaseSpec(w, obj, path, &idl.UnionFormFieldKind, tag)
 
 	handler := func(name string) {
-		s.sentinel(name)
+		s.field(name, decodeClosure)
 	}
 	valueSlot := func(dec fieldDecoder) {
-		if raw, ok := s.take("value"); ok {
+		if raw, ok := s.has("value"); ok {
 			v := dec(w, raw, path+".value")
 			if !isAutoBoundValue(ab, tag, v) {
 				s.set("value", v)
@@ -2809,7 +2640,7 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 		valueSlot(decodeBindingBool)
 	case "Choice":
 		handler("onChange")
-		s.req("options", decodeBindingSelectOptions)
+		s.field("options", decodeBindingSelectOptions)
 		valueSlot(decodeBindingStringOpt)
 	// Phase 1113 — the searchable form of `Choice`. `options` is the case's ONLY
 	// required member (a combobox with no option source is not a control), and
@@ -2825,21 +2656,16 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 	// read would widen the field on `"no"` and `"false"` alike.
 	case "Combobox":
 		handler("onChange")
-		s.req("options", decodeBindingSelectOptions)
+		s.field("options", decodeBindingSelectOptions)
 		valueSlot(decodeBindingStringOpt)
-		s.optDrop("allowFreeText", decodeBool, isFalseValue)
+		s.field("allowFreeText", decodeBool)
 	case "SegmentedChoice":
 		handler("onChange")
-		s.req("options", decodeBindingSelectOptions)
+		s.field("options", decodeBindingSelectOptions)
 		valueSlot(decodeBindingStringOpt)
-		// Omitted-when-default on the decode boundary: absent orientation
-		// restores the language default Horizontal; the canonical wire always
-		// carries it on SegmentedChoice.
-		orientation := Value(Str("Horizontal"))
-		if raw, ok := s.take("orientation"); ok {
-			orientation = Str(enumStr(raw, path+".orientation", orientationCases, "orientation", orientationAliases))
-		}
-		s.set("orientation", orientation)
+		// An absent orientation restores the language default Horizontal
+		// (absentLeniency); the canonical wire always carries it.
+		s.field("orientation", enumDecoder(orientationCases, "orientation", orientationAliases))
 	// Phase 1121 — the multi-token field. `allowFreeText` omits at TRUE, the
 	// OPPOSITE polarity to `Combobox`'s, and it is the one thing about this case
 	// a host is most likely to get wrong: the default follows the required-ness
@@ -2847,15 +2673,15 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 	// its resting state, `suggestions` is optional so "open" is this one's.
 	case "Tokens":
 		handler("onChange")
-		allowFreeText := Value(Bool(true))
-		if raw, ok := s.take("allowFreeText"); ok {
-			allowFreeText = decodeBool(w, raw, path+".allowFreeText")
-		}
-		if !isBool(allowFreeText, true) {
-			s.set("allowFreeText", allowFreeText)
+		// The omit-at-default value (true) is the row's; the refusal below reads
+		// the decoded value whether or not it was omitted.
+		s.field("allowFreeText", decodeBool)
+		allowFreeText, written := s.fields["allowFreeText"]
+		if !written {
+			allowFreeText = Bool(true)
 		}
 		_, hasSuggestions := obj["suggestions"]
-		s.opt("suggestions", decodeBindingSelectOptions)
+		s.field("suggestions", decodeBindingSelectOptions)
 		// THE ONE DECODE REFUSAL, and it is a cross-member one: a closed field
 		// with no suggestion source admits nothing typed and offers nothing to
 		// pick, so the document names a control that CANNOT EXIST rather than
@@ -2881,11 +2707,11 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 	// sees is an AVERAGE arriving through a Query binding.
 	case "Rating":
 		handler("onChange")
-		s.req("max", decodeRatingMax)
+		s.field("max", decodeRatingMax)
 		// Omits at `false`, and the polarity is load-bearing: the SHORTEST
 		// rating document is the whole-star one. It governs ENTRY, never
 		// DISPLAY.
-		s.optDrop("allowHalf", decodeBool, isFalseValue)
+		s.field("allowHalf", decodeBool)
 		valueSlot(decodeBindingFloat)
 	// Phase 1130 — `#rrggbb` and nothing else, because that is the one form a
 	// native colour input can hold or return. Only the `Static` case is judged
@@ -2896,7 +2722,7 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 	// codec that lower-cased it would fail the round-trip this corpus pins.
 	case "Color":
 		handler("onChange")
-		if raw, ok := s.take("value"); ok {
+		if raw, ok := s.has("value"); ok {
 			v := decodeBindingString(w, raw, path+".value")
 			if o, isObj := v.(Obj); isObj && o.Tag == "Static" && !isHexColour(o.Fields["value"]) {
 				fail(CodeWrongType, path+".value",
@@ -2908,17 +2734,17 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 		}
 	case "TextArea":
 		handler("onChange")
-		s.req("rows", decodeInt)
+		s.field("rows", decodeInt)
 		valueSlot(decodeBindingString)
 	case "RangedNumber":
 		handler("onChange")
 		valueSlot(decodeBindingFloat)
-		s.opt("min", expectNumberField)
-		s.opt("max", expectNumberField)
-		s.opt("step", expectNumberField)
+		s.field("min", expectNumber)
+		s.field("max", expectNumber)
+		s.field("step", expectNumber)
 	case "Range":
 		handler("onChange")
-		if raw, ok := s.take("value"); ok {
+		if raw, ok := s.has("value"); ok {
 			v := decodeRangeValue(w, raw, path+".value")
 			if !isAutoBoundValue(ab, tag, v) {
 				s.set("value", v)
@@ -2929,31 +2755,27 @@ func decodeFormFieldKind(w *walkState, raw any, path string, ab controlAutoBind)
 		handler("onChange")
 		valueSlot(decodeBindingString)
 		temporalVariant(s, rawTag, "Time")
-		s.opt("min", decodeString)
-		s.opt("max", decodeString)
-		s.opt("step", expectNumberField)
+		s.field("min", decodeString)
+		s.field("max", decodeString)
+		s.field("step", expectNumber)
 	case "DateTimeRange":
 		// Range's pair mechanics with DateTime's value conventions: the value slot
-		// is the bare ordered {from, to} pair, the scalars are DateTime's. Every
-		// s.opt below is load-bearing — buildStrict DROPS unconsumed keys, so a
-		// forgotten one fails byte-comparison rather than erroring.
+		// is the bare ordered {from, to} pair, the scalars are DateTime's.
 		handler("onChange")
-		if raw, ok := s.take("value"); ok {
+		if raw, ok := s.has("value"); ok {
 			v := decodeDateRangeValue(w, raw, path+".value")
 			if !isAutoBoundValue(ab, tag, v) {
 				s.set("value", v)
 			}
 		}
 		temporalVariant(s, rawTag, "TimeRange")
-		s.opt("min", decodeString)
-		s.opt("max", decodeString)
-		s.opt("step", expectNumberField)
+		s.field("min", decodeString)
+		s.field("max", decodeString)
+		s.field("step", expectNumber)
+	default:
+		return s.build(tag)
 	}
 	return s.buildStrict(tag)
-}
-
-func expectNumberField(w *walkState, raw any, path string) Value {
-	return expectNumber(w, raw, path)
 }
 
 // decodeRatingMax — the scale floor (Phase 1130), a DECODE rule rather than a
@@ -2990,8 +2812,8 @@ func isHexColour(v Value) bool {
 // structural shape. Parity-locked with the reference host's `decodeFieldRule` /
 // `formFieldNearMisses` and with the TypeScript tier's.
 var (
-	textFormatCases = newCaseSet("email", "url", "tel")
-	compareOpCases  = newCaseSet("eq", "neq", "lt", "lte", "gt", "gte")
+	textFormatCases = newCaseSet(idl.EnumTextFormat.Cases...)
+	compareOpCases  = newCaseSet(idl.EnumCompareOp.Cases...)
 )
 
 func decodeTextFormat(w *walkState, raw any, path string) Value {
@@ -3008,10 +2830,9 @@ func decodeCompareOp(w *walkState, raw any, path string) Value {
 // value in State under the field's own id, so {"$type":"State","key":"<sibling
 // id>"} reads the sibling with no coordination vocabulary at all.
 func decodeCompareRule(w *walkState, raw any, path string) Value {
-	obj := expectObject(raw, path)
-	s := newSpec(w, obj, path)
-	s.req("op", decodeCompareOp)
-	s.req("against", decodeBinding)
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordCompareRule)
+	s.field("op", decodeCompareOp)
+	s.field("against", decodeBinding)
 	return s.buildStrict("")
 }
 
@@ -3032,14 +2853,13 @@ func decodeCompareRule(w *walkState, raw any, path string) Value {
 // Neither is a shape — both are relations BETWEEN slots — which is why they live
 // here rather than in the structural layer.
 func decodeFieldRule(w *walkState, raw any, path string) Value {
-	obj := expectObject(raw, path)
-	s := newSpec(w, obj, path)
-	s.opt("format", decodeTextFormat)
-	s.opt("pattern", decodeString)
-	s.opt("minLength", decodeInt)
-	s.opt("maxLength", decodeInt)
-	s.opt("compare", decodeCompareRule)
-	s.opt("message", decodeTextSource)
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordFieldRule)
+	s.field("format", decodeTextFormat)
+	s.field("pattern", decodeString)
+	s.field("minLength", decodeInt)
+	s.field("maxLength", decodeInt)
+	s.field("compare", decodeCompareRule)
+	s.field("message", decodeTextSource)
 	built := s.buildStrict("")
 
 	constrains := false
@@ -3092,20 +2912,18 @@ func decodeFormField(w *walkState, raw any, path string) Value {
 	// grid's until the check gained a vocabulary parameter, which sent the
 	// author to the wrong document — the four other hosts always named it.
 	checkNearMissesIn(obj, path, formFieldNearMisses, "form", formFieldNearMissConsequence)
-	s := newSpec(w, obj, path)
+	s := newRecordSpec(w, obj, path, &idl.RecordFormField)
 	// Field alias: name — the HTML-forms prior for the field's identity. The
 	// id decodes first so the auto-bind context can use it.
-	idV := s.req("id", decodeString, "name")
-	id := string(idV.(Str))
-	if raw, ok := s.take("kind"); ok {
-		s.set("kind", decodeFormFieldKind(w, raw, path+".kind", controlAutoBind{formFieldID: true, name: id}))
-	} else {
-		fail(CodeMissingField, path+".kind", "missing required field 'kind'")
+	s.field("id", decodeString, "name")
+	id, _ := s.fields["id"].(Str)
+	if raw, ok := s.has("kind"); ok {
+		s.set("kind", decodeFormFieldKind(w, raw, path+".kind", controlAutoBind{formFieldID: true, name: string(id)}))
 	}
-	s.req("label", decodeTextSource)
-	s.req("required", decodeBool)
-	s.opt("help", decodeTextSource)
-	s.opt("rule", decodeFieldRule)
+	s.field("label", decodeTextSource)
+	s.field("required", decodeBool)
+	s.field("help", decodeTextSource)
+	s.field("rule", decodeFieldRule)
 	return s.buildStrict("")
 }
 
@@ -3119,17 +2937,14 @@ func decodeFormFields(w *walkState, raw any, path string) Value {
 }
 
 func decodeFilterItem(w *walkState, raw any, path string) Value {
-	obj := expectObject(raw, path)
-	s := newSpec(w, obj, path)
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordFilterSpec)
 	// The chip name decodes first so the Filter auto-bind can use it.
-	nameV := s.req("name", decodeString)
-	name := string(nameV.(Str))
-	if raw, ok := s.take("kind"); ok {
-		s.set("kind", decodeFormFieldKind(w, raw, path+".kind", controlAutoBind{filterChip: true, name: name}))
-	} else {
-		fail(CodeMissingField, path+".kind", "missing required field 'kind'")
+	s.field("name", decodeString)
+	name, _ := s.fields["name"].(Str)
+	if raw, ok := s.has("kind"); ok {
+		s.set("kind", decodeFormFieldKind(w, raw, path+".kind", controlAutoBind{filterChip: true, name: string(name)}))
 	}
-	s.req("label", decodeTextSource)
+	s.field("label", decodeTextSource)
 	return s.buildStrict("")
 }
 
@@ -3174,9 +2989,9 @@ func hasAnyKey(obj map[string]any, keys []string) bool {
 func decodeToneMap(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	fields := make(map[string]Value, len(obj))
-	for key, v := range obj {
+	for _, key := range ordinalKeys(obj) {
 		entryPath := path + "." + key
-		fields[key] = reissueToneMapEntry(w, v, entryPath, key)
+		fields[key] = reissueToneMapEntry(w, obj[key], entryPath, key)
 	}
 	return Obj{Fields: fields}
 }
@@ -3206,14 +3021,14 @@ func reissueToneMapEntry(w *walkState, raw any, entryPath, key string) (out Valu
 // Pill-tagged §16 shorthand below. ONE reader, so the two spellings cannot drift
 // apart in what they accept.
 func decodeTonedPill(w *walkState, obj map[string]any, path string) Value {
-	s := newSpec(w, obj, path)
+	s := newCaseSpec(w, obj, path, &idl.UnionCellKindErased, "TonedPill")
 	// `field` names the row property that is both the pill's label and the map key.
-	s.req("field", decodeString)
-	s.req("map", decodeToneMap, toneMapKeys[1:]...)
+	s.field("field", decodeString)
+	s.field("map", decodeToneMap, toneMapKeys[1:]...)
 	// `default` is omitted-when-`Default` (the Phase 460 discipline); an absent key
 	// restores the identity, and an aliased `Neutral` normalises to `Default` and
 	// then omits — two rules composing, in that order.
-	s.optDrop("default", decodeTone, isDefaultTone)
+	s.field("default", decodeTone)
 	return s.buildStrict("TonedPill")
 }
 
@@ -3232,37 +3047,19 @@ func decodeCellKindErased(w *walkState, raw any, path string) Value {
 	if tag == "Pill" && hasAnyKey(obj, toneMapKeys[:]) {
 		return decodeTonedPill(w, obj, path)
 	}
-	switch tag {
-	case "TonedPill":
+	if tag == "TonedPill" {
 		return decodeTonedPill(w, obj, path)
-	case "Text", "Numeric", "Date":
-		return Obj{Tag: tag, Fields: map[string]Value{}}
-	case "Editable":
-		return Obj{Tag: tag, Fields: map[string]Value{"onEdit": Str(closureSentinel)}}
-	case "Checkbox":
-		return Obj{Tag: tag, Fields: map[string]Value{"get": Str(closureSentinel), "onToggle": Str(closureSentinel)}}
-	case "Button":
-		label := decodeTextSource(w, require(obj, "label", path), path+".label")
-		return Obj{Tag: tag, Fields: map[string]Value{"label": label, "onClick": Str(closureSentinel)}}
-	case "ButtonGroup":
-		arr := expectArray(require(obj, "buttons", path), path+".buttons")
-		buttons := make(Arr, len(arr))
-		for i, item := range arr {
-			p := path + ".buttons[" + strconv.Itoa(i) + "]"
-			bObj := expectObject(item, p)
-			label := decodeTextSource(w, require(bObj, "label", p), p+".label")
-			buttons[i] = Obj{Fields: map[string]Value{"label": label, "onClick": Str(closureSentinel)}}
-		}
-		return Obj{Tag: tag, Fields: map[string]Value{"buttons": buttons}}
-	case "Link":
-		return Obj{Tag: tag, Fields: map[string]Value{"hrefFn": Str(closureSentinel), "labelFn": Str(closureSentinel)}}
-	case "Pill":
-		return Obj{Tag: tag, Fields: map[string]Value{"labelFn": Str(closureSentinel), "toneFn": Str(closureSentinel)}}
-	case "Progress":
-		return Obj{Tag: tag, Fields: map[string]Value{"fractionFn": Str(closureSentinel), "labelFn": Str(closureSentinel)}}
-	default: // Custom
-		return Obj{Tag: tag, Fields: map[string]Value{"fn": Str(closureSentinel)}}
 	}
+	// Every other case is its rows: closure slots read as the sentinel (a
+	// required one admits absence, absentLeniency; an optional one is carried
+	// exactly when written), labels as TextSource, ButtonGroup's buttons as
+	// ButtonGroupItem records. Unknown members are dropped.
+	return decodeCaseStrict(w, obj, path, &idl.UnionCellKindErased, tag)
+}
+
+// decodeButtonGroupItem — one ButtonGroup button, read from its record's rows.
+func decodeButtonGroupItem(w *walkState, raw any, path string) Value {
+	return decodeRecordStrict(w, raw, path, &idl.RecordButtonGroupItem)
 }
 
 // nearMiss — decode-time didactics for the grid-behaviour family's NEAR MISSES.
@@ -3370,22 +3167,22 @@ var gridNearMisses = [][2]string{
 
 func decodeColumnErased(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
-	s := newSpec(w, obj, path)
+	s := newRecordSpec(w, obj, path, &idl.RecordColumnErased)
 	// Field aliases: `type` for `kind` (the universal JSON prior); `header` /
 	// `title` for `label` (the react-table / antd prior). Phase 460 —
 	// format/width omitted-when-default.
-	s.req("kind", decodeCellKindErased, "type")
-	s.req("label", decodeString, "header", "title")
-	s.optDrop("format", decodeCellFormat, func(v Value) bool { return isTagOnly(v, "None") })
-	s.optDrop("width", decodeColumnWidth, func(v Value) bool { return isTagOnly(v, "Auto") })
-	s.sentinel("value")
+	s.field("kind", decodeCellKindErased, "type")
+	s.field("label", decodeString, "header", "title")
+	s.field("format", decodeCellFormat)
+	s.field("width", decodeColumnWidth)
+	s.field("value", decodeClosure)
 	checkNearMisses(obj, path, columnNearMisses)
 	// Phase 861 / 863 — per-column sort and editability NARROWING; absent
 	// inherits the grid-level flag, so an explicit `false` is carried rather
 	// than omitted-when-default (omitting it would erase the narrowing).
-	s.opt("sortable", decodeBool)
-	s.opt("editable", decodeBool)
-	s.opt("field", decodeString)
+	s.field("sortable", decodeBool)
+	s.field("editable", decodeBool)
+	s.field("field", decodeString)
 	return s.buildStrict("")
 }
 
@@ -3405,13 +3202,19 @@ func decodeColumns(w *walkState, raw any, path string) Value {
 // deliberately accepted — a relation between sibling values is not something a
 // per-object codec judges.
 func decodeDefaultSort(w *walkState, raw any, path string) Value {
-	obj := expectObject(raw, path)
-	column := expectInt(require(obj, "column", path), path+".column")
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordDefaultSort)
+	s.field("column", decodeHeaderIndex)
+	s.field("direction", enumDecoder(sortDirectionCases, "direction", noAliases))
+	return s.buildStrict("")
+}
+
+// decodeHeaderIndex — a DefaultSort column: a non-negative header index.
+func decodeHeaderIndex(w *walkState, raw any, path string) Value {
+	column := expectInt(raw, path)
 	if column < 0 {
-		fail(CodeWrongType, path+".column", "expected a non-negative integer header index at "+path+".column")
+		fail(CodeWrongType, path, "expected a non-negative integer header index at "+path)
 	}
-	direction := enumStr(require(obj, "direction", path), path+".direction", sortDirectionCases, "direction", noAliases)
-	return Obj{Fields: map[string]Value{"column": Int(column), "direction": Str(direction)}}
+	return Int(column)
 }
 
 // decodeGridPageSize — Phase 862: how many rows a page holds. A page of zero or
@@ -3430,78 +3233,25 @@ func decodeGridPageSize(w *walkState, raw any, path string) Value {
 // Phase 801 optional sort-intent slots. Both omitted re-encodes byte-identically
 // to the pre-801 wire.
 func decodeStaticRows(w *walkState, raw any, path string) Value {
-	obj := expectObject(raw, path)
-	headers := decodeTextSourceArray(w, require(obj, "headers", path), path+".headers")
-	rowsArr := expectArray(require(obj, "rows", path), path+".rows")
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordStaticRows)
+	s.field("headers", decodeTextSourceArray)
+	s.field("rows", decodeStaticRowCells)
+	s.field("sortable", decodeBool)
+	s.field("defaultSort", decodeDefaultSort)
+	return s.buildStrict("")
+}
+
+// decodeStaticRowCells — StaticRows.rows: a list of rows of TextSource cells.
+func decodeStaticRowCells(w *walkState, raw any, path string) Value {
+	rowsArr := expectArray(raw, path)
 	rows := make(Arr, len(rowsArr))
 	for i, row := range rowsArr {
-		rows[i] = decodeTextSourceArray(w, row, path+".rows["+strconv.Itoa(i)+"]")
+		rows[i] = decodeTextSourceArray(w, row, path+"["+strconv.Itoa(i)+"]")
 	}
-	fields := map[string]Value{"headers": headers, "rows": rows}
-	if raw, ok := obj["sortable"]; ok {
-		fields["sortable"] = Bool(expectBool(raw, path+".sortable"))
-	}
-	if raw, ok := obj["defaultSort"]; ok {
-		fields["defaultSort"] = decodeDefaultSort(w, raw, path+".defaultSort")
-	}
-	return Obj{Fields: fields}
+	return rows
 }
 
 // ── Per-kind typed decoders ─────────────────────────────────────────────────
-
-func isDefaultTone(v Value) bool    { return isStr(v, "Default") }
-func isMediumIconSize(v Value) bool { return isStr(v, "Medium") }
-func isStandardWeight(v Value) bool { return isStr(v, "Standard") }
-func isNormalEmphasis(v Value) bool { return isStr(v, "Normal") }
-func isFalseValue(v Value) bool     { return isBool(v, false) }
-func isTrueValue(v Value) bool      { return isBool(v, true) }
-func isNoneCellFormat(v Value) bool { return isTagOnly(v, "None") }
-
-// Phase 1585 — §3.6: `Tabs.activeIndex`'s identity is the `Static` binding
-// carrying the integer 0.
-//
-// The first `optDrop` predicate over a BINDING rather than a token, and the
-// difference is the point. A token identity has one inhabitant, so "is it the
-// default" and "which case is it" are the same question; a binding identity is
-// one inhabitant of a union whose payload domain is unbounded, so this tests the
-// CASE **and** its payload. A `Static` carrying any other index must survive,
-// and so must every `Query` / `Filter` / `Selection` / `State` binding —
-// dropping on the tag alone would discard a document's authored tab, and for a
-// writable binding its write-back destination with it.
-//
-// `Int` and not `Float`: `intStatic` yields `Int` for every accepted payload, so
-// a `Float` here is not a spelling this decoder produces.
-func isStaticIntZero(v Value) bool {
-	o, ok := v.(Obj)
-	if !ok || o.Tag != "Static" || len(o.Fields) != 1 {
-		return false
-	}
-	n, ok := o.Fields["value"].(Int)
-	return ok && n == 0
-}
-
-// Phase 867 — §3.6.1 clause 4: an absent `trendPolarity` IS `HigherIsBetter`.
-func isHigherIsBetter(v Value) bool { return isStr(v, "HigherIsBetter") }
-
-// Phase 1677 — §3.6: an absent `Tabs.orientation` IS `Horizontal`.
-func isHorizontal(v Value) bool { return isStr(v, "Horizontal") }
-
-// Phase 1077 — §3.6.2. `Natural` is the identity on BOTH the fit and the
-// aspect axis, so one predicate serves both slots.
-func isNaturalImageToken(v Value) bool { return isStr(v, "Natural") }
-
-// Phase 1077 — `Eager` is the identity, and it is not the "unoptimised" value:
-// deferring an above-the-fold image delays the largest contentful paint rather
-// than helping it, and only the author knows where the image sits, so the
-// format declines to guess and `Eager` emits no attribute at all.
-func isEagerLoading(v Value) bool { return isStr(v, "Eager") }
-
-// Phase 1080 — §3.6.4. The srcSet identity is the EMPTY LIST rather than a
-// token: absence and `[]` denote the same document.
-func isEmptyArr(v Value) bool {
-	a, ok := v.(Arr)
-	return ok && len(a) == 0
-}
 
 // decodeSrcSet — §3.6.4's candidate list. `null` never reaches here as an
 // empty list: `expectArray` refuses it with WRONG_TYPE at `$.kind.srcSet`,
@@ -3518,9 +3268,9 @@ func decodeSrcSet(w *walkState, raw any, path string) Value {
 	out := make(Arr, len(arr))
 	for i, item := range arr {
 		p := path + "[" + strconv.Itoa(i) + "]"
-		s := newSpec(w, expectObject(item, p), p)
-		s.req("src", decodeBindingString)
-		s.req("width", decodePositiveInt)
+		s := newRecordSpec(w, expectObject(item, p), p, &idl.RecordSrcSetEntry)
+		s.field("src", decodeBindingString)
+		s.field("width", decodePositiveInt)
 		out[i] = s.buildStrict("")
 	}
 	return out
@@ -3544,15 +3294,15 @@ func decodeTracks(w *walkState, raw any, path string) Value {
 	out := make(Arr, len(arr))
 	for i, item := range arr {
 		p := path + "[" + strconv.Itoa(i) + "]"
-		s := newSpec(w, expectObject(item, p), p)
-		s.req("kind", enumDecoder(trackKindCases, "kind", noAliases))
-		s.req("label", decodeTextSource)
-		s.req("src", decodeBindingString)
-		s.req("srcLang", decodeString)
+		s := newRecordSpec(w, expectObject(item, p), p, &idl.RecordTrackEntry)
+		s.field("kind", enumDecoder(trackKindCases, "kind", noAliases))
+		s.field("label", decodeTextSource)
+		s.field("src", decodeBindingString)
+		s.field("srcLang", decodeString)
 		// Refused rather than coerced: two hosts ruling differently on
 		// truthiness would disagree about which caption track opens, which is a
 		// difference the reader meets on the first frame.
-		s.optDrop("default", decodeBool, isFalseValue)
+		s.field("default", decodeBool)
 		out[i] = s.buildStrict("")
 	}
 	return out
@@ -3583,10 +3333,10 @@ func decodeTabHeaders(w *walkState, raw any, path string) Value {
 	out := make(Arr, len(arr))
 	for i, item := range arr {
 		p := path + "[" + strconv.Itoa(i) + "]"
-		s := newSpec(w, expectObject(item, p), p)
-		s.req("label", decodeTextSource)
-		s.opt("icon", decodeString)
-		s.opt("disabled", decodeBindingBool)
+		s := newRecordSpec(w, expectObject(item, p), p, &idl.RecordTabHeader)
+		s.field("label", decodeTextSource)
+		s.field("icon", decodeString)
+		s.field("disabled", decodeBindingBool)
 		out[i] = s.buildStrict("")
 	}
 	return out
@@ -3630,14 +3380,14 @@ func decodeTreeItems(w *walkState, raw any, path string) Value {
 	for i, item := range arr {
 		p := path + "[" + strconv.Itoa(i) + "]"
 		w.enterItem(p)
-		s := newSpec(w, expectObject(item, p), p)
-		s.req("id", decodeString)
-		s.req("label", decodeTextSource)
+		s := newRecordSpec(w, expectObject(item, p), p, &idl.RecordTreeItem)
+		s.field("id", decodeString)
+		s.field("label", decodeTextSource)
 		// Recursion. The child walker is the SAME walker as the root one — a
 		// host whose child walk is looser than its root walk passes every
 		// top-level reject vector and fails `reject-tree-nested-item-missing-id`.
-		s.optDrop("children", decodeTreeItems, isEmptyArr)
-		s.opt("icon", decodeString)
+		s.field("children", decodeTreeItems)
+		s.field("icon", decodeString)
 		out[i] = s.buildStrict("")
 		w.exitItem()
 	}
@@ -3682,14 +3432,18 @@ func decodeUploadDestination(w *walkState, raw any, path string) Value {
 func decodeMediaKind(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, mediaKindCases, CodeUnknownDUCase)
-	s := newSpec(w, obj, path)
-	if tag == "Video" {
+	s := newCaseSpec(w, obj, path, &idl.UnionMediaKind, tag)
+	switch tag {
+	case "Video":
 		// `autoplay` is a DECLARATION whose RENDERING is constrained (never
 		// without `muted`) — the wire carries no separate muted slot to fall
 		// out of step with it. Omitted at false; refused rather than coerced
 		// when stringified.
-		s.optDrop("autoplay", decodeBool, isFalseValue)
-		s.opt("poster", decodeBindingString)
+		s.field("autoplay", decodeBool)
+		s.field("poster", decodeBindingString)
+	case "Audio":
+	default:
+		return s.build(tag)
 	}
 	return s.buildStrict(tag)
 }
@@ -3697,692 +3451,714 @@ func decodeMediaKind(w *walkState, raw any, path string) Value {
 // kindBuilders holds the typed per-kind decoders. Kinds absent here (and from
 // the dedicated Box / legacy handlers) decode structurally.
 //
-// Populated in init(): several builders recurse back through decodeNodeValue,
-// which a package-level composite literal would report as a cycle.
-var kindBuilders map[string]func(w *walkState, obj map[string]any, path string) Obj
+// handArms is this host's hand-written decoder arm set. It embeds the
+// generated table arm set, so every kind idl.json declares has an arm; a kind
+// listed here overrides its table arm because its reading carries behaviour
+// this host owns (an alias, a coercion, a relational check), and consults the
+// table for each field's optionality and omit-at-default value. The assertion
+// below is the reverse guard: an arm set that is not total does not compile.
+type handArms struct{ tableArms }
 
-// requiredKindFields mirrors the typed decoders' required sets for the
-// validator's constructed-tree checks (see RequiredKindFields).
-var requiredKindFields = map[string][]string{
-	"Heading":       {"level", "text", "variant"},
-	"Markdown":      {"text"},
-	"Metric":        {"label", "value"},
-	"Fact":          {"label", "value"},
-	"LabelValueRow": {"label", "value"},
-	"Badge":         {"label", "variant"},
-	"Callout":       {"body"},
-	"Progress":      {"fraction"},
-	"Skeleton":      {"rows"},
-	"Icon":          {"icon"},
-	"Sparkline":     {"source"},
-	"Map":           {"centreLatitude", "centreLongitude", "source", "zoom"},
-	"Link":          {"download", "href", "label"},
-	"Image":         {"alt", "src", "variant"},
-	// Phase 1076 — `label` is REQUIRED, and it is the one place the media
-	// contract differs from Image's: an image can honestly be decorative and
-	// say so with an empty `alt`, but a media element is a TRANSPORT and is
-	// never decorative. There is no value to default to that would not be a
-	// fabricated name for someone else's recording.
-	"Media": {"kind", "label", "src"},
-	// Phase 1111 — the accessible name is mandatory because a browsing context
-	// has no decorative case, and there is no value to default to that would not
-	// be a fabricated description of someone else's page.
-	"Embed": {"src", "title"},
-	// Phase 1120 — the rows. Both State keys are optional (a tree naming no
-	// `expandedStateKey` renders fully expanded and does not toggle).
-	"Tree":       {"items"},
-	"List":       {"items", "ordered"},
-	"Toast":      {"message", "open"},
-	"CodeBlock":  {"code", "copyable", "highlightLines", "language", "lineNumbers"},
-	"Math":       {"display", "source"},
-	"Drawing":    {"shapes", "style", "viewBox"},
-	"Select":     {"label", "source", "value"},
-	"Modal":      {"children", "dismissable", "open"},
-	"ScrollArea": {"children", "orientation"},
-	"Button":     {"label", "onClick", "variant"},
-	"Form":       {"fields", "onSubmit", "submitLabel"},
-	"Filters":    {"items"},
-	"FileUpload": {"accept", "label", "multiple"},
-	"DataGrid":   {"columns", "source"},
-	"Chart":      {"kind", "source", "xField", "yFields"},
-	"Custom":     {"moduleId", "componentId"},
-	// Switch's selector is one-of stateKey / on (Phase 768) — the validator's
-	// checkSwitch enforces the pair, so neither appears in the required set.
-	"Switch": {"cases", "default"},
-	"Mount":  {"scopeId", "channel", "capabilities", "onBubble"},
-	"Box":    {"children", "layout", "role"},
+var _ kindArms = handArms{}
+
+func (handArms) armHeading(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindHeading)
+	s.field("level", decodeInt)
+	s.field("text", decodeTextSource)
+	s.field("variant", enumDecoder(headingVariantCases, "variant", headingVariantAliases))
+	return s.build("Heading")
 }
 
-func init() {
-	kindBuilders = map[string]func(w *walkState, obj map[string]any, path string) Obj{
-		"Heading": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("level", decodeInt)
-			s.req("text", decodeTextSource)
-			s.req("variant", enumDecoder(headingVariantCases, "variant", headingVariantAliases))
-			return s.build("Heading")
-		},
-		"Markdown": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("text", decodeTextSource)
-			return s.build("Markdown")
-		},
-		// 0.2.0 rename law — the scalar displayed value is `value` (`source`
-		// is reserved for collection feeds and is NOT accepted here — clean
-		// break); `data` stays as the web-prior alias. Phase 460 — the
-		// stylistic fields are omitted-when-default on both boundaries.
-		"Metric": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("label", decodeTextSource)
-			s.req("value", decodeBindingFloat, "data")
-			s.optDrop("format", decodeCellFormat, isNoneCellFormat)
-			s.optDrop("tone", decodeTone, isDefaultTone)
-			s.optDrop("weight", decodeWeight, isStandardWeight)
-			s.optDrop("emphasis", decodeEmphasisEnum, isNormalEmphasis)
-			s.opt("trend", decodeBindingFloat)
-			s.opt("trendFormat", decodeCellFormat)
-			// Phase 867 — the direction-of-good declaration. Omitted-when-default
-			// on BOTH boundaries (§3.6.1 clause 4: an absent slot IS
-			// `HigherIsBetter`), so an explicitly-spelled default normalises away
-			// and a tree that never mentions polarity keeps its bytes.
-			//
-			// It is decoded rather than left to `build`'s structural passthrough,
-			// and that is the point of this arm: passthrough round-trips the key
-			// byte-for-byte while modelling nothing, so a misspelt case would ride
-			// through to the renderer and be read as an unrecognised polarity —
-			// green corpus, wrong tree. The closed set refuses it at the boundary
-			// the way every other bare enum here is refused.
-			s.optDrop("trendPolarity", enumDecoder(trendPolarityCases, "trendPolarity", noAliases), isHigherIsBetter)
-			s.opt("icon", decodeString)
-			s.opt("subtext", decodeTextSource)
-			return s.build("Metric")
-		},
-		// A labeled TEXT fact: `value` is a TextSource, so static / Bound /
-		// I18n values ride the label vocabulary. Only label + value required;
-		// tone / emphasis omitted-when-default on BOTH boundaries.
-		"Fact": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("label", decodeTextSource)
-			s.req("value", decodeTextSource)
-			s.optDrop("tone", decodeTone, isDefaultTone)
-			s.optDrop("emphasis", decodeEmphasisFlag, isFalseValue)
-			s.opt("help", decodeTextSource)
-			s.opt("icon", decodeString)
-			return s.build("Fact")
-		},
-		"LabelValueRow": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("label", decodeTextSource)
-			s.req("value", decodeBindingFloat, "data")
-			s.optDrop("format", decodeCellFormat, isNoneCellFormat)
-			// 0.2.2 — the behavioural bool, omitted-when-false (aligning with
-			// Fact's identical flag); the cross-vocabulary coercion accepts
-			// the Emphasis enum + its aliases.
-			s.optDrop("emphasis", decodeEmphasisFlag, isFalseValue)
-			s.opt("help", decodeTextSource)
-			return s.build("LabelValueRow")
-		},
-		"Badge": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("label", decodeTextSource)
-			s.req("variant", enumDecoder(badgeVariantCases, "variant", badgeVariantAliases))
-			return s.build("Badge")
-		},
-		"Callout": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("body", decodeTextSource)
-			// 0.2.0 — dismissable omitted-when-false; Phase 460 — tone
-			// omitted-when-default. `title` aliases `heading`.
-			s.optDrop("dismissable", decodeBool, isFalseValue)
-			s.optDrop("tone", decodeTone, isDefaultTone)
-			s.opt("heading", decodeTextSource, "title")
-			s.opt("icon", decodeString)
-			return s.build("Callout")
-		},
-		"Progress": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("fraction", decodeBindingFloat)
-			// 0.2.0 — indeterminate omitted-when-false.
-			s.optDrop("indeterminate", decodeBool, isFalseValue)
-			s.optDrop("tone", decodeTone, isDefaultTone)
-			s.opt("label", decodeTextSource)
-			s.opt("caveat", decodeTextSource)
-			return s.build("Progress")
-		},
-		"Toast": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			// 0.2.0 — the one omit-when-TRUE: a toast is dismissable unless
-			// said otherwise.
-			s.optDrop("dismissable", decodeBool, isTrueValue)
-			s.req("message", decodeTextSource)
-			s.req("open", decodeBindingBool)
-			s.optDrop("tone", decodeTone, isDefaultTone)
-			return s.build("Toast")
-		},
-		"Skeleton": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			// Phase 1666 — the §21.9 row bound rides the field's own decoder, so
-			// the spec table stays the single statement of a Skeleton's shape.
-			s.req("rows", decodeSkeletonRows)
-			return s.build("Skeleton")
-		},
-		// Phase 821 — the standalone icon-only display kind. `size`
-		// omitted-when-`Medium`; `tone` omitted-when-default (the Phase 460
-		// discipline); `label` omitted-when-decorative.
-		"Icon": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("icon", decodeString)
-			s.optDrop("size", enumDecoder(iconSizeCases, "size", noAliases), isMediumIconSize)
-			s.optDrop("tone", decodeTone, isDefaultTone)
-			s.opt("label", decodeString)
-			return s.build("Icon")
-		},
-		// source is a §5 typed Static float-series position; `data` aliases.
-		"Sparkline": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("source", decodeBindingFloatSeq, "data")
-			return s.build("Sparkline")
-		},
-		// source is a §5 typed Static marker-list position; `data` / `markers`
-		// alias.
-		"Map": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("centreLatitude", expectNumberField)
-			s.req("centreLongitude", expectNumberField)
-			s.req("source", decodeBindingMarkerSeq, "data", "markers")
-			s.req("zoom", decodeInt)
-			s.sentinel("onMarkerClick")
-			return s.build("Map")
-		},
-		"Link": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("download", decodeBool)
-			s.req("href", decodeBindingString)
-			s.req("label", decodeTextSource)
-			// Phase 812 — optional closed enumeration; an unknown case is
-			// UNKNOWN_DU_CASE at $.kind.protection.
-			s.opt("protection", enumDecoder(linkProtectionCases, "protection", noAliases))
-			s.opt("rel", decodeString)
-			s.opt("target", decodeString)
-			return s.build("Link")
-		},
-		// Phases 1077 / 1078 / 1079 / 1080 — §3.6.2–§3.6.5. Five optional
-		// slots beside `variant`, and they do NOT all take the same posture:
-		//
-		//   * fit / aspectRatio / loading are identity-default TOKENS, dropped
-		//     at their default on the decode boundary so an explicit `Natural`
-		//     / `Eager` canonicalises to the omitted form (§3.6's table).
-		//   * caption is CONTENT, not a presentation token — there is no
-		//     default caption the way there is a default fit — so it takes the
-		//     ordinary optional-field posture (rule 4). It is a full
-		//     `TextSource`, NOT a string: narrowing the slot costs nothing
-		//     until somebody needs a locale, which is why the enveloped
-		//     `{"$type":"Literal"}` form has its own lenient fixture here.
-		//   * srcSet IS an omit-at-default field whose identity is the EMPTY
-		//     LIST rather than a token. Absent and `[]` denote the same
-		//     document; a present `null` is refused, because absence already
-		//     has a spelling and a second one would let two conformant hosts
-		//     emit different canonical bytes for one document.
-		//   * expandable is a plain bool omitted at `false`, refused rather
-		//     than coerced when stringified — a truthiness rule would have to
-		//     rule on `"false"` and `""` too, and two hosts ruling differently
-		//     would disagree about whether the document declares an affordance
-		//     at all.
-		"Image": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("alt", decodeTextSource)
-			s.optDrop("aspectRatio", enumDecoder(imageAspectCases, "aspectRatio", noAliases), isNaturalImageToken)
-			s.opt("caption", decodeTextSource)
-			s.optDrop("expandable", decodeBool, isFalseValue)
-			s.optDrop("fit", enumDecoder(imageFitCases, "fit", noAliases), isNaturalImageToken)
-			s.optDrop("loading", enumDecoder(imageLoadingCases, "loading", noAliases), isEagerLoading)
-			s.req("src", decodeBindingString)
-			s.optDrop("srcSet", decodeSrcSet, isEmptyArr)
-			s.req("variant", enumDecoder(imageVariantCases, "variant", noAliases))
-			return s.build("Image")
-		},
-		// Phase 1076 — §3.6.6. The shared record carries the source, the
-		// mandatory accessible name, and the two shared declarations;
-		// `controls` is omitted at TRUE (the second such slot in the
-		// vocabulary after `Toast.dismissable`, and the polarity is
-		// deliberate — a media element without a transport cannot be paused,
-		// seeked or muted by a keyboard user at all, so the accessible setting
-		// is what a document gets for free and taking it away is the deviation
-		// that costs a key). `loop` takes the ordinary polarity.
-		"Media": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.optDrop("controls", decodeBool, isTrueValue)
-			s.req("kind", decodeMediaKind)
-			s.req("label", decodeTextSource)
-			s.optDrop("loop", decodeBool, isFalseValue)
-			s.req("src", decodeBindingString)
-			// Phase 1110 — both live on the SPEC rather than on
-			// `MediaKind.Video`, and the second placement is the one worth
-			// explaining: a transcript is the affordance an AUDIO surface needs
-			// most, because a recording with no visual channel has nowhere else
-			// to put its words.
-			//
-			// `tracks` is omitted when EMPTY — an absent list and an empty one
-			// denote the same document — so it drops rather than encoding `[]`.
-			// `transcript` is an ORDINARY optional: absent means the document
-			// offers no transcript, which is a different statement from
-			// offering an empty one, so it does not drop at "".
-			s.optDrop("tracks", decodeTracks, isEmptyArr)
-			s.opt("transcript", decodeTextSource)
-			return s.build("Media")
-		},
-		// Phase 1111 — §3.6.8. `title` is REQUIRED on `MediaSpec.label`'s
-		// argument one kind over: a frame is a focus container a reader tabs
-		// INTO, so there is no decorative embed, and a frame with no accessible
-		// name is announced as "frame" and nothing else.
-		//
-		// `permissions` omits at the EMPTY list and empty means TOTAL DENIAL —
-		// that polarity is the design rather than a consequence of the omit
-		// rule, so the wire-cheapest document is also the most locked-down one.
-		// `aspectRatio` REUSES `ImageAspect` (the cases are pure layout ratios
-		// with nothing image-specific in them) and omits at `Natural`.
-		"Embed": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.optDrop("aspectRatio", enumDecoder(imageAspectCases, "aspectRatio", noAliases), isNaturalImageToken)
-			s.optDrop("permissions", decodeEmbedPermissions, isEmptyArr)
-			s.req("src", decodeBindingString)
-			s.req("title", decodeTextSource)
-			return s.build("Embed")
-		},
-		// Phase 1120 — §3.6.12. Expansion and selection are named State keys and
-		// there is no `expandable` / `selectable` boolean: a behaviour the
-		// reader drives is declared as a key the host both writes and reads, and
-		// a flag with no key behind it is a decorative control writing state
-		// nothing reads.
-		"Tree": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.opt("expandedStateKey", decodeString)
-			s.req("items", decodeTreeItems)
-			s.sentinel("onSelect")
-			s.opt("selectionStateKey", decodeString)
-			return s.build("Tree")
-		},
-		"List": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("items", decodeTextSourceArray)
-			s.req("ordered", decodeBool)
-			return s.build("List")
-		},
-		"CodeBlock": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("code", decodeString)
-			s.req("copyable", decodeBool)
-			s.req("highlightLines", decodeIntArray)
-			s.req("language", decodeString)
-			s.req("lineNumbers", decodeBool)
-			return s.build("CodeBlock")
-		},
-		"Math": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("display", enumDecoder(mathDisplayCases, "display", noAliases))
-			s.req("source", decodeString)
-			return s.build("Math")
-		},
-		// Phases 524 / 642 — geometry static; the closed Shape / CurveCommand
-		// DUs default-deny an unknown discriminator; DrawStyle carries the
-		// bindings + the optional markId.
-		"Drawing": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.opt("description", decodeTextSource)
-			s.req("shapes", decodeShapeArray)
-			s.req("style", decodeDrawStyle)
-			s.opt("title", decodeTextSource)
-			s.req("viewBox", decodeViewBox)
-			return s.build("Drawing")
-		},
-		// The handler fields are OPTIONAL: omitted on the wire when the
-		// control is declarative; present as the "<closure>" sentinel when
-		// closure-authored. `options` / `data` alias `source`. Phase 291 —
-		// multiple omitted-when-false; values omitted when absent.
-		"Select": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("label", decodeTextSource)
-			s.sentinel("onChange")
-			s.req("source", decodeBindingSelectOptions, "options", "data")
-			s.req("value", decodeBindingStringOpt)
-			s.opt("disabled", decodeBindingBool)
-			s.opt("placeholder", decodeTextSource)
-			s.optDrop("multiple", decodeBool, isFalseValue)
-			s.opt("values", decodeBindingStringList)
-			s.sentinel("onChangeMulti")
-			return s.build("Select")
-		},
-		// onDismiss is optional and — unlike the closure-sentinel handlers — a
-		// genuine wire-survivable Action, so it decodes null-strict when
-		// present. `title` aliases `heading`.
-		"Modal": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("children", decodeChildren)
-			s.req("dismissable", decodeBool)
-			s.opt("onDismiss", decodeAction)
-			s.req("open", decodeBindingBool)
-			s.opt("heading", decodeTextSource, "title")
-			// Phase 1119 — the closed `Modal | Popover` pair, omitted at
-			// `Modal`. A bare enum (§3.5), so an unrecognised token reports at
-			// the slot's own path with no `.$type` suffix — there is no
-			// discriminator on the wire to name.
-			s.optDrop("modality", enumDecoder(modalityCases, "modality", noAliases),
-				func(v Value) bool { return isStr(v, "Modal") })
-			return s.build("Modal")
-		},
-		"ScrollArea": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("children", decodeChildren)
-			s.req("orientation", enumDecoder(scrollOrientationCases, "orientation", noAliases))
-			s.opt("maxHeight", decodeInt)
-			s.opt("maxWidth", decodeInt)
-			return s.build("ScrollArea")
-		},
-		"Button": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("label", decodeTextSource)
-			s.req("onClick", decodeAction)
-			s.req("variant", enumDecoder(buttonVariantCases, "variant", buttonVariantAliases))
-			s.opt("icon", decodeString)
-			s.opt("disabled", decodeBindingBool)
-			return s.build("Button")
-		},
-		"Form": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("fields", decodeFormFields)
-			s.req("onSubmit", decodeAction)
-			s.req("submitLabel", decodeTextSource)
-			s.opt("disabled", decodeBindingBool)
-			return s.build("Form")
-		},
-		"Filters": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("items", decodeFilterItems)
-			return s.build("Filters")
-		},
-		"FileUpload": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("accept", decodeStringArrayField)
-			s.req("label", decodeTextSource)
-			s.req("multiple", decodeBool)
-			// The select handler is a closure slot the canonical encoder
-			// always emits as the sentinel.
-			s.take("onSelect")
-			s.set("onSelect", Str(closureSentinel))
-			s.opt("disabled", decodeBindingBool)
-			// Phase 1115 — the two ADDITIONAL ingestion gestures, each omitted
-			// at `false`. Neither replaces the picker: the `<input type=file>`
-			// and its label are emitted whatever a document declares, which is
-			// what keeps the keyboard route intact and the no-script floor a
-			// working upload rather than an inert box.
-			s.optDrop("dropTarget", decodeBool, isFalseValue)
-			s.optDrop("acceptPaste", decodeBool, isFalseValue)
-			// Phase 1116 — the capture source, a closed `Camera | Microphone`
-			// pair (a bare enum, so the path carries no `.$type`).
-			s.opt("capture", enumDecoder(captureSourceCases, "capture", noAliases))
-			// Phase 1117 — the streamed upload's destination. A non-empty
-			// string: an empty one names no destination at all, so it is
-			// refused rather than read as "the default", which is what an
-			// absent member already means.
-			s.opt("destination", decodeUploadDestination)
-			// Phase 1548 — the two declared ceilings. Optional: absent declares
-			// no ceiling, which is the pre-1548 control and the wire identity.
-			// Both go through `decodePositiveInt`, so §7.1's slot rule decides
-			// the shape (a fractional value is not truncated, a value beyond the
-			// signed 32-bit slot is refused naming the slot's width) before the
-			// positive floor decides the sign. Zero is refused as firmly as a
-			// negative: a ceiling of zero is a control that can accept nothing,
-			// and the author who means "no ceiling" omits the member.
-			s.opt("maxBytes", decodePositiveInt)
-			s.opt("maxFiles", decodePositiveInt)
-			return s.build("FileUpload")
-		},
-		// 0.2.0 — editable omitted-when-false; `data` / `rows` alias `source`.
-		"DataGrid": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("columns", decodeColumns)
-			s.optDrop("editable", decodeBool, isFalseValue)
-			// Phase 934 — declarative row reorder; omitted-when-false, the same
-			// convention as `editable`.
-			s.optDrop("reorderable", decodeBool, isFalseValue)
-			s.req("source", decodeBindingRows, "data", "rows")
-			s.sentinel("onRowClick")
-			s.sentinel("rowKey")
-			s.opt("rowKeyField", decodeString)
-			// Phase 818 — the grid-sort header affordance: names the State key
-			// carrying the sort descriptor `{column, direction}` a data-bound
-			// grid's runtime sorts by (and whose headers write it). Typed as a
-			// string; encode-omitted when absent.
-			s.opt("sortStateKey", decodeString)
-			// Phase 862 — declarative pagination. `pageStateKey` names the State
-			// key carrying `{"page": N}` (1-based); `pageSize` is how many rows a
-			// page holds. A page of zero or fewer rows names no page at all, so
-			// it is WRONG_TYPE — which is also what schema.json's `minimum: 1`
-			// says. The pager that writes the key is renderer-owned, so nothing
-			// here decodes a control.
-			s.opt("pageSize", decodeGridPageSize)
-			// Phase 861 — the bound path's declared initial order, decoded by
-			// the SAME function the staticRows spelling uses: same record, same
-			// bound, same message at a different path.
-			s.opt("defaultSort", decodeDefaultSort)
-			checkNearMisses(obj, path, gridNearMisses)
-			// Phase 863 — the declared edit destination.
-			s.opt("editStateKey", decodeString)
-			s.opt("pageStateKey", decodeString)
-			s.opt("staticRows", decodeStaticRows)
-			// Phase 1125 — the CSV export affordance, omitted at `false`.
-			s.optDrop("exportable", decodeBool, isFalseValue)
-			// Phase 1473 — the grid's half of the print-break vocabulary. There
-			// is no `breakBefore` here (that is a wrapper's job); what survives
-			// on a grid is whether its rows may fragment and whether the header
-			// repeats on each page.
-			s.optDrop("keepRowsTogether", decodeBool, isFalseValue)
-			s.optDrop("repeatHeader", decodeBool, isFalseValue)
-			// Phase 1123 — cross-container drag. Two grids naming the same key
-			// exchange rows; a grid declaring only `transferInKey` receives
-			// without giving up its own.
-			s.opt("transferInKey", decodeString)
-			s.opt("transferOutKey", decodeString)
-			// Phase 1892 — the row window and the declared total. `windowStateKey`
-			// names the State key carrying the window descriptor
-			// `{"offset": N, "count": M}`; `rowTotal` is an int Binding decoded
-			// exactly as the other int Binding slots (Tabs.activeIndex /
-			// Stepper.activeStep). Both are encode-omitted when absent. The
-			// renderer applies the window (Phase 1912: renderer.windowedGrid).
-			s.opt("rowTotal", decodeBindingInt)
-			s.opt("windowStateKey", decodeString)
-			return s.build("DataGrid")
-		},
-		// Phase 1585 — `stacked` is OMITTED-WHEN-FALSE on both boundaries. It
-		// used to be set unconditionally, so absence and an explicit `false`
-		// both re-encoded as `"stacked":false`; the IDL now declares the member
-		// `omitDefault false`, which makes the omitted form canonical and the
-		// explicit one a §3.6 lenient accept that normalises to it. `optDrop`
-		// is the seam every other omitted-when-default flag already uses.
-		"Chart": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("kind", enumDecoder(chartKindCases, "kind", noAliases))
-			s.req("source", decodeBindingRows, "data")
-			s.optDrop("stacked", decodeBool, isFalseValue)
-			s.req("xField", decodeString)
-			s.req("yFields", decodeStringArrayField)
-			s.opt("title", decodeTextSource)
-			// Phase 1490 — `annotations` (§4l): the data-addressed attachments —
-			// reference lines, event markers and range bands — as one closed
-			// union. Absent OMITS on the wire, so every pre-1490 document decodes
-			// and re-encodes byte-for-byte as it did. An EMPTY list is a different
-			// document from an absent field and is carried as such.
-			s.opt("annotations", decodeChartAnnotationArray)
-			s.sentinel("onPointClick")
-			return s.build("Chart")
-		},
-		"Custom": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("moduleId", decodeString)
-			s.req("componentId", decodeString)
-			s.opt("props", decodeJSONValue)
-			s.opt("contentHash", decodeJSONValue)
-			s.opt("exposedNodeIds", decodeJSONValue)
-			return s.build("Custom")
-		},
-		// Tabs / Stepper — BOTH SPECS ARE NOW COMPLETE against the corpus IDL's
-		// `kinds` entry for each, every member typed to the reference host's own
-		// reading (Phase 1677; the Python host took the same step at the same
-		// scope in Phase 1654, and this is the Go half of that pair).
-		//
-		// The history is worth keeping, because it is what the completion is
-		// measured against. Both kinds were WHOLLY structural before Phase 1064,
-		// which is why this host answered `reject-binding-int-bool` and
-		// `reject-binding-int-sentinel-string` by ACCEPTING them while it refused
-		// every float vector: the typed float parsers existed and were routed,
-		// and these two kinds had no typed decoder to route anything through.
-		// Phase 1064 typed the one `Binding<int>` slot and nothing else,
-		// deliberately — the blast radius was the slot that phase was about — and
-		// recorded the rest as residue. This is that residue.
-		//
-		// What each member's treatment comes from, and nothing invented on top:
-		//   * `activeIndex` — omit-at-default `Static 0` (Phase 1585). This
-		//     host's model is structural, so DROPPING the member on decode is
-		//     what stops it being emitted; an explicit `{"$type":"Static",
-		//     "value":0}` carried through would make the pre-1585 spelling a
-		//     SECOND canonical form.
-		//   * `orientation` — omit-at-default `Horizontal`, the ordinary §3.6
-		//     enum treatment, with the `Row`/`Column` aliases every other
-		//     orientation slot in this host accepts.
-		//   * `children` — REQUIRED on both, and a list of nodes. Leaving a
-		//     node-valued position structural is the one omission that costs more
-		//     than it saves: the nodes inside it never reach the node decoder at
-		//     all, so nothing in them is counted, bounded or typed.
-		//   * `tabHeaders` — an array of `TabHeader` records whose `label` is
-		//     REQUIRED, so a header with no label is a MISSING_FIELD rather than a
-		//     document that round-trips perfectly and renders an unnamed tab.
-		//   * `tabTags` — an array of plain strings, refused by index.
-		//   * `activeTag` — the tag-side selection, a `Binding<string>`; the
-		//     second way a `Tabs` is live, which the validator already reads.
-		//   * `onSelect` / `onSelectTag` — `fn` slots, presence-only and
-		//     normalised to the closure sentinel.
-		//
-		// `Stepper.activeStep` IS REQUIRED — the decision Phase 1064 declined to
-		// smuggle in, taken here explicitly. The corpus IDL declares it
-		// `{"$type":"required"}` where `Tabs.activeIndex` is `omitDefault`, and a
-		// stepper carries no default step to fall back to: `Tabs` has one because
-		// "the first tab" is a meaningful resting state, while a stepper with no
-		// declared step has no position at all, so a host inventing 0 would be
-		// choosing a stage in someone else's workflow. The reference host and the
-		// Python host both require it. No corpus fixture pins it — which is why it
-		// needed deciding rather than reading — so the decision is recorded here
-		// and in `wire/tabs_stepper_test.go`, whose `Stepper` case is this host's
-		// evidence for it.
-		//
-		// `buildStrict` is deliberately NOT used on the kind: an unknown key there
-		// is still preserved structurally (§2 rule 2 tolerance). Strictness is
-		// applied one level in, inside `TabHeader`, where the reference and the
-		// Python host both build a closed record.
-		"Tabs": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.optDrop("activeIndex", decodeBindingInt, isStaticIntZero)
-			s.req("children", decodeChildren)
-			s.optDrop("orientation", enumDecoder(orientationCases, "orientation", orientationAliases), isHorizontal)
-			s.opt("tabHeaders", decodeTabHeaders)
-			s.opt("tabTags", decodeStringArrayField)
-			s.opt("activeTag", decodeBindingString)
-			s.sentinel("onSelect")
-			s.sentinel("onSelectTag")
-			return s.build("Tabs")
-		},
-		"Stepper": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("activeStep", decodeBindingInt)
-			s.req("children", decodeChildren)
-			s.sentinel("onSelect")
-			return s.build("Stepper")
-		},
-		// State-bound conditional child. Duplicate match values are NOT a
-		// decode error (first-match-wins; the validator flags them).
-		// Phase 768 — the selector is any Binding: a non-State selector rides
-		// an `on` key holding the canonical Binding wire form, while the
-		// State(key) form keeps the compact `stateKey` spelling (the reference
-		// encoders' collapse rule, applied on the decode boundary here since
-		// this host's encoder is generic). Both absent keeps the stateKey
-		// MISSING_FIELD, so the reject fixture's error is unchanged; `on` wins
-		// when both are present.
-		"Switch": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("cases", decodeSwitchCases)
-			s.req("default", decodeSingleNode)
-			if raw, ok := s.take("on"); ok {
-				s.take("stateKey") // consumed — `on` is authoritative
-				on := decodeBinding(w, raw, path+".on")
-				if o, isObj := on.(Obj); isObj && o.Tag == "State" && len(o.Fields) == 1 {
-					s.set("stateKey", o.Fields["key"])
-				} else {
-					s.set("on", on)
-				}
-			} else {
-				s.req("stateKey", decodeString)
-			}
-			// Phase 1122 — the timed advance, in whole milliseconds. Zero, a
-			// negative and a fraction are all REFUSED rather than clamped or
-			// rounded: none of them names an interval, and a carousel that
-			// advanced on a rounded guess would be a reading pace the document
-			// never asked for.
-			s.opt("autoAdvanceMs", decodePositiveInt)
-			return s.build("Switch")
-		},
-		// Phase 1670 — the parameterised fragment's two OMIT-AT-DEFAULT slots.
-		//
-		// `WIRE_FORMAT.md`'s parameterised-fragment section has always said a
-		// zero-hole declaration omits `holes` and a pure-deterministic one omits
-		// `effect`, and since Phase 1670 it says so as a MUST: the redundant
-		// `"holes":[]` and `{"determinism":"Deterministic","hostEffect":"Pure"}`
-		// are decode-accepted input, never a second canonical spelling. This
-		// host decoded the kind with no builder at all, so it echoed whatever it
-		// was handed and one document re-encoded to two different byte sequences
-		// depending on which host read it — invisible to this host's own
-		// round-trip gate, which compares its re-encode against bytes it
-		// produced itself.
-		//
-		// DELIBERATELY the whole builder, and deliberately structural otherwise:
-		// `build` preserves every unconsumed key exactly as the fall-through
-		// did, so `body`, `name` and any key a later spec version adds are
-		// untouched. This arm narrows the canonical form and changes nothing
-		// about what is accepted or carried.
-		"FragmentDecl": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.optDrop("holes", decodeJSONPassthrough, isEmptyArr)
-			s.optDrop("effect", decodeJSONPassthrough, isPureDeterministicEffect)
-			return s.build("FragmentDecl")
-		},
-		// Isolation/embedding boundary (§4o). inputs passes through WITHOUT
-		// null-strictness — it embeds whole node trees whose Binding.Static
-		// values are §5 opaque seams.
-		"Mount": func(w *walkState, obj map[string]any, path string) Obj {
-			s := newSpec(w, obj, path)
-			s.req("scopeId", decodeString)
-			s.req("channel", decodeGuestChannel)
-			s.req("capabilities", decodeJSONValue)
-			s.req("onBubble", decodeString)
-			s.opt("inputs", decodeJSONPassthrough)
-			return s.build("Mount")
-		},
+func (handArms) armMarkdown(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindMarkdown)
+	s.field("text", decodeTextSource)
+	return s.build("Markdown")
+}
+
+// 0.2.0 rename law — the scalar displayed value is `value` (`source`
+// is reserved for collection feeds and is NOT accepted here — clean
+// break); `data` stays as the web-prior alias. Phase 460 — the
+// stylistic fields are omitted-when-default on both boundaries.
+func (handArms) armMetric(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindMetric)
+	s.field("label", decodeTextSource)
+	s.field("value", decodeBindingFloat, "data")
+	s.field("format", decodeCellFormat)
+	s.field("tone", decodeTone)
+	s.field("weight", decodeWeight)
+	s.field("emphasis", decodeEmphasisEnum)
+	s.field("trend", decodeBindingFloat)
+	s.field("trendFormat", decodeCellFormat)
+	// Phase 867 — the direction-of-good declaration. Omitted-when-default
+	// on BOTH boundaries (§3.6.1 clause 4: an absent slot IS
+	// `HigherIsBetter`), so an explicitly-spelled default normalises away
+	// and a tree that never mentions polarity keeps its bytes.
+	//
+	// It is decoded rather than left to `build`'s structural passthrough,
+	// and that is the point of this arm: passthrough round-trips the key
+	// byte-for-byte while modelling nothing, so a misspelt case would ride
+	// through to the renderer and be read as an unrecognised polarity —
+	// green corpus, wrong tree. The closed set refuses it at the boundary
+	// the way every other bare enum here is refused.
+	s.field("trendPolarity", enumDecoder(trendPolarityCases, "trendPolarity", noAliases))
+	s.field("icon", decodeString)
+	s.field("subtext", decodeTextSource)
+	return s.build("Metric")
+}
+
+// A labeled TEXT fact: `value` is a TextSource, so static / Bound /
+// I18n values ride the label vocabulary. Only label + value required;
+// tone / emphasis omitted-when-default on BOTH boundaries.
+func (handArms) armFact(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindFact)
+	s.field("label", decodeTextSource)
+	s.field("value", decodeTextSource)
+	s.field("tone", decodeTone)
+	s.field("emphasis", decodeEmphasisFlag)
+	s.field("help", decodeTextSource)
+	s.field("icon", decodeString)
+	return s.build("Fact")
+}
+
+func (handArms) armLabelValueRow(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindLabelValueRow)
+	s.field("label", decodeTextSource)
+	s.field("value", decodeBindingFloat, "data")
+	s.field("format", decodeCellFormat)
+	// 0.2.2 — the behavioural bool, omitted-when-false (aligning with
+	// Fact's identical flag); the cross-vocabulary coercion accepts
+	// the Emphasis enum + its aliases.
+	s.field("emphasis", decodeEmphasisFlag)
+	s.field("help", decodeTextSource)
+	return s.build("LabelValueRow")
+}
+
+func (handArms) armBadge(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindBadge)
+	s.field("label", decodeTextSource)
+	s.field("variant", enumDecoder(badgeVariantCases, "variant", badgeVariantAliases))
+	return s.build("Badge")
+}
+
+func (handArms) armCallout(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindCallout)
+	s.field("body", decodeTextSource)
+	// 0.2.0 — dismissable omitted-when-false; Phase 460 — tone
+	// omitted-when-default. `title` aliases `heading`.
+	s.field("dismissable", decodeBool)
+	s.field("tone", decodeTone)
+	s.field("heading", decodeTextSource, "title")
+	s.field("icon", decodeString)
+	return s.build("Callout")
+}
+
+func (handArms) armProgress(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindProgress)
+	s.field("fraction", decodeBindingFloat)
+	// 0.2.0 — indeterminate omitted-when-false.
+	s.field("indeterminate", decodeBool)
+	s.field("tone", decodeTone)
+	s.field("label", decodeTextSource)
+	s.field("caveat", decodeTextSource)
+	return s.build("Progress")
+}
+
+func (handArms) armToast(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindToast)
+	// 0.2.0 — the one omit-when-TRUE: a toast is dismissable unless
+	// said otherwise.
+	s.field("dismissable", decodeBool)
+	s.field("message", decodeTextSource)
+	s.field("open", decodeBindingBool)
+	s.field("tone", decodeTone)
+	return s.build("Toast")
+}
+
+func (handArms) armSkeleton(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindSkeleton)
+	// Phase 1666 — the §21.9 row bound rides the field's own decoder, so
+	// the spec table stays the single statement of a Skeleton's shape.
+	s.field("rows", decodeSkeletonRows)
+	return s.build("Skeleton")
+}
+
+// Phase 821 — the standalone icon-only display kind. `size`
+// omitted-when-`Medium`; `tone` omitted-when-default (the Phase 460
+// discipline); `label` omitted-when-decorative.
+func (handArms) armIcon(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindIcon)
+	s.field("icon", decodeString)
+	s.field("size", enumDecoder(iconSizeCases, "size", noAliases))
+	s.field("tone", decodeTone)
+	s.field("label", decodeString)
+	return s.build("Icon")
+}
+
+// source is a §5 typed Static float-series position; `data` aliases.
+func (handArms) armSparkline(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindSparkline)
+	s.field("source", decodeBindingFloatSeq, "data")
+	return s.build("Sparkline")
+}
+
+// source is a §5 typed Static marker-list position; `data` / `markers`
+// alias.
+func (handArms) armMap(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindMap)
+	s.field("centreLatitude", expectNumber)
+	s.field("centreLongitude", expectNumber)
+	s.field("source", decodeBindingMarkerSeq, "data", "markers")
+	s.field("zoom", decodeInt)
+	s.sentinel("onMarkerClick")
+	return s.build("Map")
+}
+
+func (handArms) armLink(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindLink)
+	s.field("download", decodeBool)
+	s.field("href", decodeBindingString)
+	s.field("label", decodeTextSource)
+	// Phase 812 — optional closed enumeration; an unknown case is
+	// UNKNOWN_DU_CASE at $.kind.protection.
+	s.field("protection", enumDecoder(linkProtectionCases, "protection", noAliases))
+	s.field("rel", decodeString)
+	s.field("target", decodeString)
+	return s.build("Link")
+}
+
+// Phases 1077 / 1078 / 1079 / 1080 — §3.6.2–§3.6.5. Five optional
+// slots beside `variant`, and they do NOT all take the same posture:
+//
+//   - fit / aspectRatio / loading are identity-default TOKENS, dropped
+//     at their default on the decode boundary so an explicit `Natural`
+//     / `Eager` canonicalises to the omitted form (§3.6's table).
+//   - caption is CONTENT, not a presentation token — there is no
+//     default caption the way there is a default fit — so it takes the
+//     ordinary optional-field posture (rule 4). It is a full
+//     `TextSource`, NOT a string: narrowing the slot costs nothing
+//     until somebody needs a locale, which is why the enveloped
+//     `{"$type":"Literal"}` form has its own lenient fixture here.
+//   - srcSet IS an omit-at-default field whose identity is the EMPTY
+//     LIST rather than a token. Absent and `[]` denote the same
+//     document; a present `null` is refused, because absence already
+//     has a spelling and a second one would let two conformant hosts
+//     emit different canonical bytes for one document.
+//   - expandable is a plain bool omitted at `false`, refused rather
+//     than coerced when stringified — a truthiness rule would have to
+//     rule on `"false"` and `""` too, and two hosts ruling differently
+//     would disagree about whether the document declares an affordance
+//     at all.
+func (handArms) armImage(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindImage)
+	s.field("alt", decodeTextSource)
+	s.field("aspectRatio", enumDecoder(imageAspectCases, "aspectRatio", noAliases))
+	s.field("caption", decodeTextSource)
+	s.field("expandable", decodeBool)
+	s.field("fit", enumDecoder(imageFitCases, "fit", noAliases))
+	s.field("loading", enumDecoder(imageLoadingCases, "loading", noAliases))
+	s.field("src", decodeBindingString)
+	s.field("srcSet", decodeSrcSet)
+	s.field("variant", enumDecoder(imageVariantCases, "variant", noAliases))
+	return s.build("Image")
+}
+
+// Phase 1076 — §3.6.6. The shared record carries the source, the
+// mandatory accessible name, and the two shared declarations;
+// `controls` is omitted at TRUE (the second such slot in the
+// vocabulary after `Toast.dismissable`, and the polarity is
+// deliberate — a media element without a transport cannot be paused,
+// seeked or muted by a keyboard user at all, so the accessible setting
+// is what a document gets for free and taking it away is the deviation
+// that costs a key). `loop` takes the ordinary polarity.
+func (handArms) armMedia(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindMedia)
+	s.field("controls", decodeBool)
+	s.field("kind", decodeMediaKind)
+	s.field("label", decodeTextSource)
+	s.field("loop", decodeBool)
+	s.field("src", decodeBindingString)
+	// Phase 1110 — both live on the SPEC rather than on
+	// `MediaKind.Video`, and the second placement is the one worth
+	// explaining: a transcript is the affordance an AUDIO surface needs
+	// most, because a recording with no visual channel has nowhere else
+	// to put its words.
+	//
+	// `tracks` is omitted when EMPTY — an absent list and an empty one
+	// denote the same document — so it drops rather than encoding `[]`.
+	// `transcript` is an ORDINARY optional: absent means the document
+	// offers no transcript, which is a different statement from
+	// offering an empty one, so it does not drop at "".
+	s.field("tracks", decodeTracks)
+	s.field("transcript", decodeTextSource)
+	return s.build("Media")
+}
+
+// Phase 1111 — §3.6.8. `title` is REQUIRED on `MediaSpec.label`'s
+// argument one kind over: a frame is a focus container a reader tabs
+// INTO, so there is no decorative embed, and a frame with no accessible
+// name is announced as "frame" and nothing else.
+//
+// `permissions` omits at the EMPTY list and empty means TOTAL DENIAL —
+// that polarity is the design rather than a consequence of the omit
+// rule, so the wire-cheapest document is also the most locked-down one.
+// `aspectRatio` REUSES `ImageAspect` (the cases are pure layout ratios
+// with nothing image-specific in them) and omits at `Natural`.
+func (handArms) armEmbed(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindEmbed)
+	s.field("aspectRatio", enumDecoder(imageAspectCases, "aspectRatio", noAliases))
+	s.field("permissions", decodeEmbedPermissions)
+	s.field("src", decodeBindingString)
+	s.field("title", decodeTextSource)
+	return s.build("Embed")
+}
+
+// Phase 1120 — §3.6.12. Expansion and selection are named State keys and
+// there is no `expandable` / `selectable` boolean: a behaviour the
+// reader drives is declared as a key the host both writes and reads, and
+// a flag with no key behind it is a decorative control writing state
+// nothing reads.
+func (handArms) armTree(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindTree)
+	s.field("expandedStateKey", decodeString)
+	s.field("items", decodeTreeItems)
+	s.sentinel("onSelect")
+	s.field("selectionStateKey", decodeString)
+	return s.build("Tree")
+}
+
+func (handArms) armList(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindList)
+	s.field("items", decodeTextSourceArray)
+	s.field("ordered", decodeBool)
+	return s.build("List")
+}
+
+func (handArms) armCodeBlock(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindCodeBlock)
+	s.field("code", decodeString)
+	s.field("copyable", decodeBool)
+	s.field("highlightLines", decodeIntArray)
+	s.field("language", decodeString)
+	s.field("lineNumbers", decodeBool)
+	return s.build("CodeBlock")
+}
+
+func (handArms) armMath(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindMath)
+	s.field("display", enumDecoder(mathDisplayCases, "display", noAliases))
+	s.field("source", decodeString)
+	return s.build("Math")
+}
+
+// Phases 524 / 642 — geometry static; the closed Shape / CurveCommand
+// DUs default-deny an unknown discriminator; DrawStyle carries the
+// bindings + the optional markId.
+func (handArms) armDrawing(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindDrawing)
+	s.field("description", decodeTextSource)
+	s.field("shapes", decodeShapeArray)
+	s.field("style", decodeDrawStyle)
+	s.field("title", decodeTextSource)
+	s.field("viewBox", decodeViewBox)
+	return s.build("Drawing")
+}
+
+// decodeSelectValue applies the Phase 1962 `value` rule (WIRE_FORMAT.md, "Select
+// multi-select"), a relation between two sibling keys the IDL row cannot state
+// (it marks `value` optional): a single-select (`multiple` absent or false)
+// REQUIRES `value`; a multi-select carries its selection in `values` and no
+// `value`. On a multi-select a present `value` is decoded exactly as before — so
+// a malformed binding still refuses as any malformed binding does — and then
+// DROPPED (a §16 lenient accept: the control never reads it, and earlier
+// documents carrying a placeholder or a real binding there keep reading). A
+// malformed `multiple` is its own defect (reported when `multiple` itself
+// decodes), so the presence rule is not applied: `value` decodes if present and
+// is not demanded. The raw `multiple` is peeked rather than decoded here so the
+// field decode order — and with it which defect surfaces first — is unchanged.
+func decodeSelectValue(s *spec) {
+	rawMultiple, hasMultiple := s.obj["multiple"]
+	isBoolMultiple := false
+	multiple := false
+	if hasMultiple {
+		// The same unwrap decodeBool applies (a Static-wrapped bool is a bool).
+		multiple, isBoolMultiple = unwrapStaticAny(rawMultiple).(bool)
 	}
+	switch {
+	case !hasMultiple || (isBoolMultiple && !multiple):
+		raw, ok := s.has("value")
+		if !ok {
+			fail(CodeMissingField, s.path+".value", "missing required field 'value'")
+		}
+		s.fields["value"] = decodeBindingStringOpt(s.w, raw, s.path+".value")
+	case !isBoolMultiple:
+		s.field("value", decodeBindingStringOpt)
+	default:
+		raw, ok := s.has("value")
+		if !ok {
+			return
+		}
+		// Decode for its defects, then drop: the value is never stored.
+		decodeBindingStringOpt(s.w, raw, s.path+".value")
+	}
+}
+
+// The handler fields are OPTIONAL: omitted on the wire when the
+// control is declarative; present as the "<closure>" sentinel when
+// closure-authored. `options` / `data` alias `source`. Phase 291 —
+// values omitted when absent. Phase 1962 — `value` follows the single/multi
+// rule (decodeSelectValue), and `multiple` is an ordinary optional field kept
+// AS AUTHORED: an explicit false survives the round trip (it is not
+// omit-at-default; nodes/select-multiple-false.json).
+func (handArms) armSelect(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindSelect)
+	s.field("label", decodeTextSource)
+	s.sentinel("onChange")
+	s.field("source", decodeBindingSelectOptions, "options", "data")
+	decodeSelectValue(s)
+	s.field("disabled", decodeBindingBool)
+	s.field("placeholder", decodeTextSource)
+	s.field("multiple", decodeBool)
+	s.field("values", decodeBindingStringList)
+	s.sentinel("onChangeMulti")
+	return s.build("Select")
+}
+
+// onDismiss is optional and — unlike the closure-sentinel handlers — a
+// genuine wire-survivable Action, so it decodes null-strict when
+// present. `title` aliases `heading`.
+func (handArms) armModal(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindModal)
+	s.field("children", decodeChildren)
+	s.field("dismissable", decodeBool)
+	s.field("onDismiss", decodeAction)
+	s.field("open", decodeBindingBool)
+	s.field("heading", decodeTextSource, "title")
+	// Phase 1119 — the closed `Modal | Popover` pair, omitted at
+	// `Modal`. A bare enum (§3.5), so an unrecognised token reports at
+	// the slot's own path with no `.$type` suffix — there is no
+	// discriminator on the wire to name.
+	s.field("modality", enumDecoder(modalityCases, "modality", noAliases))
+	return s.build("Modal")
+}
+
+func (handArms) armScrollArea(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindScrollArea)
+	s.field("children", decodeChildren)
+	s.field("orientation", enumDecoder(scrollOrientationCases, "orientation", noAliases))
+	s.field("maxHeight", decodeInt)
+	s.field("maxWidth", decodeInt)
+	return s.build("ScrollArea")
+}
+
+func (handArms) armButton(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindButton)
+	s.field("label", decodeTextSource)
+	s.field("onClick", decodeAction)
+	s.field("variant", enumDecoder(buttonVariantCases, "variant", buttonVariantAliases))
+	s.field("icon", decodeString)
+	s.field("disabled", decodeBindingBool)
+	return s.build("Button")
+}
+
+func (handArms) armForm(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindForm)
+	s.field("fields", decodeFormFields)
+	s.field("onSubmit", decodeAction)
+	s.field("submitLabel", decodeTextSource)
+	s.field("disabled", decodeBindingBool)
+	return s.build("Form")
+}
+
+func (handArms) armFilters(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindFilters)
+	s.field("items", decodeFilterItems)
+	return s.build("Filters")
+}
+
+func (handArms) armFileUpload(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindFileUpload)
+	s.field("accept", decodeStringArrayField)
+	s.field("label", decodeTextSource)
+	s.field("multiple", decodeBool)
+	// The select handler is an OPTIONAL closure slot (the IDL row and the
+	// §3.2 table have said so since the handler sweep; the spec's prose
+	// caught up in Phase 1962): present as the sentinel when closure-authored,
+	// absent on a declarative upload — kept absent, never synthesised.
+	s.sentinel("onSelect")
+	s.field("disabled", decodeBindingBool)
+	// Phase 1115 — the two ADDITIONAL ingestion gestures, each omitted
+	// at `false`. Neither replaces the picker: the `<input type=file>`
+	// and its label are emitted whatever a document declares, which is
+	// what keeps the keyboard route intact and the no-script floor a
+	// working upload rather than an inert box.
+	s.field("dropTarget", decodeBool)
+	s.field("acceptPaste", decodeBool)
+	// Phase 1116 — the capture source, a closed `Camera | Microphone`
+	// pair (a bare enum, so the path carries no `.$type`).
+	s.field("capture", enumDecoder(captureSourceCases, "capture", noAliases))
+	// Phase 1117 — the streamed upload's destination. A non-empty
+	// string: an empty one names no destination at all, so it is
+	// refused rather than read as "the default", which is what an
+	// absent member already means.
+	s.field("destination", decodeUploadDestination)
+	// Phase 1548 — the two declared ceilings. Optional: absent declares
+	// no ceiling, which is the pre-1548 control and the wire identity.
+	// Both go through `decodePositiveInt`, so §7.1's slot rule decides
+	// the shape (a fractional value is not truncated, a value beyond the
+	// signed 32-bit slot is refused naming the slot's width) before the
+	// positive floor decides the sign. Zero is refused as firmly as a
+	// negative: a ceiling of zero is a control that can accept nothing,
+	// and the author who means "no ceiling" omits the member.
+	s.field("maxBytes", decodePositiveInt)
+	s.field("maxFiles", decodePositiveInt)
+	return s.build("FileUpload")
+}
+
+// 0.2.0 — editable omitted-when-false; `data` / `rows` alias `source`.
+func (handArms) armDataGrid(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindDataGrid)
+	s.field("columns", decodeColumns)
+	s.field("editable", decodeBool)
+	// Phase 934 — declarative row reorder; omitted-when-false, the same
+	// convention as `editable`.
+	s.field("reorderable", decodeBool)
+	s.field("source", decodeBindingRows, "data", "rows")
+	s.sentinel("onRowClick")
+	s.sentinel("rowKey")
+	s.field("rowKeyField", decodeString)
+	// Phase 818 — the grid-sort header affordance: names the State key
+	// carrying the sort descriptor `{column, direction}` a data-bound
+	// grid's runtime sorts by (and whose headers write it). Typed as a
+	// string; encode-omitted when absent.
+	s.field("sortStateKey", decodeString)
+	// Phase 862 — declarative pagination. `pageStateKey` names the State
+	// key carrying `{"page": N}` (1-based); `pageSize` is how many rows a
+	// page holds. A page of zero or fewer rows names no page at all, so
+	// it is WRONG_TYPE — which is also what schema.json's `minimum: 1`
+	// says. The pager that writes the key is renderer-owned, so nothing
+	// here decodes a control.
+	s.field("pageSize", decodeGridPageSize)
+	// Phase 861 — the bound path's declared initial order, decoded by
+	// the SAME function the staticRows spelling uses: same record, same
+	// bound, same message at a different path.
+	s.field("defaultSort", decodeDefaultSort)
+	checkNearMisses(obj, path, gridNearMisses)
+	// Phase 863 — the declared edit destination.
+	s.field("editStateKey", decodeString)
+	s.field("pageStateKey", decodeString)
+	s.field("staticRows", decodeStaticRows)
+	// Phase 1125 — the CSV export affordance, omitted at `false`.
+	s.field("exportable", decodeBool)
+	// Phase 1473 — the grid's half of the print-break vocabulary. There
+	// is no `breakBefore` here (that is a wrapper's job); what survives
+	// on a grid is whether its rows may fragment and whether the header
+	// repeats on each page.
+	s.field("keepRowsTogether", decodeBool)
+	s.field("repeatHeader", decodeBool)
+	// Phase 1123 — cross-container drag. Two grids naming the same key
+	// exchange rows; a grid declaring only `transferInKey` receives
+	// without giving up its own.
+	s.field("transferInKey", decodeString)
+	s.field("transferOutKey", decodeString)
+	// Phase 1892 — the row window and the declared total. `windowStateKey`
+	// names the State key carrying the window descriptor
+	// `{"offset": N, "count": M}`; `rowTotal` is an int Binding decoded
+	// exactly as the other int Binding slots (Tabs.activeIndex /
+	// Stepper.activeStep). Both are encode-omitted when absent. The
+	// renderer applies the window (Phase 1912: renderer.windowedGrid).
+	s.field("rowTotal", decodeBindingInt)
+	s.field("windowStateKey", decodeString)
+	return s.build("DataGrid")
+}
+
+// Phase 1585 — `stacked` is OMITTED-WHEN-FALSE on both boundaries. It
+// used to be set unconditionally, so absence and an explicit `false`
+// both re-encoded as `"stacked":false`; the IDL now declares the member
+// `omitDefault false`, which makes the omitted form canonical and the
+// explicit one a §3.6 lenient accept that normalises to it. `optDrop`
+// is the seam every other omitted-when-default flag already uses.
+func (handArms) armChart(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindChart)
+	s.field("kind", enumDecoder(chartKindCases, "kind", noAliases))
+	s.field("source", decodeBindingRows, "data")
+	s.field("stacked", decodeBool)
+	s.field("xField", decodeString)
+	s.field("yFields", decodeStringArrayField)
+	s.field("title", decodeTextSource)
+	// Phase 1490 — `annotations` (§4l): the data-addressed attachments —
+	// reference lines, event markers and range bands — as one closed
+	// union. Absent OMITS on the wire, so every pre-1490 document decodes
+	// and re-encodes byte-for-byte as it did. An EMPTY list is a different
+	// document from an absent field and is carried as such.
+	s.field("annotations", decodeChartAnnotationArray)
+	s.sentinel("onPointClick")
+	return s.build("Chart")
+}
+
+func (handArms) armCustom(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindCustom)
+	s.field("moduleId", decodeString)
+	s.field("componentId", decodeString)
+	s.field("props", decodeJSONValue)
+	s.field("contentHash", decodeJSONValue)
+	s.field("exposedNodeIds", decodeJSONValue)
+	return s.build("Custom")
+}
+
+// Tabs / Stepper — BOTH SPECS ARE NOW COMPLETE against the corpus IDL's
+// `kinds` entry for each, every member typed to the reference host's own
+// reading (Phase 1677; the Python host took the same step at the same
+// scope in Phase 1654, and this is the Go half of that pair).
+//
+// The history is worth keeping, because it is what the completion is
+// measured against. Both kinds were WHOLLY structural before Phase 1064,
+// which is why this host answered `reject-binding-int-bool` and
+// `reject-binding-int-sentinel-string` by ACCEPTING them while it refused
+// every float vector: the typed float parsers existed and were routed,
+// and these two kinds had no typed decoder to route anything through.
+// Phase 1064 typed the one `Binding<int>` slot and nothing else,
+// deliberately — the blast radius was the slot that phase was about — and
+// recorded the rest as residue. This is that residue.
+//
+// What each member's treatment comes from, and nothing invented on top:
+//   - `activeIndex` — omit-at-default `Static 0` (Phase 1585). This
+//     host's model is structural, so DROPPING the member on decode is
+//     what stops it being emitted; an explicit `{"$type":"Static",
+//     "value":0}` carried through would make the pre-1585 spelling a
+//     SECOND canonical form.
+//   - `orientation` — omit-at-default `Horizontal`, the ordinary §3.6
+//     enum treatment, with the `Row`/`Column` aliases every other
+//     orientation slot in this host accepts.
+//   - `children` — REQUIRED on both, and a list of nodes. Leaving a
+//     node-valued position structural is the one omission that costs more
+//     than it saves: the nodes inside it never reach the node decoder at
+//     all, so nothing in them is counted, bounded or typed.
+//   - `tabHeaders` — an array of `TabHeader` records whose `label` is
+//     REQUIRED, so a header with no label is a MISSING_FIELD rather than a
+//     document that round-trips perfectly and renders an unnamed tab.
+//   - `tabTags` — an array of plain strings, refused by index.
+//   - `activeTag` — the tag-side selection, a `Binding<string>`; the
+//     second way a `Tabs` is live, which the validator already reads.
+//   - `onSelect` / `onSelectTag` — `fn` slots, presence-only and
+//     normalised to the closure sentinel.
+//
+// `Stepper.activeStep` is OMIT-AT-DEFAULT `Static{value=0}` since Phase 2300
+// (the declared-default rule), the `Tabs.activeIndex` shape: the IDL row says
+// so, the generated table applies it, and this host reads the decision from
+// the row rather than recording one. (Until Phase 2300 the row was `required`
+// and this host held it so on the argument that a stepper with no declared
+// step has no position; the vocabulary now declares the position, and
+// `lenient/lenient-2300-declared-default-bindings.json` pins the explicit
+// form normalising away. `wire/tabs_stepper_test.go` carries the pin.)
+//
+// `buildStrict` is deliberately NOT used on the kind: an unknown key there
+// is still preserved structurally (§2 rule 2 tolerance). Strictness is
+// applied one level in, inside `TabHeader`, where the reference and the
+// Python host both build a closed record.
+func (handArms) armTabs(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindTabs)
+	s.field("activeIndex", decodeBindingInt)
+	s.field("children", decodeChildren)
+	s.field("orientation", enumDecoder(orientationCases, "orientation", orientationAliases))
+	s.field("tabHeaders", decodeTabHeaders)
+	s.field("tabTags", decodeStringArrayField)
+	s.field("activeTag", decodeBindingString)
+	s.sentinel("onSelect")
+	s.sentinel("onSelectTag")
+	return s.build("Tabs")
+}
+
+func (handArms) armStepper(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindStepper)
+	s.field("activeStep", decodeBindingInt)
+	s.field("children", decodeChildren)
+	s.sentinel("onSelect")
+	return s.build("Stepper")
+}
+
+// State-bound conditional child. Duplicate match values are NOT a
+// decode error (first-match-wins; the validator flags them).
+// Phase 768 — the selector is any Binding: a non-State selector rides
+// an `on` key holding the canonical Binding wire form, while the
+// State(key) form keeps the compact `stateKey` spelling (the reference
+// encoders' collapse rule, applied on the decode boundary here since
+// this host's encoder is generic). Both absent keeps the stateKey
+// MISSING_FIELD, so the reject fixture's error is unchanged; `on` wins
+// when both are present.
+func (handArms) armSwitch(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindSwitch)
+	s.field("cases", decodeSwitchCases)
+	s.field("default", decodeSingleNode)
+	if raw, ok := s.take("on"); ok {
+		s.take("stateKey") // consumed — `on` is authoritative
+		on := decodeBinding(w, raw, path+".on")
+		if o, isObj := on.(Obj); isObj && o.Tag == "State" && len(o.Fields) == 1 {
+			s.set("stateKey", o.Fields["key"])
+		} else {
+			s.set("on", on)
+		}
+	} else {
+		// Relational, so hand: the table declares `on` and `stateKey` each
+		// optional, and exactly one of the pair names the selector.
+		s.req("stateKey", decodeString)
+	}
+	// Phase 1122 — the timed advance, in whole milliseconds. Zero, a
+	// negative and a fraction are all REFUSED rather than clamped or
+	// rounded: none of them names an interval, and a carousel that
+	// advanced on a rounded guess would be a reading pace the document
+	// never asked for.
+	s.field("autoAdvanceMs", decodePositiveInt)
+	return s.build("Switch")
+}
+
+// Phase 1670 — the parameterised fragment's two OMIT-AT-DEFAULT slots.
+//
+// `WIRE_FORMAT.md`'s parameterised-fragment section has always said a
+// zero-hole declaration omits `holes` and a pure-deterministic one omits
+// `effect`, and since Phase 1670 it says so as a MUST: the redundant
+// `"holes":[]` and `{"determinism":"Deterministic","hostEffect":"Pure"}`
+// are decode-accepted input, never a second canonical spelling. This
+// host decoded the kind with no builder at all, so it echoed whatever it
+// was handed and one document re-encoded to two different byte sequences
+// depending on which host read it — invisible to this host's own
+// round-trip gate, which compares its re-encode against bytes it
+// produced itself.
+//
+// DELIBERATELY the whole builder, and deliberately structural otherwise:
+// `build` preserves every unconsumed key exactly as the fall-through
+// did, so `body`, `name` and any key a later spec version adds are
+// untouched. This arm narrows the canonical form and changes nothing
+// about what is accepted or carried.
+func (handArms) armFragmentDecl(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindFragmentDecl)
+	s.field("holes", decodeJSONPassthrough)
+	s.field("effect", decodeJSONPassthrough)
+	return s.build("FragmentDecl")
+}
+
+// Isolation/embedding boundary (§4o). inputs passes through WITHOUT
+// null-strictness — it embeds whole node trees whose Binding.Static
+// values are §5 opaque seams.
+func (handArms) armMount(w *walkState, obj map[string]any, path string) Obj {
+	s := newKindSpec(w, obj, path, &idl.KindMount)
+	s.field("scopeId", decodeString)
+	s.field("channel", decodeGuestChannel)
+	s.field("capabilities", decodeJSONValue)
+	s.field("inputs", decodeJSONPassthrough)
+	return s.build("Mount")
 }
 
 // ── Box (the unified container) + legacy decode-upgrade ─────────────────────
 
-func decodeBoxLayout(raw any, path string) Obj {
+func decodeBoxLayout(w *walkState, raw any, path string) Value {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, boxLayoutCases, CodeUnknownDUCase)
+	s := newCaseSpec(w, obj, path, &idl.UnionBoxLayout, tag)
 	switch tag {
 	case "Flex":
-		fields := map[string]Value{
-			"direction": Str(enumStr(require(obj, "direction", path), path+".direction", orientationCases, "direction", orientationAliases)),
-			"wrap":      Bool(expectBool(require(obj, "wrap", path), path+".wrap")),
-		}
-		if raw, ok := obj["gap"]; ok {
-			fields["gap"] = Int(expectInt(raw, path+".gap"))
-		}
-		return Obj{Tag: "Flex", Fields: fields}
+		s.field("direction", enumDecoder(orientationCases, "direction", orientationAliases))
+		s.field("wrap", decodeBool)
+		s.field("gap", decodeInt)
 	case "Grid":
 		_, hasCols := obj["cols"]
 		_, hasColumns := obj["columns"]
@@ -4393,23 +4169,16 @@ func decodeBoxLayout(raw any, path string) Obj {
 			// Accept-and-canonicalise.
 			return Obj{Tag: "Auto", Fields: map[string]Value{}}
 		}
-		var cols Value
 		if !hasCols && !hasColumns {
 			// templateColumns present ⇒ cols is documented-ignored, so an
-			// absent cols defaults to 1 rather than MISSING_FIELD.
-			cols = Int(1)
+			// absent cols is 1 — relational to templateColumns, so hand.
+			s.set("cols", Int(1))
 		} else {
 			// `columns` aliases `cols`.
-			cols = Int(expectInt(requireAliased(obj, "cols", path, "columns"), path+".cols"))
+			s.field("cols", decodeInt, "columns")
 		}
-		fields := map[string]Value{"cols": cols}
-		if raw, ok := obj["gap"]; ok {
-			fields["gap"] = Int(expectInt(raw, path+".gap"))
-		}
-		if raw, ok := obj["templateColumns"]; ok {
-			fields["templateColumns"] = Str(expectString(raw, path+".templateColumns"))
-		}
-		return Obj{Tag: "Grid", Fields: fields}
+		s.field("gap", decodeInt)
+		s.field("templateColumns", decodeString)
 	case "Masonry":
 		// WIRE_FORMAT §3.6.7 — column-fill. `cols` is REQUIRED and POSITIVE, on
 		// the §3.6.4 srcSet width-floor pattern: `column-count: 0` is invalid
@@ -4422,47 +4191,46 @@ func decodeBoxLayout(raw any, path string) Obj {
 		// spec to Auto because the language already owns that concept, whereas
 		// Auto is a ROW-fill mode — rewriting a masonry into it would discard
 		// the author's intent rather than recover it.
-		cols := expectInt(requireAliased(obj, "cols", path, "columns"), path+".cols")
-		if cols <= 0 {
-			fail(CodeWrongType, path+".cols", "expected a positive integer column count at "+path+".cols")
-		}
-		fields := map[string]Value{"cols": Int(cols)}
-		if raw, ok := obj["gap"]; ok {
-			fields["gap"] = Int(expectInt(raw, path+".gap"))
-		}
-		return Obj{Tag: "Masonry", Fields: fields}
-	default: // Auto
-		return Obj{Tag: "Auto", Fields: map[string]Value{}}
+		s.field("cols", decodeColumnCount, "columns")
+		s.field("gap", decodeInt)
+	case "Auto":
+	default:
+		return s.build(tag)
 	}
+	return s.buildStrict(tag)
+}
+
+// decodeColumnCount — Masonry's cols: a positive integer.
+func decodeColumnCount(w *walkState, raw any, path string) Value {
+	cols := expectInt(raw, path)
+	if cols <= 0 {
+		fail(CodeWrongType, path, "expected a positive integer column count at "+path)
+	}
+	return Int(cols)
 }
 
 func decodeBox(w *walkState, obj map[string]any, path string) Obj {
-	children := decodeChildren(w, require(obj, "children", path), path+".children")
-	role := enumStr(require(obj, "role", path), path+".role", boxRoleCases, "role", noAliases)
-	layout := decodeBoxLayout(require(obj, "layout", path), path+".layout")
-	fields := map[string]Value{
-		"children": children,
-		"layout":   layout,
-		"role":     Str(role),
-	}
+	s := newKindSpec(w, obj, path, &idl.KindBox)
+	s.field("children", decodeChildren)
+	s.field("role", enumDecoder(boxRoleCases, "role", noAliases))
+	s.field("layout", decodeBoxLayout)
 	// `title` aliases `heading` (the web prior for a card's caption).
-	if raw, ok := optAliased(obj, "heading", "title"); ok {
-		fields["heading"] = decodeTextSource(w, raw, path+".heading")
-	}
+	s.field("heading", decodeTextSource, "title")
 	// Phase 1473 — the two print-break booleans (§ "Print break control"), each
 	// omitted at `false` on BOTH boundaries: `keepTogether` says this container
 	// and its whole subtree stay on one page, `breakBefore` that it starts at
 	// the top of a fresh one. A non-boolean is WRONG_TYPE at the member's own
 	// path rather than coerced — these are page-layout instructions, and a
 	// truthiness read would honour `"no"`.
-	for _, name := range []string{"breakBefore", "keepTogether"} {
-		if raw, ok := obj[name]; ok {
-			if v := decodeBool(w, raw, path+"."+name); !isFalseValue(v) {
-				fields[name] = v
-			}
-		}
-	}
-	return Obj{Tag: "Box", Fields: fields}
+	s.field("breakBefore", decodeBool)
+	s.field("keepTogether", decodeBool)
+	return s.buildStrict("Box")
+}
+
+// armBox — Box decodes with its own strict reader: an unknown key is dropped,
+// not preserved.
+func (handArms) armBox(w *walkState, obj map[string]any, path string) Obj {
+	return decodeBox(w, obj, path)
 }
 
 // ── Kind / style / state / node envelope ────────────────────────────────────
@@ -4470,21 +4238,65 @@ func decodeBox(w *walkState, obj map[string]any, path string) Obj {
 func decodeKind(w *walkState, raw any, path string) Obj {
 	obj := expectObject(raw, path)
 	tag := dispatch(obj, path, knownKinds, CodeWrongNodeKind)
-	switch {
-	case tag == "Box":
-		return decodeBox(w, obj, path)
+	return dispatchKindArm(handArms{}, w, tag, obj, path)
+}
+
+// styleMember is one SemanticStyle member: its wire name, its per-field
+// decoder and its identity default (filled from the table at start-up). styleMembers lists them in the order the
+// decoders read them, so which defect surfaces first is fixed.
+type styleMember struct {
+	name     string
+	dec      func(w *walkState, raw any, path string) Value
+	identity string
+}
+
+var styleMembers = []styleMember{
+	{"emphasis", decodeEmphasisEnum, ""},
+	{"tone", decodeTone, ""},
+	{"weight", decodeWeight, ""},
+	{"role", func(w *walkState, raw any, path string) Value {
+		return Str(enumStr(raw, path, styleRoleCases, "role", noAliases))
+	}, ""},
+	{"voice", func(w *walkState, raw any, path string) Value {
+		return Str(enumStr(raw, path, fontVoiceCases, "voice", noAliases))
+	}, ""},
+	// Phase 1472 — the declared direction, on exactly the same omit-at-identity
+	// terms as its neighbours (§3.1). It is not presentational: a host that
+	// drops it renders a document that says something else, so an unrecognised
+	// token is refused here rather than coerced to `"auto"`.
+	{"direction", func(w *walkState, raw any, path string) Value {
+		return Str(enumStr(raw, path, textDirectionCases, "direction", noAliases))
+	}, ""},
+}
+
+// Each member's identity is its row's omit-at-default value (Phase 2330), so
+// the table, not this file, says what an absent member means. A member the
+// table does not declare omit-at-default fails every run at start-up.
+func init() {
+	for i := range styleMembers {
+		m := &styleMembers[i]
+		f, ok := idl.RecordSemanticStyle.Field(m.name)
+		if !ok || f.Optionality != idl.OmitDefault {
+			panic("wire: idl.json declares no omit-at-default SemanticStyle row " + m.name)
+		}
+		identity, err := strconv.Unquote(f.Default)
+		if err != nil {
+			panic("wire: SemanticStyle." + m.name + "'s default is not a token: " + f.Default)
+		}
+		m.identity = identity
 	}
-	if builder, ok := kindBuilders[tag]; ok {
-		return builder(w, obj, path)
-	}
-	// Recognised kind without a typed decoder yet — accept structurally.
-	fields := make(map[string]Value, len(obj))
-	for k, v := range obj {
-		if k != "$type" {
-			fields[k] = fromJSON(v)
+}
+
+// decodeStyleMembers decodes every SemanticStyle member present in obj,
+// default tokens included. Unknown keys are ignored (rule 2).
+func decodeStyleMembers(w *walkState, obj map[string]any, path string) map[string]Value {
+	fields := map[string]Value{}
+	for _, m := range styleMembers {
+		if raw, ok := obj[m.name]; ok {
+			fields[m.name] = m.dec(w, raw, path+"."+m.name)
 		}
 	}
-	return Obj{Tag: tag, Fields: fields}
+	return fields
 }
 
 // decodeStyle — SemanticStyle. Every field is omitted-when-default on BOTH
@@ -4492,43 +4304,42 @@ func decodeKind(w *walkState, raw any, path string) Obj {
 // absent field restores the identity default, and a present explicit default
 // normalises to the omitted form.
 func decodeStyle(w *walkState, raw any, path string) Obj {
-	obj := expectObject(raw, path)
-	fields := map[string]Value{}
-	if raw, ok := obj["emphasis"]; ok {
-		if v := decodeEmphasisEnum(w, raw, path+".emphasis"); !isStr(v, "Normal") {
-			fields["emphasis"] = v
-		}
-	}
-	if raw, ok := obj["tone"]; ok {
-		if v := decodeTone(w, raw, path+".tone"); !isStr(v, "Default") {
-			fields["tone"] = v
-		}
-	}
-	if raw, ok := obj["weight"]; ok {
-		if v := decodeWeight(w, raw, path+".weight"); !isStr(v, "Standard") {
-			fields["weight"] = v
-		}
-	}
-	if raw, ok := obj["role"]; ok {
-		if v := Str(enumStr(raw, path+".role", styleRoleCases, "role", noAliases)); !isStr(v, "None") {
-			fields["role"] = v
-		}
-	}
-	if raw, ok := obj["voice"]; ok {
-		if v := Str(enumStr(raw, path+".voice", fontVoiceCases, "voice", noAliases)); !isStr(v, "Default") {
-			fields["voice"] = v
-		}
-	}
-	// Phase 1472 — the declared direction, on exactly the same omit-at-identity
-	// terms as its neighbours (§3.1). It is not presentational: a host that
-	// drops it renders a document that says something else, so an unrecognised
-	// token is refused here rather than coerced to `"auto"`.
-	if raw, ok := obj["direction"]; ok {
-		if v := Str(enumStr(raw, path+".direction", textDirectionCases, "direction", noAliases)); !isStr(v, "auto") {
-			fields["direction"] = v
+	fields := decodeStyleMembers(w, expectObject(raw, path), path)
+	for _, m := range styleMembers {
+		if isStr(fields[m.name], m.identity) {
+			delete(fields, m.name)
 		}
 	}
 	return Obj{Fields: fields}
+}
+
+// decodeStyleDelta — Phase 2291, the PatchStyle payload (§3.4). The same six
+// members and the same per-field decoders as SemanticStyle, but each member is
+// OPTIONAL and absence means "leave this field as it is": a present member sets
+// the field, a default token included, so nothing is normalised away and the
+// encoder emits every member the delta sets. A delta naming no member is not
+// an edit and is refused.
+func decodeStyleDelta(w *walkState, raw any, path string) Obj {
+	fields := decodeStyleMembers(w, expectObject(raw, path), path)
+	if len(fields) == 0 {
+		failExpecting(
+			CodeWrongType,
+			path,
+			"a StyleDelta must name at least one field — an empty patch is not an edit",
+			"a StyleDelta naming at least one field (direction | emphasis | role | tone | voice | weight)",
+		)
+	}
+	return Obj{Fields: fields}
+}
+
+// StyleIdentity returns the identity (default) token of each SemanticStyle
+// member, keyed by wire name — what an absent member of a SemanticStyle means.
+func StyleIdentity() map[string]string {
+	out := make(map[string]string, len(styleMembers))
+	for _, m := range styleMembers {
+		out[m.name] = m.identity
+	}
+	return out
 }
 
 // decodeAccessibility decodes the §3.1 Accessibility trait. It used to be
@@ -4546,48 +4357,27 @@ func decodeAccessibility(w *walkState, raw any, path string) Obj {
 	// well-formed `label` still names the ignored key rather than decoding half
 	// the author's intent in silence.
 	checkNearMissesIn(obj, path, a11yNearMisses, "accessibility", a11yNearMissConsequence)
-	fields := make(map[string]Value)
-	if raw, ok := obj["label"]; ok {
-		fields["label"] = decodeBindingString(w, raw, path+".label")
-	}
-	if raw, ok := obj["labelledBy"]; ok {
-		fields["labelledBy"] = Str(expectString(raw, path+".labelledBy"))
-	}
-	if raw, ok := obj["describedBy"]; ok {
-		fields["describedBy"] = Str(expectString(raw, path+".describedBy"))
-	}
-	if raw, ok := obj["role"]; ok {
-		fields["role"] = Str(expectString(raw, path+".role"))
-	}
-	if raw, ok := obj["liveRegion"]; ok {
-		fields["liveRegion"] = Str(enumStr(raw, path+".liveRegion", liveRegionCases, "liveRegion", noAliases))
-	}
-	if raw, ok := obj["hidden"]; ok {
-		fields["hidden"] = decodeBindingBool(w, raw, path+".hidden")
-	}
+	s := newRecordSpec(w, obj, path, &idl.RecordAccessibility)
+	s.field("label", decodeBindingString)
+	s.field("labelledBy", decodeString)
+	s.field("describedBy", decodeString)
+	s.field("role", decodeString)
+	s.field("liveRegion", enumDecoder(liveRegionCases, "liveRegion", noAliases))
+	s.field("hidden", decodeBindingBool)
 	// Phase 1812 — the node's SPOKEN rendering for a voice surface: an ordinary
 	// TextSource (bare-string canonical for a literal, as tooltip). Inert to every
 	// visual renderer — it must reach no attribute and no visible text.
-	if raw, ok := obj["speak"]; ok {
-		fields["speak"] = decodeTextSource(w, raw, path+".speak")
-	}
-	return Obj{Fields: fields}
+	s.field("speak", decodeTextSource)
+	return s.buildStrict("")
 }
 
 func decodeState(w *walkState, raw any, path string) Obj {
-	obj := expectObject(raw, path)
-	fields := make(map[string]Value)
-	if raw, ok := obj["onLoading"]; ok {
-		fields["onLoading"] = decodeNodeValue(w, raw, path+".onLoading")
-	}
-	if raw, ok := obj["onEmpty"]; ok {
-		fields["onEmpty"] = decodeNodeValue(w, raw, path+".onEmpty")
-	}
-	if _, ok := obj["onError"]; ok {
-		// The rendering closure is opaque — the canonical form is the sentinel.
-		fields["onError"] = Str(closureSentinel)
-	}
-	return Obj{Fields: fields}
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordStateBehaviour)
+	s.field("onLoading", decodeSingleNode)
+	s.field("onEmpty", decodeSingleNode)
+	// The rendering closure is opaque — the canonical form is the sentinel.
+	s.field("onError", decodeClosure)
+	return s.buildStrict("")
 }
 
 // decodeNodeValue decodes a node envelope, applying the §8 NodeId invariants.

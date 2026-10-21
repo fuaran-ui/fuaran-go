@@ -23,7 +23,7 @@ by hand. It is what this file can honestly assert from inside the repo, and it i
 
 | Capability | Status | Package | Certified against |
 |---|---|---|---|
-| `codec` (decode/encode wire trees + ops) | ✅ | `wire/` | shared-corpus node/op round-trips byte-identical, reject code + `$`-rooted path, lenient-accept normalisation; discriminator-exhaustiveness guard; generated hostile-input fuzz + native `testing.F` targets |
+| `codec` (decode/encode wire trees + ops) | ✅ | `wire/` | shared-corpus node/op round-trips byte-identical, reject code + `$`-rooted path, lenient-accept normalisation; structural layer generated from the corpus `idl.json` with drift tests; generated hostile-input fuzz + native `testing.F` targets |
 | `canonical-json` (number form, rule-6 escaping, Ordinal key sort) | ✅ | `canonical/` | the corpus divergence-zone float vectors + per-primitive unit suites |
 | `apply` (tree-op apply engine + dry-run) | ✅ | `ops/` | apply-envelope leg over the corpus op fixtures + the `CanApply` ≡ apply-success law; placement algebra + clone verbs |
 | `validator` (pre-emit structural defects) | ✅ | `validator/` | per-rule fire / stay-silent suites + the declared rule-coverage pin (`validator-coverage.json`, machine-checked against what the validator actually raises) |

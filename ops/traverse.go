@@ -1,24 +1,19 @@
 package ops
 
-import "github.com/fuaran-ui/fuaran-go/wire"
+import (
+	"github.com/fuaran-ui/fuaran-go/wire"
+	"github.com/fuaran-ui/fuaran-go/wire/idl"
+)
 
-// Structural traversal over the flat generic model the codec produces. The
-// wire is flat, so a layout's children are just the "children" array hoisted
-// under the kind discriminator; every other sub-node position (an
-// ErrorBoundary's child/fallback, a Switch's default + case children, a
-// FragmentDecl's body, the state surfaces) is enumerated by childSlots.
-
-// layoutKinds are the kinds that carry an ordered children array — the only
-// kinds the structural child ops (InsertChild / RemoveNode / MoveNode /
-// ReorderChildren) address.
-var layoutKinds = map[string]bool{
-	"Box":         true,
-	"SplitPanel":  true,
-	"Tabs":        true,
-	"Stepper":     true,
-	"SummaryList": true,
-	"Disclosure":  true,
-}
+// Structural traversal over the flat generic model the codec produces. Which
+// kinds carry an ordered child list, and which carry single-node arms, is read
+// from the generated idl.json tables (idl.OrderedChildren / idl.NodeArms), so
+// the structural child ops (InsertChild / RemoveNode / MoveNode /
+// ReorderChildren) address exactly the kinds the IDL gives a list-of-nodes
+// slot — Modal and ScrollArea included — and the set cannot drift from the one
+// the diff and the island walk read. A Switch's case children and the state
+// surfaces are enumerated by childSlots by hand: they sit inside a record and
+// the node envelope, not in a kind slot.
 
 func setKindField(n wire.Node, key string, value wire.Value) wire.Node {
 	fields := make(map[string]wire.Value, len(n.Kind.Fields)+1)
@@ -52,10 +47,11 @@ func setStateChild(n wire.Node, key string, child wire.Node) wire.Node {
 // layoutChildren returns the ordered child list for a layout node, or
 // (nil, false) for a childless kind.
 func layoutChildren(n wire.Node) ([]wire.Node, bool) {
-	if !layoutKinds[n.Kind.Tag] {
+	slot, ok := idl.OrderedChildren(n.Kind.Tag)
+	if !ok {
 		return nil, false
 	}
-	arr, ok := n.Kind.Fields["children"].(wire.Arr)
+	arr, ok := n.Kind.Fields[slot].(wire.Arr)
 	if !ok {
 		return nil, false
 	}
@@ -73,7 +69,8 @@ func withLayoutChildren(n wire.Node, children []wire.Node) wire.Node {
 	for i, c := range children {
 		arr[i] = c
 	}
-	return setKindField(n, "children", arr)
+	slot, _ := idl.OrderedChildren(n.Kind.Tag)
+	return setKindField(n, slot, arr)
 }
 
 // childSlot is one immediate sub-node position, with a rebuild that swaps it.
@@ -95,26 +92,18 @@ func childSlots(n wire.Node) []childSlot {
 			}})
 		}
 	} else {
-		switch n.Kind.Tag {
-		case "ErrorBoundary":
-			if child, ok := fields["child"].(wire.Node); ok {
+		// The kind's single-node arms (ErrorBoundary's child and fallback, a
+		// FragmentDecl's body, a Switch's default), in table order.
+		for _, arm := range idl.NodeArms(n.Kind.Tag) {
+			if child, ok := fields[arm].(wire.Node); ok {
 				slots = append(slots, childSlot{child, func(c wire.Node) wire.Node {
-					return setKindField(n, "child", c)
+					return setKindField(n, arm, c)
 				}})
 			}
-			if fallback, ok := fields["fallback"].(wire.Node); ok {
-				slots = append(slots, childSlot{fallback, func(c wire.Node) wire.Node {
-					return setKindField(n, "fallback", c)
-				}})
-			}
-		case "Switch":
-			// The default child + each case child are editable slots; a case's
-			// match is preserved on rebuild.
-			if def, ok := fields["default"].(wire.Node); ok {
-				slots = append(slots, childSlot{def, func(c wire.Node) wire.Node {
-					return setKindField(n, "default", c)
-				}})
-			}
+		}
+		if n.Kind.Tag == "Switch" {
+			// Each case child is an editable slot; a case's match is preserved
+			// on rebuild.
 			if cases, ok := fields["cases"].(wire.Arr); ok {
 				for i, item := range cases {
 					caseObj, ok := item.(wire.Obj)
@@ -136,12 +125,6 @@ func childSlots(n wire.Node) []childSlot {
 						return setKindField(n, "cases", newItems)
 					}})
 				}
-			}
-		case "FragmentDecl":
-			if body, ok := fields["body"].(wire.Node); ok {
-				slots = append(slots, childSlot{body, func(c wire.Node) wire.Node {
-					return setKindField(n, "body", c)
-				}})
 			}
 		}
 	}

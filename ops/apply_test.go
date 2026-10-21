@@ -240,3 +240,68 @@ func TestApplyReachesStateSurfaces(t *testing.T) {
 		t.Errorf("state-surface apply diverged:\n got %s\nwant %s", got, want)
 	}
 }
+
+// Phase 2291 — PatchStyle applies over the node's CURRENT style, setting only
+// the fields its delta names, and an all-default result is the absent slot.
+func TestPatchStyle(t *testing.T) {
+	styled := `{"id":"m","kind":{"$type":"Markdown","text":"x"},"style":{"tone":"Info","weight":"Spacious"}}`
+	patch := func(t *testing.T, delta string) wire.Obj {
+		t.Helper()
+		op, err := wire.DecodeOp(`{"$type":"PatchStyle","style":` + delta + `,"target":"m"}`)
+		if err != nil {
+			t.Fatalf("DecodeOp: %v", err)
+		}
+		return op
+	}
+	apply := func(t *testing.T, op wire.Obj, tree wire.Node) wire.Node {
+		t.Helper()
+		after, err := Apply(op, tree)
+		if err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		return after
+	}
+
+	t.Run("sets one field and carries the rest", func(t *testing.T) {
+		got := mustEncode(t, apply(t, patch(t, `{"tone":"Brand"}`), mustDecode(t, styled)))
+		want := `{"id":"m","kind":{"$type":"Markdown","text":"x"},"style":{"tone":"Brand","weight":"Spacious"}}`
+		if got != want {
+			t.Errorf("got  %s\nwant %s", got, want)
+		}
+	})
+
+	t.Run("an all-default result is the absent slot", func(t *testing.T) {
+		got := mustEncode(t, apply(t, patch(t, `{"tone":"Default","weight":"Standard"}`), mustDecode(t, styled)))
+		if want := markdownOf("m", "x"); got != want {
+			t.Errorf("got  %s\nwant %s", got, want)
+		}
+	})
+
+	t.Run("patches an unstyled node over the default record", func(t *testing.T) {
+		got := mustEncode(t, apply(t, patch(t, `{"emphasis":"Loud"}`), mustDecode(t, markdownOf("m", "x"))))
+		want := `{"id":"m","kind":{"$type":"Markdown","text":"x"},"style":{"emphasis":"Loud"}}`
+		if got != want {
+			t.Errorf("got  %s\nwant %s", got, want)
+		}
+	})
+
+	t.Run("patches of different fields commute", func(t *testing.T) {
+		a, b := patch(t, `{"tone":"Brand"}`), patch(t, `{"voice":"Display"}`)
+		base := mustDecode(t, styled)
+		ab := mustEncode(t, apply(t, b, apply(t, a, base)))
+		ba := mustEncode(t, apply(t, a, apply(t, b, base)))
+		if ab != ba {
+			t.Errorf("a;b = %s\nb;a = %s", ab, ba)
+		}
+	})
+
+	t.Run("an unknown target is NodeNotFound", func(t *testing.T) {
+		op, err := wire.DecodeOp(`{"$type":"PatchStyle","style":{"tone":"Brand"},"target":"ghost"}`)
+		if err != nil {
+			t.Fatalf("DecodeOp: %v", err)
+		}
+		if got := applyErrCode(t, op, mustDecode(t, styled)); got != CodeNodeNotFound {
+			t.Errorf("code = %s, want %s", got, CodeNodeNotFound)
+		}
+	})
+}

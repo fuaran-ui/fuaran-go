@@ -9,6 +9,7 @@ import (
 	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
+	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
 
 // The diff-conformance leg: the structural tree diff → op-script producer
@@ -147,14 +148,11 @@ func TestDiffCorpusMutationRoundTrip(t *testing.T) {
 // firstLayoutChildID returns the id of the first structural child of the root,
 // when the root is a layout kind with at least one child.
 func firstLayoutChildID(n wire.Node) (string, bool) {
-	layoutKinds := map[string]bool{
-		"Box": true, "SplitPanel": true, "Tabs": true,
-		"Stepper": true, "SummaryList": true, "Disclosure": true,
-	}
-	if !layoutKinds[n.Kind.Tag] {
+	slot, ok := idl.OrderedChildren(n.Kind.Tag)
+	if !ok {
 		return "", false
 	}
-	arr, ok := n.Kind.Fields["children"].(wire.Arr)
+	arr, ok := n.Kind.Fields[slot].(wire.Arr)
 	if !ok || len(arr) == 0 {
 		return "", false
 	}
@@ -180,9 +178,6 @@ func firstLayoutChildID(n wire.Node) (string, bool) {
 func loadDiffGoldens(t *testing.T) map[string]any {
 	t.Helper()
 	corpus := corpusroot.ForTest(t)
-	if corpus == "" {
-		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
-	}
 	path := filepath.Join(corpus, "diff", "goldens.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {

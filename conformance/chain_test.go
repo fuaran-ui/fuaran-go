@@ -73,9 +73,6 @@ func decodeResult(t *testing.T, raw json.RawMessage) opstream.OpResult {
 
 func TestChainCorpusGolden(t *testing.T) {
 	corpus := corpusroot.ForTest(t)
-	if corpus == "" {
-		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
-	}
 	raw, err := os.ReadFile(filepath.Join(corpus, "chain", "chain-corpus.json"))
 	if err != nil {
 		t.Skipf("chain corpus not found: %v", err)

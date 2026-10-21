@@ -116,9 +116,6 @@ func findRenderFidelityArtifact() string {
 		return override
 	}
 	corpus := corpusroot.MustFind()
-	if corpus == "" {
-		return ""
-	}
 	candidate := filepath.Join(corpus, "render-fidelity.json")
 	if _, err := os.Stat(candidate); err != nil {
 		return ""

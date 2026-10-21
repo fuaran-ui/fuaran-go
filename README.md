@@ -128,9 +128,11 @@ Shipped:
 - **`conformance`** — the corpus certification legs: node/op round-trips
   byte-identical, rejects with the canonical code + path prefix,
   lenient-accept normalisation, apply-envelope conformance, the markdown
-  corpus, class-vocabulary + reference-CSS parity, and the corpus-driven
-  discriminator exhaustiveness guard. The harness skips cleanly when the repo
-  is checked out alone.
+  corpus, and class-vocabulary + reference-CSS parity. The decoder's structural
+  layer — every kind, field table, enum and op — is generated from the
+  corpus's `idl.json` (`wire/idl`, `go generate ./wire/idl`), and two drift
+  tests go red when `idl.json` moves and the generated code has not. The
+  harness skips cleanly when the repo is checked out alone.
 
 Every roadmap tier for this host (codec → apply → validator → renderer →
 server-driven driver) is now shipped.

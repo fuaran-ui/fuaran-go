@@ -154,7 +154,7 @@ func (g CapabilityGate) opMissingCapabilities(op wire.Obj) []string {
 		default:
 			// The two op positions that INTRODUCE a node, per the op schema
 			// (wire/op.go): InsertChild.child and ReplaceRoot.node. The other
-			// eight ops address nodes already in the tree, which the gate
+			// nine ops address nodes already in the tree, which the gate
 			// vetted when they arrived — re-vetting a move or a removal would
 			// deny on a grant that was never at issue.
 			for _, key := range []string{"child", "node"} {

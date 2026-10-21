@@ -108,9 +108,6 @@ type capabilityLawFile struct {
 func loadCapabilityLaws(t *testing.T) (lawFamily, capabilityLawFile) {
 	t.Helper()
 	corpus := corpusroot.ForTest(t)
-	if corpus == "" {
-		t.Skip("wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)")
-	}
 	manifestPath := filepath.Join(corpus, "laws", "manifest.json")
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
