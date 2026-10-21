@@ -107,9 +107,12 @@ func binaryTyping(op string, a, b typing) typing {
 		return unknown
 	case "eq", "ne", "lt", "le", "gt", "ge":
 		comparable := (numericTyping(a) && numericTyping(b)) || (exactTyping(a) && exactTyping(b))
-		for _, ty := range []string{TypeString, TypeDate, TypeTimestamp, TypeBool} {
+		for _, ty := range []string{TypeString, TypeDate, TypeBool} {
 			comparable = comparable || (a.is(ty) && b.is(ty))
 		}
+		// Every timestamp unit compares with every other (Phase 2206): one
+		// instant has one text, and a coarser unit widens into a finer one.
+		comparable = comparable || (a.kind == typOf && b.kind == typOf && IsTimestampType(a.ty) && IsTimestampType(b.ty))
 		if comparable {
 			return typOfT(TypeBool)
 		}

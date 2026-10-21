@@ -35,6 +35,10 @@ const (
 	TypeDate      = core.TypeDate
 	TypeTimestamp = core.TypeTimestamp
 	TypeDecimal   = core.TypeDecimal
+	// The three sub-second timestamp units (Phase 2206, fuaran-core#422).
+	TypeTimestampMs = core.TypeTimestampMs
+	TypeTimestampUs = core.TypeTimestampUs
+	TypeTimestampNs = core.TypeTimestampNs
 )
 
 // The seven rounding modes' wire spellings, and the largest rounding scale.

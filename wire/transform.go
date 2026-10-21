@@ -3,8 +3,9 @@ package wire
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"sort"
+
+	coredf "github.com/fuaran-ui/fuaran-go/internal/core/dataframe"
 )
 
 // Binding.Transform's columnar source + pipeline decode (the Compute-layer
@@ -45,6 +46,7 @@ func atComputePath(path string, fn func() Value) Value {
 var (
 	computeColumnTypes = map[string]bool{
 		"int": true, "float": true, "bool": true, "string": true, "date": true, "timestamp": true,
+		"timestamp_ms": true, "timestamp_us": true, "timestamp_ns": true,
 	}
 	computeBinOps = map[string]bool{
 		"add": true, "sub": true, "mul": true, "div": true, "mod": true,
@@ -221,46 +223,6 @@ func normaliseTransformSource(raw any) any {
 
 // ── Embedded columnar frame ─────────────────────────────────────────────────
 
-// isoOfEpochSeconds renders an epoch-seconds instant as the canonical ISO-8601
-// UTC timestamp string — pure integer civil-from-days math, clock-free.
-func isoOfEpochSeconds(secs int64) string {
-	days := secs / 86400
-	if secs%86400 < 0 {
-		days--
-	}
-	sod := secs - days*86400
-	z := days + 719468
-	era := z
-	if z < 0 {
-		era = z - 146096
-	}
-	era /= 146097
-	doe := z - era*146097
-	yoe := (doe - doe/1460 + doe/36524 - doe/146096) / 365
-	doy := doe - (365*yoe + yoe/4 - yoe/100)
-	mp := (5*doy + 2) / 153
-	day := doy - (153*mp+2)/5 + 1
-	month := mp + 3
-	if mp >= 10 {
-		month = mp - 9
-	}
-	year := yoe + era*400
-	if month <= 2 {
-		year++
-	}
-	return fmt.Sprintf("%04d-%02d-%02dT%02d:%02d:%02dZ", year, month, day, sod/3600, sod%3600/60, sod%60)
-}
-
-// epochToIso maps an epoch number to the canonical ISO instant — unit by
-// magnitude: >= 1e11 means milliseconds, else seconds.
-func epochToIso(i int64) Str {
-	secs := i
-	if i >= 100_000_000_000 || i <= -100_000_000_000 {
-		secs = i / 1000
-	}
-	return Str(isoOfEpochSeconds(secs))
-}
-
 // frameColumnParts reads one column's (values, validity) with the lenient
 // shorthands: a BARE array, or a wrapped object with `values` but no
 // `validity` mask, are the all-present statement (the wire has no JSON null).
@@ -325,7 +287,8 @@ func inferFrameColumnType(name string, values []any) string {
 }
 
 // frameCell normalises one present cell against its declared type. A float
-// column widens an int token; a timestamp column accepts an epoch number.
+// column widens an int token; a timestamp column of any unit reads through
+// the Core twin's ReadInstant (canonical text, or an epoch number).
 func frameCell(name, ty string, v any) Value {
 	switch ty {
 	case "int":
@@ -344,19 +307,14 @@ func frameCell(name, ty string, v any) Value {
 		if s, ok := v.(string); ok {
 			return Str(s)
 		}
-	case "timestamp":
-		if s, ok := v.(string); ok {
-			return Str(s)
+	case "timestamp", "timestamp_ms", "timestamp_us", "timestamp_ns":
+		// One reader for every unit, shared with the Core twin (Phase 2206).
+		text, malformed, mismatch := coredf.ReadInstant(name, ty, v)
+		if malformed != "" {
+			cfail("malformed: %s", malformed)
 		}
-		if n, ok := v.(json.Number); ok {
-			if isIntegerLiteral(string(n)) {
-				if i, err := n.Int64(); err == nil {
-					return epochToIso(i)
-				}
-			}
-			if f, err := n.Float64(); err == nil && f == math.Floor(f) && math.Abs(f) < 9e15 {
-				return epochToIso(int64(f))
-			}
+		if !mismatch {
+			return Str(text)
 		}
 	}
 	cfail("column '%s': expected %s value", name, ty)

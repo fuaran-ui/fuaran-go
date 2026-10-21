@@ -16,11 +16,30 @@ const (
 	// TypeDecimal is the exact decimal (fuaran-core Phase 276): a cell carries its
 	// canonical decimal TEXT (see decimal.go), never a host decimal or float.
 	TypeDecimal = "decimal"
+	// The three sub-second timestamp units (Phase 2206, fuaran-core#422).
+	TypeTimestampMs = "timestamp_ms"
+	TypeTimestampUs = "timestamp_us"
+	TypeTimestampNs = "timestamp_ns"
 )
 
 var columnTypes = map[string]bool{
 	TypeInt: true, TypeFloat: true, TypeBool: true, TypeString: true, TypeDate: true, TypeTimestamp: true,
-	TypeDecimal: true,
+	TypeDecimal:     true,
+	TypeTimestampMs: true, TypeTimestampUs: true, TypeTimestampNs: true,
+}
+
+// TimestampUnitDigits is the timestamp family (WIRE_FORMAT §3.6.25): each tag's
+// unit as the fraction digits it holds. Every unit carries one canonical
+// instant text per instant, so a timestamp cell's Kind is TypeTimestamp
+// whichever unit its column declares; a coarser unit widens into a finer one.
+var TimestampUnitDigits = map[string]int{
+	TypeTimestamp: 0, TypeTimestampMs: 3, TypeTimestampUs: 6, TypeTimestampNs: 9,
+}
+
+// IsTimestampType reports whether a column type tag is a timestamp of any unit.
+func IsTimestampType(ty string) bool {
+	_, ok := TimestampUnitDigits[ty]
+	return ok
 }
 
 // Cell is one realised scalar, or the first-class null marker. Kind is a column
