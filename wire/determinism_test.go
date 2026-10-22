@@ -139,8 +139,14 @@ func TestIntegerSlotRefusesAFraction(t *testing.T) {
 }
 
 func TestIntegerSlotRefusesOutOfRange(t *testing.T) {
-	for _, lit := range []string{"1e10", "3000000000", "-3000000000", "1e400", "9223372036854775808"} {
+	for _, lit := range []string{"1e10", "3000000000", "-3000000000"} {
 		t.Run(lit, func(t *testing.T) { decodeRefuses(t, skeleton(lit), CodeWrongType) })
+	}
+	// Two tokens no slot ever reads since Phase 2286: an overflowing exponent and
+	// a non-canonical integer past 2^53 are refused by the parse itself (§20.2
+	// row 7, §2 rule 5), before the slot's type is consulted.
+	for _, lit := range []string{"1e400", "9223372036854775808"} {
+		t.Run(lit, func(t *testing.T) { decodeRefuses(t, skeleton(lit), CodeInvalidJSON) })
 	}
 }
 
@@ -192,20 +198,42 @@ func customProps(props string) string {
 	return `{"id":"c","kind":{"$type":"Custom","componentId":"x","moduleId":"m","props":` + props + `}}`
 }
 
-func TestPayloadIntegerBeyondInt53DecodesAsADouble(t *testing.T) {
-	node, err := DecodeNode(customProps(`{"beyond":9007199254740993}`))
-	if err != nil {
-		t.Fatal(err)
+func TestPayloadIntegerBeyondInt53IsRefusedUnlessCanonical(t *testing.T) {
+	// Phase 2286 amended §2 rule 5: an integer token past 2^53 is refused unless
+	// it is the canonical float layout of the double it reads as. 9007199254740993
+	// reads as 9007199254740992, so its bytes cannot survive; 10000000000000000 is
+	// the fixed-point layout of 1E+16 and does.
+	for _, lit := range []string{"9007199254740993", "-9007199254740993", "12345678901234567890", "100000000000000000"} {
+		t.Run("refuses "+lit, func(t *testing.T) {
+			decodeRefuses(t, customProps(`{"n":`+lit+`}`), CodeInvalidJSON)
+		})
 	}
-	got, encErr := EncodeNode(node)
-	if encErr != nil {
-		t.Fatal(encErr)
+	for _, lit := range []string{"9007199254740992", "9007199254740994", "10000000000000000"} {
+		t.Run("reads "+lit, func(t *testing.T) {
+			node, err := DecodeNode(customProps(`{"n":` + lit + `}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, encErr := EncodeNode(node)
+			if encErr != nil {
+				t.Fatal(encErr)
+			}
+			if !strings.Contains(got, `"n":`+lit) {
+				t.Fatalf("expected the token to survive as %s, got %s", lit, got)
+			}
+		})
 	}
-	// 9007199254740993 has no double, so a conformant decoder accepts the
-	// rounding to 9007199254740992 — the value every host that routes numbers
-	// through a double already produced.
-	if !strings.Contains(got, "9007199254740992") {
-		t.Fatalf("expected the rounded value, got %s", got)
+}
+
+func TestOverflowingExponentIsRefused(t *testing.T) {
+	// §20.2 row 7, amended by Phase 2286: no non-finite float on the wire.
+	for _, lit := range []string{"1e999", "-1e999", "1E+400"} {
+		t.Run(lit, func(t *testing.T) {
+			decodeRefuses(t, customProps(`{"n":`+lit+`}`), CodeInvalidJSON)
+		})
+	}
+	if _, err := DecodeNode(customProps(`{"n":1e-999}`)); err != nil {
+		t.Fatalf("an underflowing exponent is a finite zero and must decode: %v", err)
 	}
 }
 

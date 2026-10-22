@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fuaran-ui/fuaran-go/canonical"
 	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
 
@@ -95,12 +96,39 @@ func parseJSON(text string) any {
 	if dec.Decode(new(any)) != io.EOF {
 		fail(CodeInvalidJSON, "$", "input carries content after the JSON document")
 	}
-	checkNoRepeatedMembers(text)
+	checkTokenStream(text)
 	return raw
 }
 
-// checkNoRepeatedMembers refuses an object carrying the same member twice
-// (WIRE_FORMAT.md §20.2 row 1).
+// checkNumberToken holds a number token to the two VALUE rules the parse alone
+// does not (Phase 2286, the amended §20.2 row 7 and §2 rule 5): a value outside
+// the finite double range is refused, and so is an integer token past 2^53 that
+// is not the canonical float layout of the double it reads as. Both are judged
+// here, on the token, because encoding/json admits both and keeps the literal.
+// The test for the second is on the TOKEN, never the double: 2^53 + 1 reads as
+// 2^53, so a range check on the value would admit it.
+func checkNumberToken(n json.Number) {
+	lit := string(n)
+	f, _ := strconv.ParseFloat(lit, 64)
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		fail(CodeInvalidJSON, "$", "number outside the finite double range; it cannot round-trip on the wire: "+lit)
+	}
+	if isIntegerLiteral(lit) {
+		digits := strings.TrimPrefix(lit, "-")
+		safe := len(digits) < 16 || (len(digits) == 16 && digits <= "9007199254740992")
+		if !safe && canonical.FormatFiniteDouble(f) != lit {
+			fail(
+				CodeInvalidJSON,
+				"$",
+				"integer literal outside the int53 safe range (|n| > 2^53); it cannot round-trip without precision loss: "+lit,
+			)
+		}
+	}
+}
+
+// checkTokenStream refuses an object carrying the same member twice
+// (WIRE_FORMAT.md §20.2 row 1), and holds every number token to
+// checkNumberToken's value rules.
 //
 // This is one of the two rows that change what a document MEANS rather than
 // whether it is accepted, and every other check here is blind to it.
@@ -114,7 +142,7 @@ func parseJSON(text string) any {
 // parser to get one would trade a bounded cost at a trust boundary for a
 // permanent divergence risk. Duplicate DETECTION is a decision about this wire
 // format; JSON PARSING is not, and this host should keep exactly one parser.
-func checkNoRepeatedMembers(text string) {
+func checkTokenStream(text string) {
 	dec := json.NewDecoder(strings.NewReader(text))
 	dec.UseNumber()
 
@@ -132,6 +160,10 @@ func checkNoRepeatedMembers(text string) {
 			// The document already parsed cleanly above, so the only error
 			// reachable here is end-of-input.
 			return
+		}
+
+		if n, isNumber := tok.(json.Number); isNumber {
+			checkNumberToken(n)
 		}
 
 		if len(stack) > 0 {
@@ -338,9 +370,8 @@ func failIntSlotRange(path string) {
 //
 // It returns the float rather than the sentinel string so decode is idempotent
 // at the TREE level and not merely at the byte level: the bare overflowing
-// literal `-1e999` already decodes to Float(-Inf) via numberValue, so answering
-// a re-decode of its own canonical form with Str would hand a consumer a float
-// the first time and a string the second.
+// answering a re-decode of its own canonical form with Str would hand a consumer
+// a float the first time and a string the second.
 func nonFiniteSentinel(s string) (float64, bool) {
 	switch s {
 	case "NaN":
@@ -385,8 +416,9 @@ func isIntegerLiteral(lit string) bool {
 // different bytes, and to different hash-chain and teleport digests, depending
 // on which host read it. A conformant encoder MUST NOT emit an integer token
 // outside this range — carry a uint64 column or a 19-digit identifier as a
-// string — and a conformant decoder MUST take one it receives as a double and
-// accept the rounding, which is what the clause below does.
+// string — and a conformant decoder MUST refuse one it receives unless it is
+// the canonical float layout of its double (Phase 2286; the parse refuses the
+// rest, checkNumberToken), which the clause below then reads as that double.
 const PayloadIntMax = 9007199254740991
 
 // numberValue keeps the wire's int-vs-float distinction: an integer literal

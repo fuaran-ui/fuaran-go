@@ -37,10 +37,9 @@ func TestFloatSeqAcceptsNonFiniteSentinels(t *testing.T) {
 			if err != nil {
 				t.Fatalf("a float-sequence element %q was rejected: %v", sentinel, err)
 			}
-			// The element must be a FLOAT, not the sentinel string: the bare
-			// overflowing literal `-1e999` already decodes to Float(-Inf), so a
-			// Str answer here would hand a consumer a float on one path and a
-			// string on the other for the same number.
+			// The element must be a FLOAT, not the sentinel string: a Str answer
+			// here would hand a consumer a string where a re-decode of this host's
+			// own canonical output promised a float.
 			source, _ := node.Kind.Fields["source"].(Obj)
 			arr, ok := source.Fields["value"].(Arr)
 			if !ok || len(arr) != 3 {
