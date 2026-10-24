@@ -57,6 +57,7 @@ var (
 		"abs": true, "round": true, "floor": true, "ceil": true, "length": true,
 		"lower": true, "upper": true, "substr": true, "datePart": true,
 		"concat": true, "trim": true, "replace": true, "dateDiffDays": true,
+		"pow": true, "exp": true, "ln": true, "log10": true,
 	}
 	computeAggFns = map[string]bool{
 		"sum": true, "mean": true, "min": true, "max": true, "count": true,

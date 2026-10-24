@@ -23,10 +23,22 @@
 //   - the case kinds `columnOp` and `delta`: this host carries no ColumnOp
 //     surface and no table-delta surface. The set of case kinds in the file must
 //     be exactly {evalPipeline, columnOp, delta}, so a new kind fails loudly.
+//
+// TOLERANCE (Phase 2400). A vector carrying `expected.tolerance` names the
+// columns the reference marks host-rounded, each with a bound in ulps. Those
+// columns are compared cell by cell — one type, one length, null in the same
+// rows, two present nonzero finite floats of one sign within the bound (the
+// distance being the difference of their IEEE-754 binary64 bit patterns), every
+// other cell (a zero of either sign, a non-finite float, a non-float) exactly —
+// and the rest of the table byte for byte: this host's answer with every named
+// column replaced by the recorded one must encode to `expected.table` exactly.
+// The bound is the vector's own, never a constant here. The worst distance seen
+// per named column is logged, so a host drifting toward the bound is visible.
 package conformance
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -86,8 +98,9 @@ type transformLawVector struct {
 		Pipeline string `json:"pipeline"`
 	} `json:"input"`
 	Expected struct {
-		Verdict string `json:"verdict"`
-		Table   string `json:"table"`
+		Verdict   string         `json:"verdict"`
+		Table     string         `json:"table"`
+		Tolerance map[string]int `json:"tolerance"`
 	} `json:"expected"`
 }
 
@@ -220,7 +233,99 @@ func runTransformLawVector(t *testing.T, v transformLawVector) {
 	if err != nil {
 		t.Fatalf("encode result: %v", err)
 	}
+	if len(v.Expected.Tolerance) == 0 {
+		if got != v.Expected.Table {
+			t.Fatalf("evaluator mismatch\n got: %s\nwant: %s", got, v.Expected.Table)
+		}
+		return
+	}
+	compareWithinTolerance(t, v, result)
+}
+
+// ulpDistance is the distance between two doubles of one sign: the difference of
+// their binary64 bit patterns read as ordered integers.
+func ulpDistance(a, b float64) uint64 {
+	ia, ib := math.Float64bits(a), math.Float64bits(b)
+	if ia > ib {
+		return ia - ib
+	}
+	return ib - ia
+}
+
+// compareWithinTolerance applies the family's tolerance rule (see the header).
+func compareWithinTolerance(t *testing.T, v transformLawVector, result dataframe.Table) {
+	t.Helper()
+	src, cerr := dataframe.DecodeSource(v.Expected.Table)
+	if cerr != nil {
+		t.Fatalf("decode expected.table: %v", cerr)
+	}
+	want := src.(dataframe.Embedded).Table
+	column := func(tb dataframe.Table, name string) (dataframe.Column, int) {
+		for i, c := range tb.Columns {
+			if c.Name == name {
+				return c, i
+			}
+		}
+		return dataframe.Column{}, -1
+	}
+	names := make([]string, 0, len(v.Expected.Tolerance))
+	for name := range v.Expected.Tolerance {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		bound := uint64(v.Expected.Tolerance[name])
+		wc, wi := column(want, name)
+		gc, gi := column(result, name)
+		if wi < 0 || gi < 0 {
+			t.Fatalf("tolerance column %q is absent (expected %v, answered %v)", name, wi >= 0, gi >= 0)
+		}
+		if wc.Type != gc.Type || len(wc.Cells) != len(gc.Cells) {
+			t.Fatalf("tolerance column %q: type %s/%s, length %d/%d", name, gc.Type, wc.Type, len(gc.Cells), len(wc.Cells))
+		}
+		worst := uint64(0)
+		for r := range wc.Cells {
+			w, g := wc.Cells[r], gc.Cells[r]
+			if (w.Kind == "null") != (g.Kind == "null") {
+				t.Fatalf("tolerance column %q row %d: null in one table only", name, r)
+			}
+			if w.Kind == "null" {
+				continue
+			}
+			wf, wok := w.Value.(float64)
+			gf, gok := g.Value.(float64)
+			bothFloats := wok && gok && w.Kind == dataframe.TypeFloat && g.Kind == dataframe.TypeFloat
+			if bothFloats && wf != 0 && gf != 0 && !math.IsInf(wf, 0) && !math.IsInf(gf, 0) &&
+				!math.IsNaN(wf) && !math.IsNaN(gf) && math.Signbit(wf) == math.Signbit(gf) {
+				d := ulpDistance(wf, gf)
+				if d > worst {
+					worst = d
+				}
+				if d > bound {
+					t.Fatalf("tolerance column %q row %d: %v is %d ulp from the recorded %v; the bound is %d",
+						name, r, gf, d, wf, bound)
+				}
+				continue
+			}
+			same := w.Kind == g.Kind
+			switch {
+			case same && bothFloats:
+				same = math.Float64bits(wf) == math.Float64bits(gf) || (math.IsNaN(wf) && math.IsNaN(gf))
+			case same:
+				same = w.Value == g.Value
+			}
+			if !same {
+				t.Fatalf("tolerance column %q row %d: %v differs from the recorded %v (compared exactly)", name, r, g.Value, w.Value)
+			}
+		}
+		t.Logf("transformLaws tolerance: %s column %s worst %d ulp (bound %d)", v.ID, name, worst, bound)
+		result.Columns[gi] = wc
+	}
+	got, err := dataframe.EncodeSource(dataframe.Embedded{Table: result})
+	if err != nil {
+		t.Fatalf("encode result: %v", err)
+	}
 	if got != v.Expected.Table {
-		t.Fatalf("evaluator mismatch\n got: %s\nwant: %s", got, v.Expected.Table)
+		t.Fatalf("evaluator mismatch outside the tolerance columns\n got: %s\nwant: %s", got, v.Expected.Table)
 	}
 }

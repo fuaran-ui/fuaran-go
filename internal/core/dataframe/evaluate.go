@@ -665,6 +665,218 @@ func roundHalfAway(x float64) float64 {
 	return math.Ceil(x - 0.5)
 }
 
+// ── Phase 2400: the power functions (the reference's D43) ───────────────────
+//
+// Two guarantees, stated per function. An INTEGER exponent is EXACT on every
+// host: one pinned product tree over IEEE-754 multiplication, which every host
+// rounds the same way, so the tree and not the host decides the bits. A float
+// exponent, exp, ln and log10 are HOST-ROUNDED: the special-value table below
+// answers every input the hosts' libraries disagree on BEFORE the host is
+// called, and what remains is this host's math package — within the bound the
+// transform laws compare in (expected.tolerance, in ulps).
+
+// powGo is binary exponentiation with the accumulator empty until the first set
+// bit, so a power takes exactly the multiplies its bits name: x^1 is x, x^2 is
+// x*x, x^3 is x*(x*x), x^4 is (x*x)*(x*x). k is the exponent's magnitude, k > 0.
+func powGo(b float64, k int64) float64 {
+	var acc float64
+	have := false
+	for {
+		if k%2 == 1 {
+			if have {
+				acc = acc * b
+			} else {
+				acc, have = b, true
+			}
+		}
+		k /= 2
+		if k == 0 {
+			if have {
+				return acc
+			}
+			return 1.0
+		}
+		b = b * b
+	}
+}
+
+// powIntFloat is a float base under an integer exponent: x^0 is 1 with no
+// multiply; a negative exponent is one reciprocal of the positive power, null
+// where that power is zero (a zero base, or a power that underflowed), exactly
+// as a division by zero is null. The caller has answered a NaN base.
+func powIntFloat(x float64, n int64) Cell {
+	switch {
+	case n == 0:
+		return CellFloat(1.0)
+	case n > 0:
+		return CellFloat(powGo(x, n))
+	}
+	p := powGo(x, -n)
+	if p == 0 {
+		return Null
+	}
+	return CellFloat(1.0 / p)
+}
+
+const (
+	minInt32 = -2147483648
+	maxInt32 = 2147483647
+)
+
+func powOverflow(v int64) *EvalError {
+	return evalErr(TypeError, "pow overflowed int32: "+strconv.FormatInt(v, 10))
+}
+
+// powIntExact is an int base under a non-negative int exponent: the same product
+// tree over int64, every product that leaves the int32 band refused by name, a
+// base square that leaves it with exponent bits still to take included (every
+// value it would still multiply into is at least as large).
+func powIntExact(x, n int64) (Cell, *EvalError) {
+	if n == 0 {
+		return CellInt(1), nil
+	}
+	inBand := func(v int64) bool { return v >= minInt32 && v <= maxInt32 }
+	var acc int64
+	have := false
+	b, k := x, n
+	for {
+		if k%2 == 1 {
+			if have {
+				acc = acc * b
+			} else {
+				acc, have = b, true
+			}
+			if !inBand(acc) {
+				return Cell{}, powOverflow(acc)
+			}
+		}
+		k /= 2
+		if k == 0 {
+			if have {
+				return CellInt(acc), nil
+			}
+			return CellInt(1), nil
+		}
+		b2 := b * b
+		if !inBand(b2) {
+			return Cell{}, powOverflow(b2)
+		}
+		b = b2
+	}
+}
+
+// powFloat is a float exponent: the special-value table, then the host. A NaN
+// operand propagates (pow(1, NaN) and pow(NaN, 0) included); a zero exponent and
+// a base of one answer 1, and so does a base of minus one under an infinite
+// exponent; a zero base under a negative exponent and a finite negative base
+// under a finite non-integer exponent are outside the reals and answer null.
+func powFloat(x, y float64) Cell {
+	switch {
+	case math.IsNaN(x) || math.IsNaN(y):
+		return CellFloat(math.NaN())
+	case y == 0 || x == 1:
+		return CellFloat(1.0)
+	case x == 0 && y < 0:
+		return Null
+	case x == -1 && math.IsInf(y, 0):
+		return CellFloat(1.0)
+	case x < 0 && !math.IsInf(x, 0) && !math.IsInf(y, 0) && y != math.Floor(y):
+		return Null
+	}
+	return CellFloat(math.Pow(x, y))
+}
+
+// expHost is exp's table: a NaN propagates; above the natural log of the largest
+// double the answer is +Inf and below the natural log of half the smallest
+// subnormal it is 0 — the two edges where a host's last-ulp rounding decides
+// between a finite value and the limit; between them the host answers.
+func expHost(x float64) float64 {
+	switch {
+	case math.IsNaN(x):
+		return x
+	case x > 709.782712893384:
+		return math.Inf(1)
+	case x < -745.1332191019412:
+		return 0.0
+	}
+	return math.Exp(x)
+}
+
+// logHost is ln's and log10's table over a host logarithm: a NaN propagates,
+// zero and below is null, one is exactly 0 and +Inf is +Inf; in between the
+// host answers.
+func logHost(log func(float64) float64, x float64) Cell {
+	switch {
+	case math.IsNaN(x):
+		return CellFloat(x)
+	case x <= 0:
+		return Null
+	case x == 1:
+		return CellFloat(0.0)
+	case math.IsInf(x, 1):
+		return CellFloat(x)
+	}
+	return CellFloat(log(x))
+}
+
+func applyPower(fn string, args []Cell) (Cell, *EvalError) {
+	if fn == "pow" {
+		if len(args) != 2 {
+			return Cell{}, evalErr(ArityError, "function 'pow' expects 2 args, got "+strconv.Itoa(len(args)))
+		}
+		x, y := args[0], args[1]
+		switch {
+		case isNull(x) || isNull(y):
+			return Null, nil
+		case x.Kind == TypeDecimal || y.Kind == TypeDecimal:
+			return Cell{}, evalErr(TypeError, "pow of a decimal is not exact: write Pow(Cast(float, x), n)")
+		case x.Kind == TypeInt && y.Kind == TypeInt:
+			n := y.Value.(int64)
+			if n >= 0 {
+				return powIntExact(x.Value.(int64), n)
+			}
+			return powIntFloat(float64(x.Value.(int64)), n), nil
+		case y.Kind == TypeInt:
+			f, ok := asNum(x)
+			if !ok {
+				return Cell{}, evalErr(TypeError, "pow of a non-numeric")
+			}
+			if math.IsNaN(f) {
+				return CellFloat(f), nil
+			}
+			return powIntFloat(f, y.Value.(int64)), nil
+		}
+		f, ok1 := asNum(x)
+		g, ok2 := asNum(y)
+		if !ok1 || !ok2 {
+			return Cell{}, evalErr(TypeError, "pow of a non-numeric")
+		}
+		return powFloat(f, g), nil
+	}
+	if len(args) != 1 {
+		return Cell{}, evalErr(ArityError, "function '"+fn+"' expects 1 args, got "+strconv.Itoa(len(args)))
+	}
+	c := args[0]
+	if isNull(c) {
+		return Null, nil
+	}
+	if c.Kind == TypeDecimal {
+		spelled := map[string]string{"exp": "Exp", "ln": "Ln", "log10": "Log10"}[fn]
+		return Cell{}, evalErr(TypeError, fn+" of a decimal is not exact: write "+spelled+"(Cast(float, x))")
+	}
+	f, ok := asNum(c)
+	if !ok {
+		return Cell{}, evalErr(TypeError, fn+" of a non-numeric")
+	}
+	switch fn {
+	case "exp":
+		return CellFloat(expHost(f)), nil
+	case "ln":
+		return logHost(math.Log, f), nil
+	}
+	return logHost(math.Log10, f), nil
+}
+
 func applyScalar(fn string, args []Cell) (Cell, *EvalError) {
 	arity := func(n int) *EvalError {
 		if len(args) != n {
@@ -673,6 +885,8 @@ func applyScalar(fn string, args []Cell) (Cell, *EvalError) {
 		return nil
 	}
 	switch fn {
+	case "pow", "exp", "ln", "log10":
+		return applyPower(fn, args)
 	case "abs", "round", "floor", "ceil", "length", "lower", "upper":
 		if e := arity(1); e != nil {
 			return Cell{}, e

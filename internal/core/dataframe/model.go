@@ -254,6 +254,7 @@ var (
 	scalarFns = set(
 		"abs", "round", "floor", "ceil", "length", "lower", "upper", "substr", "datePart",
 		"concat", "trim", "replace", "dateDiffDays",
+		"pow", "exp", "ln", "log10",
 	)
 	aggFns    = set("sum", "mean", "min", "max", "count", "median", "stddev", "first", "last", "countDistinct")
 	joinKinds = set("inner", "left", "right", "outer")

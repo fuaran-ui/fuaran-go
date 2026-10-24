@@ -22,6 +22,23 @@ func evalFilter(f Frame, pred ColExpr) (Frame, *EvalError) {
 	return Frame{Cols: f.Cols, Rows: kept}, nil
 }
 
+// repeatedOutput takes each output column's name beside what produced it, in
+// output order, and refuses the first name an earlier output already took — a
+// table cannot hold two columns of one name (the reference's D35, Phase 468:
+// project, groupBy, unpivot and pivot all ask this one check, after every name
+// the verb resolves and before any row is read). nil is distinct names.
+func repeatedOutput(verb string, outs [][2]string) *EvalError {
+	seen := make(map[string]string, len(outs))
+	for _, o := range outs {
+		if first, ok := seen[o[0]]; ok {
+			return evalErr(TypeError, verb+" output '"+o[0]+"' is named twice, by "+first+" and by "+o[1]+
+				"; give each output a name of its own")
+		}
+		seen[o[0]] = o[1]
+	}
+	return nil
+}
+
 func evalProject(f Frame, pairs []Pair) (Frame, *EvalError) {
 	type resolved struct {
 		out string
@@ -35,6 +52,13 @@ func evalProject(f Frame, pairs []Pair) (Frame, *EvalError) {
 			return Frame{}, unknownColumn(p.A, f.Cols)
 		}
 		res = append(res, resolved{out: p.B, ty: f.Cols[i].Type, idx: i})
+	}
+	outs := make([][2]string, len(pairs))
+	for i, p := range pairs {
+		outs[i] = [2]string{p.B, "the projection of '" + p.A + "'"}
+	}
+	if e := repeatedOutput("project", outs); e != nil {
+		return Frame{}, e
 	}
 	cols := make(Schema, len(res))
 	for i, r := range res {
@@ -128,6 +152,16 @@ func evalGroupBy(f Frame, keys []string, aggs []Agg) (Frame, *EvalError) {
 			return Frame{}, unknownColumn(a.Of, f.Cols)
 		}
 		res = append(res, resolved{a: a, ty: ty, idx: colIndex(f.Cols, a.Of)})
+	}
+	outs := make([][2]string, 0, len(keys)+len(aggs))
+	for _, k := range keys {
+		outs = append(outs, [2]string{k, "the key '" + k + "'"})
+	}
+	for _, a := range aggs {
+		outs = append(outs, [2]string{a.Name, "the aggregate over '" + a.Of + "'"})
+	}
+	if e := repeatedOutput("groupBy", outs); e != nil {
+		return Frame{}, e
 	}
 	cols := make(Schema, 0, len(keys)+len(res))
 	for _, k := range keys {
@@ -502,6 +536,17 @@ func evalPivot(f Frame, spec PivotSpec) (Frame, *EvalError) {
 		}
 	}
 	sort.SliceStable(onValues, func(i, j int) bool { return cellString(onValues[i]) < cellString(onValues[j]) })
+	outs := make([][2]string, 0, len(spec.Index)+len(onValues))
+	for _, n := range spec.Index {
+		outs = append(outs, [2]string{n, "the index column '" + n + "'"})
+	}
+	for _, ov := range onValues {
+		t := cellString(ov)
+		outs = append(outs, [2]string{t, "the column for the on value '" + t + "'"})
+	}
+	if e := repeatedOutput("pivot", outs); e != nil {
+		return Frame{}, e
+	}
 	// index keys: first-appearance.
 	var order [][]Cell
 	seenKeys := map[string]bool{}
@@ -562,6 +607,14 @@ func evalUnpivot(f Frame, idVars, valueVars []string) (Frame, *EvalError) {
 			return Frame{}, unknownColumn(n, f.Cols)
 		}
 		valIdx = append(valIdx, i)
+	}
+	outs := make([][2]string, 0, len(idVars)+2)
+	for _, n := range idVars {
+		outs = append(outs, [2]string{n, "the id column '" + n + "'"})
+	}
+	outs = append(outs, [2]string{"variable", "the unpivot's variable column"}, [2]string{"value", "the unpivot's value column"})
+	if e := repeatedOutput("unpivot", outs); e != nil {
+		return Frame{}, e
 	}
 	cols := make(Schema, 0, len(idVars)+2)
 	for _, n := range idVars {

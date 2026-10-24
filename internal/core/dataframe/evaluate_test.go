@@ -1,6 +1,9 @@
 package dataframe
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // A tiny two-column table: k=["a","b"], x=[1,2].
 func sampleTable() Table {
@@ -92,4 +95,51 @@ func TestCompareCellsTimestampOrdersByInstant(t *testing.T) {
 			t.Fatalf("compareCells(%s, %s) = %d, %v; want %d", c.a, c.b, got, ok, c.want)
 		}
 	}
+}
+
+// Phase 2400: the rows of the power functions' special-value table the wire
+// cannot carry (a NaN or an infinity), the pinned product tree past the cube,
+// and the int32 band an int power stays inside.
+func TestPowerFunctionsOffTheWire(t *testing.T) {
+	nan, inf := math.NaN(), math.Inf(1)
+	isNaN := func(c Cell) bool { f, ok := c.Value.(float64); return ok && math.IsNaN(f) }
+	for _, c := range []struct {
+		name string
+		got  Cell
+		want func(Cell) bool
+	}{
+		{"pow(1, NaN) is NaN", powFloat(1, nan), isNaN},
+		{"pow(NaN, 0) is NaN", powFloat(nan, 0), isNaN},
+		{"pow(-1, Inf) is 1", powFloat(-1, inf), func(c Cell) bool { return c == CellFloat(1) }},
+		{"pow(-1, -Inf) is 1", powFloat(-1, -inf), func(c Cell) bool { return c == CellFloat(1) }},
+		{"exp(NaN) is NaN", CellFloat(expHost(nan)), isNaN},
+		{"exp above the edge is Inf", CellFloat(expHost(709.8)), func(c Cell) bool { return c == CellFloat(inf) }},
+		{"ln(Inf) is Inf", logHost(math.Log, inf), func(c Cell) bool { return c == CellFloat(inf) }},
+		{"log10(NaN) is NaN", logHost(math.Log10, nan), isNaN},
+		{"a NaN base under an int exponent is NaN", mustApply(t, "pow", CellFloat(nan), CellInt(0)), isNaN},
+		{"1e-300 to the -2 is null", mustApply(t, "pow", CellFloat(1e-300), CellInt(-2)), func(c Cell) bool { return isNull(c) }},
+	} {
+		if !c.want(c.got) {
+			t.Errorf("%s: got %v", c.name, c.got)
+		}
+	}
+	x := 1.1
+	if powGo(x, 4) != (x*x)*(x*x) || powGo(x, 5) != x*((x*x)*(x*x)) {
+		t.Errorf("the product tree past the cube is not the squaring tree")
+	}
+	if _, err := applyScalar("pow", []Cell{CellInt(46341), CellInt(2)}); err == nil {
+		t.Errorf("46341^2 leaves the int32 band and must be refused")
+	}
+	if c, err := applyScalar("pow", []Cell{CellInt(-2), CellInt(31)}); err != nil || c != CellInt(-2147483648) {
+		t.Errorf("(-2)^31 is the band's floor, got %v %v", c, err)
+	}
+}
+
+func mustApply(t *testing.T, fn string, args ...Cell) Cell {
+	t.Helper()
+	c, err := applyScalar(fn, args)
+	if err != nil {
+		t.Fatalf("%s: %v", fn, err)
+	}
+	return c
 }

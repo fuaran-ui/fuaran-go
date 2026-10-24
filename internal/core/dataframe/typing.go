@@ -197,8 +197,43 @@ func applyFnTyping(fn string, args []typing) typing {
 			return absent
 		}
 		return typOfT(TypeInt)
+	// Phase 2400 (the reference's D43): the transcendentals answer a float, as a
+	// root does. A power over an int base and an int exponent is decided by the
+	// exponent's SIGN, which a typing does not carry — powLitTyping reads a
+	// literal exponent, and otherwise the cells decide; an undecided operand may
+	// be that pair, so it is undecided too; every other pair is a float.
+	case "exp", "ln", "log10":
+		return unary(func(typing) typing { return typOfT(TypeFloat) })
+	case "pow":
+		switch {
+		case len(args) != 2 || anyAbsent:
+			return absent
+		case args[0].is(TypeInt) && args[1].is(TypeInt):
+			return unknown
+		case args[0].kind == typUnknown || args[1].kind == typUnknown:
+			return unknown
+		}
+		return typOfT(TypeFloat)
 	}
 	return unknown
+}
+
+// powLitTyping types a power under a LITERAL integer exponent: an int base
+// answers an int at or above zero and a float below; any other typed base a
+// float.
+func powLitTyping(n int64, b typing) typing {
+	switch {
+	case b.kind == typAbsent:
+		return absent
+	case b.is(TypeInt):
+		if n >= 0 {
+			return typOfT(TypeInt)
+		}
+		return typOfT(TypeFloat)
+	case b.kind == typUnknown:
+		return unknown
+	}
+	return typOfT(TypeFloat)
 }
 
 // typingOf is the static typing of an expression over a schema. A Param is
@@ -247,6 +282,11 @@ func typingOf(cols Schema, e ColExpr) typing {
 		}
 		return typOfT(x.Type)
 	case ApplyFn:
+		if x.Fn == "pow" && len(x.Args) == 2 {
+			if l, ok := x.Args[1].(Lit); ok && l.Cell.Kind == TypeInt {
+				return powLitTyping(l.Cell.Value.(int64), typingOf(cols, x.Args[0]))
+			}
+		}
 		ts := make([]typing, len(x.Args))
 		for i, a := range x.Args {
 			ts[i] = typingOf(cols, a)
