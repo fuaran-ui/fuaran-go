@@ -1,8 +1,6 @@
 package canonical
 
-import (
-	core "github.com/fuaran-ui/fuaran-go/internal/core/canonical"
-)
+import core "github.com/Fuaran-Core/fuaran-core-go/json"
 
 // EscapeString renders s as a canonical JSON string literal (WIRE_FORMAT.md §2
 // rule 6): only `"`, `\`, and the control characters U+0000–U+001F are escaped

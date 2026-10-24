@@ -1,16 +1,18 @@
 // Package core_test holds the import-boundary test for the Core twins.
 //
 // internal/core is the one place this host keeps its twins of the Fuaran.Core
-// reference: the canonical-JSON primitives (canonical), the Compute-layer model,
-// Transform evaluator and codec decode (dataframe), and the function registry
-// with the capability model and its InvocationKey (function). The public
-// canonical, dataframe and function packages forward to them.
+// reference: the Compute-layer model, Transform evaluator and codec decode
+// (dataframe), and the function registry with the capability model and its
+// InvocationKey (function). The public dataframe and function packages forward
+// to them. The canonical-JSON primitives and the exact decimal, once twins here,
+// are the Core spine's (github.com/Fuaran-Core/fuaran-core-go), the module every
+// Go host of a Fuaran wire builds on; the twins here read them from it.
 //
 // The boundary is held by this test, not by convention: every package under
 // internal/core, and every package its production code or tests import, is
-// either inside internal/core or in the Go standard library. Anything else — a
-// domain package of this module (wire, renderer, ops, …) or a third-party module
-// — fails the test with the offending import edge named.
+// inside internal/core, in the Core spine, or in the Go standard library.
+// Anything else — a domain package of this module (wire, renderer, ops, …) or a
+// third-party module — fails the test with the offending import edge named.
 package core_test
 
 import (
@@ -27,6 +29,10 @@ import (
 const (
 	modulePath = "github.com/fuaran-ui/fuaran-go"
 	corePath   = modulePath + "/internal/core"
+	// spinePath is the Core spine, the one module outside the standard library the
+	// twins may import: it is the reference's twin itself, certified in its own
+	// repository, and carries nothing of this host's wire.
+	spinePath = "github.com/Fuaran-Core/fuaran-core-go"
 	// corpusRootPath is the module's one corpus-root resolver (Phase 2204). A
 	// core TEST may import it to find the shared corpus; production core code
 	// may not, and the resolver itself must stay standard-library-only, so the
@@ -56,6 +62,11 @@ func basePath(p string) string {
 func insideCore(p string) bool {
 	p = basePath(p)
 	return p == corePath || strings.HasPrefix(p, corePath+"/")
+}
+
+func insideSpine(p string) bool {
+	p = basePath(p)
+	return p == spinePath || strings.HasPrefix(p, spinePath+"/")
 }
 
 // listCoreGraph runs `go list -deps -test -json` over internal/core/... from
@@ -110,7 +121,7 @@ func TestCoreImportsNothingOutsideTheBoundary(t *testing.T) {
 			seen[basePath(p.ImportPath)] = true
 		}
 	}
-	for _, want := range []string{"canonical", "dataframe", "function"} {
+	for _, want := range []string{"dataframe", "function"} {
 		if !seen[corePath+"/"+want] {
 			t.Fatalf("the import graph does not list %s/%s; the probe is not looking at the boundary (saw %v)", corePath, want, keys(seen))
 		}
@@ -131,7 +142,7 @@ func TestCoreImportsNothingOutsideTheBoundary(t *testing.T) {
 		}
 		isTest := p.ForTest != "" || strings.HasSuffix(p.ImportPath, "_test") || strings.Contains(p.ImportPath, " [")
 		for _, imp := range p.Imports {
-			if insideCore(imp) || standard[basePath(imp)] || (isTest && basePath(imp) == corpusRootPath) {
+			if insideCore(imp) || insideSpine(imp) || standard[basePath(imp)] || (isTest && basePath(imp) == corpusRootPath) {
 				continue
 			}
 			kind := "a package outside the standard library"

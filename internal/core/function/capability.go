@@ -52,7 +52,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
-	"github.com/fuaran-ui/fuaran-go/internal/core/canonical"
+	canonical "github.com/Fuaran-Core/fuaran-core-go/json"
 )
 
 // MirroredCoreVersion is the Fuaran.Core version whose capability semantics

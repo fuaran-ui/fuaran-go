@@ -1,11 +1,11 @@
 package opstream
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"strconv"
 	"strings"
 
+	"github.com/Fuaran-Core/fuaran-core-go/address"
+	corechain "github.com/Fuaran-Core/fuaran-core-go/chain"
 	"github.com/fuaran-ui/fuaran-go/canonical"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
@@ -15,6 +15,12 @@ import (
 // a chain built here reproduces the committed golden hashes
 // (wire-format-fixtures/chain/chain-corpus.json) exactly — that byte-for-byte
 // reproduction is the whole contract.
+//
+// The pre-image and the link are the Core spine's (github.com/Fuaran-Core/fuaran-core-go/chain):
+// the spine's chain reads no op and splices the actor and the op text verbatim into
+// {"seq":…,"actor":…,"op":…} and hashes prev + "|" + payload, which is exactly the
+// algorithm below. This host contributes the opaque op text — its stream entry — and
+// the public 1-based sequence; the spine computes the bytes.
 //
 // The canonical algorithm (the actor is folded in, so attribution is part of
 // the integrity chain):
@@ -40,29 +46,22 @@ const ChainFormatVersion = 2
 // stream's Sequence==1 record.
 const GenesisPreviousHash = "0000000000000000000000000000000000000000000000000000000000000000"
 
-// sha256Hex returns SHA-256 of UTF-8(payload) as 64 lower-case hex characters.
-func sha256Hex(payload string) string {
-	sum := sha256.Sum256([]byte(payload))
-	return hex.EncodeToString(sum[:])
-}
-
 // EncodeActor is the canonical JSON of the typed actor — folded into the record
 // hash. Field order is PINNED (kind first, then the case fields), NOT
-// Ordinal-sorted; that pinning is the contract. The same bytes are folded into
-// the linear chain's pre-image here and nested verbatim into the DAG record's
-// wire form (package dag) since Phase 1144, so this host carries ONE canonical
-// actor encoding rather than two that can drift. Exported for that second
-// consumer.
+// Ordinal-sorted; that pinning is the contract. The bytes are the Core spine's
+// (corechain.EncodeActor), so this host's actor is spelled exactly as every
+// spine's is; they are folded into the linear chain's pre-image here and nested
+// verbatim into the DAG record's wire form (package dag) since Phase 1144, so
+// this host carries ONE canonical actor encoding rather than two that can drift.
+// Exported for that second consumer.
 func EncodeActor(actor Actor) string {
 	switch t := actor.(type) {
 	case HumanActor:
-		return `{"kind":"human","id":` + canonical.EscapeString(t.ID) + "}"
+		return corechain.EncodeActor(corechain.Human{ID: t.ID})
 	case AgentActor:
-		return `{"kind":"agent","model":` + canonical.EscapeString(t.Model) +
-			`,"version":` + canonical.EscapeString(t.Version) +
-			`,"id":` + canonical.EscapeString(t.ID) + "}"
+		return corechain.EncodeActor(corechain.Agent{Model: t.Model, Version: t.Version, ID: t.ID})
 	}
-	return `{"kind":"human","id":""}`
+	return corechain.EncodeActor(corechain.Human{})
 }
 
 // encodeResult is the canonical encoding of the apply outcome. Success is a
@@ -133,10 +132,7 @@ func ComputeHash(previousHash string, op wire.Obj, sequence int, timestampUnixSe
 	if err != nil {
 		return "", err
 	}
-	payload := `{"seq":` + strconv.Itoa(sequence-1) +
-		`,"actor":` + EncodeActor(actor) +
-		`,"op":` + entry + "}"
-	return sha256Hex(previousHash + "|" + payload), nil
+	return corechain.Link(previousHash, corechain.Payload(uint64(sequence-1), EncodeActor(actor), entry)), nil
 }
 
 // SnapshotHash is the content address of a checkpoint snapshot — it binds the
@@ -145,7 +141,7 @@ func ComputeHash(previousHash string, op wire.Obj, sequence int, timestampUnixSe
 // (head, seq) no longer validates at a different one.
 func SnapshotHash(previousChainHead string, sequence int, canonicalTree string) string {
 	payload := `{"snapshot":true,"seq":` + strconv.Itoa(sequence) + `,"tree":` + canonicalTree + "}"
-	return sha256Hex(previousChainHead + "|" + payload)
+	return address.SHA256Hex(previousChainHead + "|" + payload)
 }
 
 // VerifyChain walks records in order, asserting (a) the PreviousHash chain

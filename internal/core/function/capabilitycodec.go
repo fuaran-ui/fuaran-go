@@ -31,7 +31,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/fuaran-ui/fuaran-go/internal/core/canonical"
+	canonical "github.com/Fuaran-Core/fuaran-core-go/json"
 )
 
 // ─── canonical rendering ────────────────────────────────────────────────────
