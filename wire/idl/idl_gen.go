@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "e9ff0a22d727111d3d847a689655149081bdd1203f66ea2417905e13cd1791c7"
+const SourceSHA256 = "c78f383ca50dc36dc5d158d63052aa202e70d2a1bdee77a30c629354247f76d4"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -228,6 +228,7 @@ var (
 		{Name: "trend", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}},
 		{Name: "trendFormat", Optionality: Optional, Type: Type{Kind: TUnion, Name: "CellFormat"}},
 		{Name: "trendPolarity", Optionality: OmitDefault, Default: "\"HigherIsBetter\"", Type: Type{Kind: TEnum, Name: "TrendPolarity"}},
+		{Name: "comparisons", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "MetricComparison"}}},
 		{Name: "icon", Optionality: Optional, Type: Type{Kind: TStr}},
 		{Name: "subtext", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
 	}}
@@ -1001,6 +1002,12 @@ var (
 		{Name: "latitude", Optionality: Required, Type: Type{Kind: TFloat}},
 		{Name: "longitude", Optionality: Required, Type: Type{Kind: TFloat}},
 	}}
+	RecordMetricComparison = Record{Name: "MetricComparison", Fields: []Field{
+		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
+		{Name: "value", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}},
+		{Name: "format", Optionality: OmitDefault, Default: "{\"$type\":\"None\"}", Type: Type{Kind: TUnion, Name: "CellFormat"}},
+		{Name: "polarity", Optionality: OmitDefault, Default: "\"HigherIsBetter\"", Type: Type{Kind: TEnum, Name: "TrendPolarity"}},
+	}}
 	RecordRangePair = Record{Name: "RangePair", Fields: []Field{
 		{Name: "max", Optionality: Required, Type: Type{Kind: TFloat}},
 		{Name: "min", Optionality: Required, Type: Type{Kind: TFloat}},
@@ -1148,7 +1155,7 @@ var Enums = []*Enum{&EnumBadgeVariant, &EnumBoxRole, &EnumButtonVariant, &EnumCa
 var Unions = []*Union{&UnionAction, &UnionBinding, &UnionBoxLayout, &UnionCallResultTarget, &UnionCellFormat, &UnionCellKindErased, &UnionChartAnnotation, &UnionChartAnnotationRange, &UnionChartAnnotationX, &UnionColumnWidth, &UnionCurveCommand, &UnionFormFieldKind, &UnionFormat, &UnionFragmentArg, &UnionHoleDecl, &UnionHoleValueSpace, &UnionLocalFlushTrigger, &UnionLocaleSource, &UnionMediaKind, &UnionScalar, &UnionShape, &UnionTextSource}
 
 // Records is every record row, in idl.json order.
-var Records = []*Record{&RecordAccessibility, &RecordButtonGroupItem, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordRangePair, &RecordSelectOption, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
+var Records = []*Record{&RecordAccessibility, &RecordButtonGroupItem, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordMetricComparison, &RecordRangePair, &RecordSelectOption, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
 
 // Ops is every TreeOp row, in idl.json order.
 var Ops = []*Op{&OpBatch, &OpEditNode, &OpInsertChild, &OpMoveNode, &OpPatchStyle, &OpRemoveNode, &OpReorderChildren, &OpReplaceBinding, &OpReplaceRoot, &OpUpdateProp, &OpUpdateState, &OpUpdateStyle}

@@ -1067,6 +1067,33 @@ func (r *renderer) metric(node wire.Node, fields map[string]wire.Value) string {
 				formatNumber(fields["trendFormat"], trend)))
 		}
 	}
+	// fuaran#2472 — each further comparison is one more trend line after the
+	// primary one, under its OWN polarity, with its label after the figure. The
+	// reference host's bytes, including the bare div an unresolved value leaves.
+	if comparisons, ok := fields["comparisons"].(wire.Arr); ok {
+		for _, item := range comparisons {
+			entry, ok := item.(wire.Obj)
+			if !ok {
+				continue
+			}
+			figure := r.scalarNumber(entry.Fields["value"])
+			num, numeric := numericValue(figure)
+			if figure == nil || !numeric {
+				parts.WriteString(textElement("div", []attr{{"class", "fuaran-metric-trend"}}, ""))
+				continue
+			}
+			sentiment, glyph := trendSentiment(strValue(entry.Fields["polarity"]), num)
+			glyphSpan := textElement("span", []attr{
+				{"class", "fuaran-metric-trend-glyph"},
+				{"role", "img"},
+				{"aria-label", sentiment},
+			}, glyph)
+			line := formatNumber(entry.Fields["format"], figure) + " " + r.text(entry.Fields["label"])
+			parts.WriteString(element("div",
+				[]attr{{"class", "fuaran-metric-trend fuaran-metric-trend-" + sentiment}},
+				glyphSpan+escapeText(line)))
+		}
+	}
 	if subtext, ok := fields["subtext"]; ok {
 		parts.WriteString(textElement("div", []attr{{"class", "fuaran-metric-subtext"}}, r.text(subtext)))
 	}
