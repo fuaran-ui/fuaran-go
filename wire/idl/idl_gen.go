@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "c78f383ca50dc36dc5d158d63052aa202e70d2a1bdee77a30c629354247f76d4"
+const SourceSHA256 = "b8d8755fcf412df90d10c812c9ce99634d616486d007aeb7b5ca42c1c1ced409"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -521,12 +521,15 @@ var (
 		{Tag: "None", Fields: []Field{}},
 		{Tag: "Number", Fields: []Field{
 			{Name: "decimals", Optionality: Optional, Type: Type{Kind: TInt}},
+			{Name: "locale", Optionality: Optional, Type: Type{Kind: TUnion, Name: "LocaleSource"}},
 		}},
 		{Tag: "Currency", Fields: []Field{
 			{Name: "code", Optionality: Required, Type: Type{Kind: TStr}},
+			{Name: "locale", Optionality: Optional, Type: Type{Kind: TUnion, Name: "LocaleSource"}},
 		}},
 		{Tag: "Percent", Fields: []Field{
 			{Name: "decimals", Optionality: Optional, Type: Type{Kind: TInt}},
+			{Name: "locale", Optionality: Optional, Type: Type{Kind: TUnion, Name: "LocaleSource"}},
 		}},
 		{Tag: "SignificantDigits", Fields: []Field{
 			{Name: "digits", Optionality: Required, Type: Type{Kind: TInt}},

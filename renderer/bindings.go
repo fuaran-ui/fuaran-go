@@ -583,6 +583,14 @@ func formatProjection(binding wire.Obj, sources BindingSources) (wire.Value, err
 }
 
 // formatNumber formats a resolved numeric value through a decoded CellFormat.
+//
+// Phase 2490 — a Number / Currency / Percent figure may carry a `locale`, which
+// routes it through the host's Binding.Format implementation of the matching
+// Format case. This host's Binding.Format renders no locale-database case
+// (formatProjection answers only the locale-independent ones), so there is no
+// formatter to route to: a located figure renders the locale-free form below,
+// which is this host's declared fallback (WIRE_FORMAT, "A figure's locale").
+// The member still decodes and round-trips.
 func formatNumber(format, value wire.Value) string {
 	num, ok := numericValue(value)
 	if !ok {
