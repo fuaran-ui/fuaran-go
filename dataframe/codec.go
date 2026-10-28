@@ -64,12 +64,96 @@ func columnWire(col Column) wire.Obj {
 	return wire.Obj{Fields: map[string]wire.Value{"values": values, "validity": validity}}
 }
 
+// schemaEntryWire is one schema entry (WIRE_FORMAT §3.6.26): `name` and `type`
+// always, then the metadata members the entry states and no other — `unit` as
+// its canonical text, `label`, `description`, and `ext` only when it carries a
+// member — so an entry without metadata keeps its {name, type} bytes.
+func schemaEntryWire(e SchemaEntry) wire.Obj {
+	fields := map[string]wire.Value{"name": wire.Str(e.Name), "type": wire.Str(e.Type)}
+	if e.Unit != nil {
+		fields["unit"] = wire.Str(e.Unit.String())
+	}
+	optionalStr(fields, "label", e.Label)
+	optionalStr(fields, "description", e.Description)
+	if len(e.Ext) > 0 {
+		ext := make(map[string]wire.Value, len(e.Ext))
+		for k, v := range e.Ext {
+			ext[k] = wire.Str(v)
+		}
+		fields["ext"] = wire.Obj{Fields: ext}
+	}
+	return wire.Obj{Fields: fields}
+}
+
+func optionalStr(fields map[string]wire.Value, key string, v *string) {
+	if v != nil {
+		fields[key] = wire.Str(*v)
+	}
+}
+
 func schemaWire(schema Schema) wire.Arr {
 	arr := make(wire.Arr, len(schema))
 	for i, e := range schema {
-		arr[i] = wire.Obj{Fields: map[string]wire.Value{"name": wire.Str(e.Name), "type": wire.Str(e.Type)}}
+		arr[i] = schemaEntryWire(e)
 	}
 	return arr
+}
+
+// EncodeSchemaEntry is a schema entry's canonical bytes.
+func EncodeSchemaEntry(e SchemaEntry) (string, error) { return wire.EncodeValue(schemaEntryWire(e)) }
+
+// EncodeSchema is a schema's canonical bytes: its entries in column order.
+func EncodeSchema(s Schema) (string, error) { return wire.EncodeValue(schemaWire(s)) }
+
+// amendedWire is one amended entry: the column's `name`, the moved `member`,
+// an extension member's `key`, and `from` / `to` where that side stated one.
+func amendedWire(a Amendment) wire.Obj {
+	c := a.Change
+	fields := map[string]wire.Value{"name": wire.Str(a.Name), "member": wire.Str(c.Member)}
+	if c.Member == core.MemberUnit {
+		if c.FromUnit != nil {
+			fields["from"] = wire.Str(c.FromUnit.String())
+		}
+		if c.ToUnit != nil {
+			fields["to"] = wire.Str(c.ToUnit.String())
+		}
+		return wire.Obj{Fields: fields}
+	}
+	if c.Member == core.MemberExt {
+		fields["key"] = wire.Str(c.Key)
+	}
+	optionalStr(fields, "from", c.From)
+	optionalStr(fields, "to", c.To)
+	return wire.Obj{Fields: fields}
+}
+
+// EncodeSchemaDelta is a schema delta's canonical bytes: `added` and `removed`
+// as schema entries, `retyped`, `reordered`, `order`, and `amended` only where a
+// metadata member moved.
+func EncodeSchemaDelta(d SchemaDelta) (string, error) {
+	retyped := make(wire.Arr, len(d.Retyped))
+	for i, r := range d.Retyped {
+		retyped[i] = wire.Obj{Fields: map[string]wire.Value{"name": wire.Str(r.Name), "from": wire.Str(r.From), "to": wire.Str(r.To)}}
+	}
+	order := make(wire.Arr, len(d.Order))
+	for i, n := range d.Order {
+		order[i] = wire.Str(n)
+	}
+	fields := map[string]wire.Value{
+		"added":     schemaWire(d.Added),
+		"removed":   schemaWire(d.Removed),
+		"retyped":   retyped,
+		"reordered": wire.Bool(d.Reordered),
+		"order":     order,
+	}
+	if len(d.Amended) > 0 {
+		amended := make(wire.Arr, len(d.Amended))
+		for i, a := range d.Amended {
+			amended[i] = amendedWire(a)
+		}
+		fields["amended"] = amended
+	}
+	return wire.EncodeValue(wire.Obj{Fields: fields})
 }
 
 // EncodeSourceValue lowers a DataSource to the structural wire model.
@@ -297,6 +381,16 @@ func parseJSON(text string) (any, *ColumnError) {
 		return nil, &ColumnError{Code: NotJSON, Detail: err.Error()}
 	}
 	return raw, nil
+}
+
+// DecodeSchema decodes a schema wire string: an array of schema entries, each
+// with its metadata members (WIRE_FORMAT §3.6.26).
+func DecodeSchema(text string) (Schema, *ColumnError) {
+	raw, e := parseJSON(text)
+	if e != nil {
+		return nil, e
+	}
+	return core.DecodeSchemaParsed(raw)
 }
 
 // DecodeSource decodes a canonical DataSource wire string.

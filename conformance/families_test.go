@@ -75,7 +75,7 @@ var hostCorpusFamilies = map[string]any{
 	"laws/dataframeParity":      "covered",
 	"laws/capabilityLaws":       "covered",
 	"laws/decimal":              "covered",
-	"laws/fieldLaws":            familyPending(lawUnrun),
+	"laws/fieldLaws":            "covered",
 	"laws/propagationLaws":      familyPending(lawUnrun),
 	"laws/transformLaws":        "covered",
 	"diff/treeDiff":             "covered",

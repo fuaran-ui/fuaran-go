@@ -76,55 +76,63 @@ var Null = core.Null
 
 // The model, the ColExpr algebra, the Transform steps and the evaluator's types.
 type (
-	Agg         = core.Agg
-	ApplyFn     = core.ApplyFn
-	Binary      = core.Binary
-	Case        = core.Case
-	Cast        = core.Cast
-	Cell        = core.Cell
-	Coalesce    = core.Coalesce
-	Col         = core.Col
-	ColExpr     = core.ColExpr
-	Column      = core.Column
-	ColumnError = core.ColumnError
-	DataSource  = core.DataSource
-	Derive      = core.Derive
-	Distinct    = core.Distinct
-	Embedded    = core.Embedded
-	EvalError   = core.EvalError
-	Except      = core.Except
-	Filter      = core.Filter
-	Frame       = core.Frame
-	GroupBy     = core.GroupBy
-	InList      = core.InList
-	InParam     = core.InParam
-	Intersect   = core.Intersect
-	IsNull      = core.IsNull
-	Join        = core.Join
-	Limit       = core.Limit
-	Lit         = core.Lit
-	Not         = core.Not
-	OrderKey    = core.OrderKey
-	Pair        = core.Pair
-	Param       = core.Param
-	Pivot       = core.Pivot
-	PivotSpec   = core.PivotSpec
-	Project     = core.Project
-	Quotient    = core.Quotient
-	Ref         = core.Ref
-	Resolver    = core.Resolver
-	Rounded     = core.Rounded
-	Rounding    = core.Rounding
-	Schema      = core.Schema
-	SchemaEntry = core.SchemaEntry
-	Sort        = core.Sort
-	Table       = core.Table
-	Transform   = core.Transform
-	Union       = core.Union
-	Unpivot     = core.Unpivot
-	WhenThen    = core.WhenThen
-	Window      = core.Window
-	WindowSpec  = core.WindowSpec
+	Agg          = core.Agg
+	Amendment    = core.Amendment
+	ApplyFn      = core.ApplyFn
+	Binary       = core.Binary
+	Case         = core.Case
+	Cast         = core.Cast
+	Cell         = core.Cell
+	Coalesce     = core.Coalesce
+	Col          = core.Col
+	ColExpr      = core.ColExpr
+	Column       = core.Column
+	ColumnError  = core.ColumnError
+	DataSource   = core.DataSource
+	Derive       = core.Derive
+	Distinct     = core.Distinct
+	Embedded     = core.Embedded
+	EvalError    = core.EvalError
+	FieldChange  = core.FieldChange
+	Except       = core.Except
+	Filter       = core.Filter
+	Frame        = core.Frame
+	GroupBy      = core.GroupBy
+	InList       = core.InList
+	InParam      = core.InParam
+	Intersect    = core.Intersect
+	IsNull       = core.IsNull
+	Join         = core.Join
+	Limit        = core.Limit
+	Lit          = core.Lit
+	Not          = core.Not
+	OrderKey     = core.OrderKey
+	Pair         = core.Pair
+	Param        = core.Param
+	Pivot        = core.Pivot
+	PivotSpec    = core.PivotSpec
+	Project      = core.Project
+	Quotient     = core.Quotient
+	Ref          = core.Ref
+	Resolver     = core.Resolver
+	Retype       = core.Retype
+	Rounded      = core.Rounded
+	Rounding     = core.Rounding
+	Schema       = core.Schema
+	SchemaCompat = core.SchemaCompat
+	SchemaDelta  = core.SchemaDelta
+	SchemaEntry  = core.SchemaEntry
+	SchemaError  = core.SchemaError
+	Sort         = core.Sort
+	Table        = core.Table
+	Transform    = core.Transform
+	Union        = core.Union
+	Unit         = core.Unit
+	UnitRefusal  = core.UnitRefusal
+	Unpivot      = core.Unpivot
+	WhenThen     = core.WhenThen
+	Window       = core.Window
+	WindowSpec   = core.WindowSpec
 )
 
 // CellInt constructs an int cell.
@@ -163,6 +171,48 @@ func DecimalAdd(a, b string) (string, bool) { return core.DecimalAdd(a, b) }
 // DecimalToFloat is the nearest float64 to a decimal text, or ok=false where it
 // is not decimal text or is past the float range.
 func DecimalToFloat(text string) (float64, bool) { return core.DecimalToFloat(text) }
+
+// Field metadata members, compatibility verdicts and unit refusal classes
+// (WIRE_FORMAT §3.6.26).
+const (
+	MemberUnit        = core.MemberUnit
+	MemberLabel       = core.MemberLabel
+	MemberDescription = core.MemberDescription
+	MemberExt         = core.MemberExt
+
+	CompatCompatible = core.CompatCompatible
+	CompatBreaking   = core.CompatBreaking
+	CompatUnknown    = core.CompatUnknown
+
+	UnitEmpty            = core.UnitEmpty
+	UnitMalformed        = core.UnitMalformed
+	UnitUnknownAtom      = core.UnitUnknownAtom
+	UnitAnnotation       = core.UnitAnnotation
+	UnitArbitraryUnit    = core.UnitArbitraryUnit
+	UnitNonRatioUnit     = core.UnitNonRatioUnit
+	UnitPrefixNotAllowed = core.UnitPrefixNotAllowed
+	UnitNumericFactor    = core.UnitNumericFactor
+)
+
+// ParseUnit reads a unit from its text, or refuses it naming the class.
+func ParseUnit(text string) (Unit, *UnitRefusal) { return core.ParseUnit(text) }
+
+// SchemaFingerprint is the schema's FNV-1a fingerprint, metadata included.
+func SchemaFingerprint(s Schema) string { return core.SchemaFingerprint(s) }
+
+// DiffSchema is the delta that moves old into target.
+func DiffSchema(old, target Schema) SchemaDelta { return core.DiffSchema(old, target) }
+
+// PatchSchema replays a delta over old.
+func PatchSchema(old Schema, d SchemaDelta) (Schema, *SchemaError) { return core.PatchSchema(old, d) }
+
+// ClassifySchema is the delta's compatibility verdict for the depended-on columns.
+func ClassifySchema(dependsOn []string, d SchemaDelta) SchemaCompat {
+	return core.ClassifySchema(dependsOn, d)
+}
+
+// ColumnTypeWidens reports whether a retype is a safe widening.
+func ColumnTypeWidens(from, to string) bool { return core.ColumnTypeWidens(from, to) }
 
 // BindParams substitutes the bound scalar parameters of a pipeline.
 func BindParams(pipeline []Transform, env map[string]Cell, unbound map[string]bool) []Transform {

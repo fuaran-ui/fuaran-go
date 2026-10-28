@@ -21,6 +21,20 @@ package fuarango
 
 // Version is the pre-release version of the fuaran-go host.
 //
+// 0.0.6-alpha also carries Phase 2207, WIRE-VISIBLE: an embedded source's schema
+// entry may state a `unit`, `label`, `description` and `ext` (WIRE_FORMAT
+// §3.6.26). dataframe.SchemaEntry gains the four members (a nil member is one
+// the entry does not state), the decoder reads and validates them — a unit is
+// parsed by the new unit-algebra port (dataframe.ParseUnit) and written back as
+// its one canonical text, an unparseable one refused MALFORMED_SHAPE — and the
+// encoder writes the stated members only, so an entry without metadata keeps
+// its bytes. The schema operations those members move arrive with them:
+// SchemaFingerprint, DiffSchema / PatchSchema / EncodeSchemaDelta (the delta's
+// `amended`) and ClassifySchema. A positional SchemaEntry literal no longer
+// compiles; keyed ones are untouched. Conformance is the corpus's fieldLaws
+// family. It rides the untagged draft, which already carries a
+// compile-breaking class.
+//
 // 0.0.6-alpha also carries Phase 2300's first rule and Phase 1962, both
 // WIRE-VISIBLE: a field holding its declared default is omitted from the
 // canonical form on every kind (fifteen rows moved to omit-at-default in the

@@ -111,9 +111,22 @@ func defaultFor(ty string) Cell {
 // ── Column / Table / DataSource ──────────────────────────────────────────────
 
 // SchemaEntry is one (name, column-type) pair; column order follows the schema.
+// It may also state what the column MEANS (WIRE_FORMAT §3.6.26): a Unit, a
+// Label, a Description and Ext members. A nil member is one the entry does not
+// state — absent is not the empty string — and an empty Ext states nothing. An
+// entry stating none of them is the {name, type} entry it always was.
 type SchemaEntry struct {
-	Name string
-	Type string
+	Name        string
+	Type        string
+	Unit        *Unit
+	Label       *string
+	Description *string
+	Ext         map[string]string
+}
+
+// HasMetadata reports whether the entry states any metadata member.
+func (e SchemaEntry) HasMetadata() bool {
+	return e.Unit != nil || e.Label != nil || e.Description != nil || len(e.Ext) > 0
 }
 
 // Schema is an ordered column list.

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	canonical "github.com/Fuaran-Core/fuaran-core-go/json"
 )
 
 // The decode half of the canonical codec for the Compute-layer wire surface.
@@ -351,9 +353,95 @@ func decodeSchema(el any) (Schema, *ColumnError) {
 		if !ok2 || !columnTypes[ty] {
 			return nil, cerr(UnknownType, "unknown column type")
 		}
-		out = append(out, SchemaEntry{Name: name, Type: ty})
+		se, e := decodeFieldMetadata(entry, SchemaEntry{Name: name, Type: ty})
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, se)
 	}
 	return out, nil
+}
+
+// jsonKindName names a parsed JSON value's kind for a refusal.
+func jsonKindName(v any) string {
+	switch v.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "bool"
+	case string:
+		return "string"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	}
+	return "number"
+}
+
+// optionalText is an optional string member of a schema entry: absent is nil;
+// present and not a string is refused naming the column and the member.
+func optionalText(column, member string, entry any) (*string, *ColumnError) {
+	v, ok := tryF(entry, member)
+	if !ok {
+		return nil, nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return nil, cerr(MalformedShape, column+": schema entry member '"+member+"' must be a string, got "+jsonKindName(v))
+	}
+	return &s, nil
+}
+
+// decodeFieldMetadata reads a schema entry's metadata members (WIRE_FORMAT
+// §3.6.26; twin of the reference's ColumnCodec.decodeField): `unit` is parsed by
+// the unit algebra and REFUSED, naming the column and the reason, where it does
+// not parse (a parseable spelling is read to the unit and re-encodes canonical);
+// `label` and `description` must be strings; `ext` must be an object whose every
+// member is a string (an empty one states nothing). A member this codec does not
+// know is read past.
+func decodeFieldMetadata(entry any, se SchemaEntry) (SchemaEntry, *ColumnError) {
+	unitText, e := optionalText(se.Name, "unit", entry)
+	if e != nil {
+		return se, e
+	}
+	if unitText != nil {
+		u, r := ParseUnit(*unitText)
+		if r != nil {
+			return se, cerr(MalformedShape, se.Name+": unit '"+*unitText+"' is not a unit the kit parses: "+r.Error())
+		}
+		se.Unit = &u
+	}
+	if se.Label, e = optionalText(se.Name, "label", entry); e != nil {
+		return se, e
+	}
+	if se.Description, e = optionalText(se.Name, "description", entry); e != nil {
+		return se, e
+	}
+	extV, ok := tryF(entry, "ext")
+	if !ok {
+		return se, nil
+	}
+	members, ok := extV.(map[string]any)
+	if !ok {
+		return se, cerr(MalformedShape, se.Name+": schema entry member 'ext' must be an object, got "+jsonKindName(extV))
+	}
+	keys := make([]string, 0, len(members))
+	for k := range members {
+		keys = append(keys, k)
+	}
+	canonical.SortKeys(keys)
+	for _, k := range keys {
+		v, ok := members[k].(string)
+		if !ok {
+			return se, cerr(MalformedShape, se.Name+": schema entry extension member '"+k+"' must be a string, got "+jsonKindName(members[k]))
+		}
+		if se.Ext == nil {
+			se.Ext = make(map[string]string, len(members))
+		}
+		se.Ext[k] = v
+	}
+	return se, nil
 }
 
 // columnParts reads one column's (values, validity) with the lenient-ingest
@@ -534,6 +622,12 @@ func decodeSourceJSON(el any) (DataSource, *ColumnError) {
 // (the dataframe package's DecodeSource), so this decode needs no parser.
 func DecodeSourceParsed(raw any) (DataSource, *ColumnError) {
 	return decodeSourceJSON(raw)
+}
+
+// DecodeSchemaParsed decodes a schema (an array of schema entries, each with its
+// metadata members) from an already-parsed JSON value.
+func DecodeSchemaParsed(raw any) (Schema, *ColumnError) {
+	return decodeSchema(raw)
 }
 
 func decodeCellLiteral(el any) (Cell, *ColumnError) {
