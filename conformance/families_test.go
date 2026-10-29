@@ -80,6 +80,8 @@ var hostCorpusFamilies = map[string]any{
 	"laws/propagationLaws":      familyPending(lawUnrun),
 	"laws/transformLaws":        "covered",
 	"diff/treeDiff":             "covered",
+	"grid-edit":                 "covered", // conformance/grid_edit_test.go
+	"grid-window-writer":        familyNotApplicable("this host renders a grid as static HTML and has no grid viewport, so nothing it runs measures a viewport or writes a window descriptor"),
 	"decode-policy":             familyNotApplicable("this host's decoder offers no §23 kind admission policy"),
 	"devtools-relay":            familyNotApplicable("this host ships no devtools relay endpoint"),
 	"lowers-to":                 familyNotApplicable("this host carries no bounded program core for actions to lower onto (§30)"),
