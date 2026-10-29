@@ -591,6 +591,10 @@ func formatProjection(binding wire.Obj, sources BindingSources) (wire.Value, err
 // formatter to route to: a located figure renders the locale-free form below,
 // which is this host's declared fallback (WIRE_FORMAT, "A figure's locale").
 // The member still decodes and round-trips.
+//
+// Phase 2499 — every figure case carries `decimals`, Currency included; the
+// locale-free form below honours it (WIRE_FORMAT, "A figure's decimals"). A
+// located figure's digits wait on the host formatter seam (Phase 2498).
 func formatNumber(format, value wire.Value) string {
 	num, ok := numericValue(value)
 	if !ok {
@@ -607,7 +611,12 @@ func formatNumber(format, value wire.Value) string {
 		}
 		return plainNumber(num)
 	case "Currency":
-		return strValue(fmtObj.Fields["code"]) + " " + strconv.FormatFloat(num, 'f', 2, 64)
+		// Phase 2499 — a present `decimals` is the fixed digit count; absent, two.
+		places := 2
+		if decimals, ok := fmtObj.Fields["decimals"].(wire.Int); ok {
+			places = int(decimals)
+		}
+		return strValue(fmtObj.Fields["code"]) + " " + strconv.FormatFloat(num, 'f', places, 64)
 	case "Percent":
 		places := 1
 		if decimals, ok := fmtObj.Fields["decimals"].(wire.Int); ok {
