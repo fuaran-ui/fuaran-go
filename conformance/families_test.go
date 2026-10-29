@@ -66,6 +66,7 @@ var hostCorpusFamilies = map[string]any{
 	"apply/limitsApply":         "covered",
 	"apply/styleNormaliseApply": "covered",
 	"apply/skeletonApply":       familyPending("the apply engine's suite does not yet run the skeleton-apply vectors"),
+	"binding-propagation":       familyPending("this host has no binding walk deriving which bindings a write makes stale for the vectors to run against yet"),
 	"chain":                     "covered", // conformance/chain_test.go
 	"dag":                       "covered",
 	"formatting":                familyPending("the host formatter is not yet certified against the golden; carried by fuaran#2328"),
