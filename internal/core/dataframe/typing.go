@@ -204,6 +204,11 @@ func applyFnTyping(fn string, args []typing) typing {
 	// be that pair, so it is undecided too; every other pair is a float.
 	case "exp", "ln", "log10":
 		return unary(func(typing) typing { return typOfT(TypeFloat) })
+	case "least", "greatest":
+		if len(args) == 0 || anyAbsent {
+			return absent
+		}
+		return joinAll(args)
 	case "pow":
 		switch {
 		case len(args) != 2 || anyAbsent:
@@ -307,6 +312,12 @@ func typingOf(cols Schema, e ColExpr) typing {
 			return typOfT(TypeDecimal)
 		}
 		return unknown
+	case Convert:
+		// The float cast the conversion resolves to.
+		if typingOf(cols, x.Expr).kind == typAbsent {
+			return absent
+		}
+		return typOfT(TypeFloat)
 	case Rounded:
 		switch a := typingOf(cols, x.Expr); {
 		case a.kind == typAbsent:

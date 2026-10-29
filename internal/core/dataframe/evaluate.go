@@ -1051,6 +1051,32 @@ func applyScalar(fn string, args []Cell) (Cell, *EvalError) {
 			return Cell{}, eb
 		}
 		return CellInt(db - da), nil
+	case "least", "greatest":
+		// Variadic (at least one). Any null propagates, as concat's does;
+		// incomparable operands are a typed error through the shared ordering.
+		if len(args) == 0 {
+			name := "Least"
+			if fn == "greatest" {
+				name = "Greatest"
+			}
+			return Cell{}, evalErr(ArityError, "function '"+name+"' expects 1 args, got 0")
+		}
+		for _, a := range args {
+			if isNull(a) {
+				return Null, nil
+			}
+		}
+		best := args[0]
+		for _, c := range args[1:] {
+			k, ok := compareCells(best, c)
+			if !ok {
+				return Cell{}, evalErr(TypeError, "least/greatest over incompatible types")
+			}
+			if (fn == "least") != (k <= 0) {
+				best = c
+			}
+		}
+		return best, nil
 	}
 	return Cell{}, evalErr(TypeError, "unknown scalar fn "+fn)
 }
@@ -1219,6 +1245,14 @@ func evalExpr(cols Schema, r row, e ColExpr) (Cell, *EvalError) {
 			return Cell{}, ce
 		}
 		return roundedCell(x.Rounding.Mode, scale, c)
+	case Convert:
+		// Every step resolves a conversion before evaluation; one that reaches
+		// here is resolved the same way, a mismatch raised when a row reaches it.
+		_, resolved, ue := resolveUnits("expression", cols, x)
+		if ue != nil {
+			return Cell{}, ue
+		}
+		return evalExpr(cols, r, resolved)
 	}
 	return Cell{}, evalErr(TypeError, "unknown ColExpr")
 }
@@ -1474,4 +1508,392 @@ func rowKey(cells []Cell) string {
 		out += cellKey(c) + "\x01"
 	}
 	return out
+}
+
+// ── the unit check (Phase 2208, the reference's Phase 429 / D29) ─────────────
+//
+// A column's unit is a fact of its schema entry, so the check is a static walk
+// over the step's schema before any row: an empty frame is checked exactly as a
+// full one. The walk answers the expression's unit — nil is UNCONSTRAINED: a
+// literal, a param, a column that states no unit; it composes with anything, so
+// a unitless pipeline passes and evaluates as it always did — and rewrites every
+// Convert to the cast (and factor) it stands for.
+
+// colUnit is the unit a schema states for a column, where it states one.
+func colUnit(cols Schema, name string) *Unit {
+	if i := colIndex(cols, name); i >= 0 {
+		return cols[i].Unit
+	}
+	return nil
+}
+
+// stated is an entry under a stated unit, or as it is.
+func stated(u *Unit, e SchemaEntry) SchemaEntry {
+	if u != nil {
+		e.Unit = u
+	}
+	return e
+}
+
+// renamed is the entry under another name, every metadatum kept.
+func renamed(e SchemaEntry, name string) SchemaEntry {
+	e.Name = name
+	return e
+}
+
+// exprText is a compact text of an expression for a refusal — the reference's.
+func exprText(e ColExpr) string {
+	args := func(xs []ColExpr) string {
+		parts := make([]string, len(xs))
+		for i, x := range xs {
+			parts[i] = exprText(x)
+		}
+		return strings.Join(parts, ", ")
+	}
+	switch x := e.(type) {
+	case Col:
+		return "'" + x.Name + "'"
+	case Lit:
+		return cellString(x.Cell)
+	case Param:
+		return "$" + x.Name
+	case Binary:
+		return strings.ToLower(x.Op) + "(" + exprText(x.Left) + ", " + exprText(x.Right) + ")"
+	case Not:
+		return "not(" + exprText(x.Expr) + ")"
+	case Coalesce:
+		return "coalesce(" + args(x.Exprs) + ")"
+	case Case:
+		var arms []ColExpr
+		for _, wt := range x.Cases {
+			arms = append(arms, wt.When, wt.Then)
+		}
+		return "case(" + args(arms) + ", " + exprText(x.ElseExpr) + ")"
+	case Cast:
+		return "cast(" + x.Type + ", " + exprText(x.Expr) + ")"
+	case ApplyFn:
+		return strings.ToLower(x.Fn) + "(" + args(x.Args) + ")"
+	case InList:
+		return "in(" + exprText(x.Subject) + "; " + args(x.Items) + ")"
+	case IsNull:
+		return "isNull(" + exprText(x.Expr) + ")"
+	case InParam:
+		return "in(" + exprText(x.Subject) + "; $" + x.Name + ")"
+	case Quotient:
+		return "quotient(" + exprText(x.Dividend) + ", " + exprText(x.Divisor) + ")"
+	case Rounded:
+		return "rounded(" + exprText(x.Expr) + ")"
+	case Convert:
+		return "convert(" + exprText(x.Expr) + ", " + x.Unit.String() + ")"
+	}
+	return "?"
+}
+
+func unitMismatch(step string, at ColExpr, left, right string) *EvalError {
+	return evalErr(UnitMismatch, "unit mismatch in "+step+": "+left+" against "+right+" in "+exprText(at))
+}
+
+// powerRangeText is what a power, product or quotient whose exponent would
+// leave the algebra's range is refused against.
+const powerRangeText = "a power the algebra can carry"
+
+// resolveUnits is the unit of e over cols, and e with every Convert resolved —
+// the reference's resolveUnitsIn. step names the step a refusal is about.
+// Addition, subtraction, comparison, coalesce, case arms, least / greatest and
+// in require ONE unit among the operands that state one, and the answer carries
+// it; multiplication, division, quotient and mod compose through the algebra;
+// cast, abs, round, floor, ceil and rounded keep their operand's unit; a
+// boolean, a text and a date carry none; a literal and a param are unconstrained.
+func resolveUnits(step string, cols Schema, e ColExpr) (*Unit, ColExpr, *EvalError) {
+	mismatch := func(l, r Unit) (*Unit, ColExpr, *EvalError) {
+		return nil, nil, unitMismatch(step, e, l.String(), r.String())
+	}
+	// agree folds units into one: an unconstrained operand takes the other's.
+	agree := func(acc *Unit, units []*Unit) (*Unit, *EvalError) {
+		for _, u := range units {
+			switch {
+			case u == nil:
+			case acc == nil:
+				acc = u
+			case !acc.Equal(*u):
+				return nil, unitMismatch(step, e, acc.String(), u.String())
+			}
+		}
+		return acc, nil
+	}
+	many := func(xs []ColExpr) ([]*Unit, []ColExpr, *EvalError) {
+		us := make([]*Unit, len(xs))
+		out := make([]ColExpr, len(xs))
+		for i, x := range xs {
+			u, r, ue := resolveUnits(step, cols, x)
+			if ue != nil {
+				return nil, nil, ue
+			}
+			us[i], out[i] = u, r
+		}
+		return us, out, nil
+	}
+	product := func(a, b *Unit) (*Unit, *EvalError) {
+		if a == nil {
+			return b, nil
+		}
+		if b == nil {
+			return a, nil
+		}
+		p, ok := MulUnit(*a, *b)
+		if !ok {
+			return nil, unitMismatch(step, e, a.String(), powerRangeText)
+		}
+		return &p, nil
+	}
+	// quotient: an unconstrained dividend is dimensionless over a stated divisor
+	// (1 / s is /s), an unconstrained divisor leaves the dividend's unit.
+	quotient := func(a, b *Unit) (*Unit, *EvalError) {
+		if b == nil {
+			return a, nil
+		}
+		dividend := Unit{}
+		if a != nil {
+			dividend = *a
+		}
+		q, ok := DivUnit(dividend, *b)
+		if !ok {
+			return nil, unitMismatch(step, e, dividend.String(), powerRangeText)
+		}
+		return &q, nil
+	}
+	firstDimensioned := func(units []*Unit) *Unit {
+		for _, u := range units {
+			if u != nil && !u.Equal(Unit{}) {
+				return u
+			}
+		}
+		return nil
+	}
+	switch x := e.(type) {
+	case Col:
+		return colUnit(cols, x.Name), e, nil
+	case Lit, Param:
+		return nil, e, nil
+	case Binary:
+		us, rs, ue := many([]ColExpr{x.Left, x.Right})
+		if ue != nil {
+			return nil, nil, ue
+		}
+		e2 := Binary{Op: x.Op, Left: rs[0], Right: rs[1]}
+		var u *Unit
+		switch x.Op {
+		case "add", "sub":
+			u, ue = agree(us[0], us[1:])
+		case "mul":
+			u, ue = product(us[0], us[1])
+		case "div":
+			u, ue = quotient(us[0], us[1])
+		case "mod":
+			u = us[0]
+		case "eq", "ne", "lt", "le", "gt", "ge":
+			_, ue = agree(us[0], us[1:])
+		}
+		if ue != nil {
+			return nil, nil, ue
+		}
+		return u, e2, nil
+	case Not:
+		_, r, ue := resolveUnits(step, cols, x.Expr)
+		if ue != nil {
+			return nil, nil, ue
+		}
+		return nil, Not{Expr: r}, nil
+	case IsNull:
+		_, r, ue := resolveUnits(step, cols, x.Expr)
+		if ue != nil {
+			return nil, nil, ue
+		}
+		return nil, IsNull{Expr: r}, nil
+	case InParam:
+		_, r, ue := resolveUnits(step, cols, x.Subject)
+		if ue != nil {
+			return nil, nil, ue
+		}
+		return nil, InParam{Subject: r, Name: x.Name}, nil
+	case Coalesce:
+		us, rs, ue := many(x.Exprs)
+		if ue != nil {
+			return nil, nil, ue
+		}
+		u, ue := agree(nil, us)
+		if ue != nil {
+			return nil, nil, ue
+		}
+		return u, Coalesce{Exprs: rs}, nil
+	case Case:
+		whens := make([]ColExpr, len(x.Cases))
+		thens := make([]ColExpr, len(x.Cases))
+		for i, wt := range x.Cases {
+			whens[i], thens[i] = wt.When, wt.Then
+		}
+		_, rw, ue := many(whens)
+		if ue != nil {
+			return nil, nil, ue
+		}
+		ut, rt, ue := many(thens)
+		if ue != nil {
+			return nil, nil, ue
+		}
+		ue2, re, ue := resolveUnits(step, cols, x.ElseExpr)
+		if ue != nil {
+			return nil, nil, ue
+		}
+		u, ue := agree(ue2, ut)
+		if ue != nil {
+			return nil, nil, ue
+		}
+		cases := make([]WhenThen, len(x.Cases))
+		for i := range x.Cases {
+			cases[i] = WhenThen{When: rw[i], Then: rt[i]}
+		}
+		return u, Case{Cases: cases, ElseExpr: re}, nil
+	case Cast:
+		u, r, ue := resolveUnits(step, cols, x.Expr)
+		if ue != nil {
+			return nil, nil, ue
+		}
+		return u, Cast{Type: x.Type, Expr: r}, nil
+	case ApplyFn:
+		us, rs, ue := many(x.Args)
+		if ue != nil {
+			return nil, nil, ue
+		}
+		e2 := ApplyFn{Fn: x.Fn, Args: rs}
+		switch x.Fn {
+		case "abs", "round", "floor", "ceil":
+			if len(us) > 0 {
+				return us[0], e2, nil
+			}
+			return nil, e2, nil
+		case "least", "greatest":
+			u, ue := agree(nil, us)
+			if ue != nil {
+				return nil, nil, ue
+			}
+			return u, e2, nil
+		case "pow":
+			// An integer-LITERAL exponent composes the unit through the algebra
+			// (m squared is m2; to the power zero, unconstrained); any other power
+			// takes a dimensionless operand only.
+			if len(x.Args) == 2 {
+				if l, ok := x.Args[1].(Lit); ok && l.Cell.Kind == TypeInt {
+					n := l.Cell.Value.(int64)
+					if us[0] == nil || n == 0 {
+						return nil, e2, nil
+					}
+					p, ok := PowUnit(*us[0], n)
+					if !ok {
+						return nil, nil, unitMismatch(step, e, us[0].String(), powerRangeText)
+					}
+					return &p, e2, nil
+				}
+			}
+			if u := firstDimensioned(us); u != nil {
+				return mismatch(*u, Unit{})
+			}
+			return nil, e2, nil
+		case "exp", "ln", "log10":
+			if u := firstDimensioned(us); u != nil {
+				return mismatch(*u, Unit{})
+			}
+			return nil, e2, nil
+		}
+		return nil, e2, nil
+	case InList:
+		us, rs, ue := many(append([]ColExpr{x.Subject}, x.Items...))
+		if ue != nil {
+			return nil, nil, ue
+		}
+		if _, ue := agree(nil, us); ue != nil {
+			return nil, nil, ue
+		}
+		return nil, InList{Subject: rs[0], Items: rs[1:]}, nil
+	case Quotient:
+		us, rs, ue := many([]ColExpr{x.Dividend, x.Divisor})
+		if ue != nil {
+			return nil, nil, ue
+		}
+		u, ue := quotient(us[0], us[1])
+		if ue != nil {
+			return nil, nil, ue
+		}
+		return u, Quotient{Dividend: rs[0], Divisor: rs[1], Rounding: x.Rounding}, nil
+	case Rounded:
+		u, r, ue := resolveUnits(step, cols, x.Expr)
+		if ue != nil {
+			return nil, nil, ue
+		}
+		return u, Rounded{Expr: r, Rounding: x.Rounding}, nil
+	case Convert:
+		// Over an operand stating no unit, a TAG: the operand as a float under
+		// the unit. Over a compatible unit, the float times the exact factor as
+		// a float literal. Across dimensions, refused.
+		source, r, ue := resolveUnits(step, cols, x.Expr)
+		if ue != nil {
+			return nil, nil, ue
+		}
+		target := x.Unit
+		asFloat := Cast{Type: TypeFloat, Expr: r}
+		if source == nil || source.Equal(target) {
+			return &target, asFloat, nil
+		}
+		num, den, ok := ConversionFactor(*source, target)
+		if !ok {
+			return mismatch(*source, target)
+		}
+		return &target, Binary{Op: "mul", Left: asFloat, Right: Lit{Cell: CellFloat(ratioToFloat(num, den))}}, nil
+	}
+	return nil, e, nil
+}
+
+// aggregateUnit is the unit an aggregate's column carries: a count is
+// dimensionless, every other aggregate keeps its source's.
+func aggregateUnit(fn string, source *Unit) *Unit {
+	if fn == "count" || fn == "countDistinct" {
+		return nil
+	}
+	return source
+}
+
+// windowUnit is the unit a window column carries: the ranking family none, the
+// shifting and running families their source's.
+func windowUnit(fn string, source *Unit) *Unit {
+	if fn == "rowNumber" || fn == "rank" {
+		return nil
+	}
+	return source
+}
+
+// sharedUnit is an unpivot's value unit: the one unit every value column
+// states, none where they differ or any states none.
+func sharedUnit(cols Schema, valueVars []string) *Unit {
+	var first *Unit
+	for i, n := range valueVars {
+		u := colUnit(cols, n)
+		if u == nil || (i > 0 && !first.Equal(*u)) {
+			return nil
+		}
+		if i == 0 {
+			first = u
+		}
+	}
+	return first
+}
+
+// unitsAgree meets two columns as one (a union's pair, a set op's pair): the
+// left entry under the one unit the pair states, or the mismatch.
+func unitsAgree(what string, left, right SchemaEntry) (SchemaEntry, *EvalError) {
+	switch {
+	case left.Unit != nil && right.Unit != nil && !left.Unit.Equal(*right.Unit):
+		return left, unitMismatch(what+" '"+left.Name+"'", Col{Name: left.Name}, left.Unit.String(), right.Unit.String())
+	case left.Unit == nil && right.Unit != nil:
+		left.Unit = right.Unit
+	}
+	return left, nil
 }

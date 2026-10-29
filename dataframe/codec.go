@@ -272,6 +272,8 @@ func EncodeExprValue(e ColExpr) wire.Value {
 		})
 	case Rounded:
 		return typed("rounded", map[string]wire.Value{"expr": EncodeExprValue(x.Expr), "rounding": roundingWire(x.Rounding)})
+	case Convert:
+		return typed("convert", map[string]wire.Value{"expr": EncodeExprValue(x.Expr), "unit": wire.Str(x.Unit.String())})
 	}
 	return wire.Null{}
 }

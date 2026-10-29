@@ -143,3 +143,137 @@ func mustApply(t *testing.T, fn string, args ...Cell) Cell {
 	}
 	return c
 }
+
+// ── Phase 2208: units propagate and are checked ─────────────────────────────
+
+func mustUnit(t *testing.T, text string) *Unit {
+	t.Helper()
+	u, r := ParseUnit(text)
+	if r != nil {
+		t.Fatalf("ParseUnit(%q): %v", text, r)
+	}
+	return &u
+}
+
+func strp(s string) *string { return &s }
+
+// unitTable: d metres (labelled), t seconds, dk kilometres, n unitless and
+// labelled, described, with an extension key.
+func unitTable(t *testing.T, withUnits bool) Table {
+	u := func(text string) *Unit {
+		if !withUnits {
+			return nil
+		}
+		return mustUnit(t, text)
+	}
+	return Table{
+		Schema: Schema{
+			{Name: "g", Type: TypeString},
+			{Name: "d", Type: TypeInt, Unit: u("m"), Label: strp("Distance")},
+			{Name: "t", Type: TypeFloat, Unit: u("s")},
+			{Name: "dk", Type: TypeFloat, Unit: u("km")},
+			{Name: "n", Type: TypeInt, Label: strp("Count"), Description: strp("How many"), Ext: map[string]string{"acme.k": "v"}},
+		},
+		Columns: []Column{
+			{Name: "g", Type: TypeString, Cells: []Cell{CellStr("a"), CellStr("b")}},
+			{Name: "d", Type: TypeInt, Cells: []Cell{CellInt(100), CellInt(200)}},
+			{Name: "t", Type: TypeFloat, Cells: []Cell{CellFloat(4), CellFloat(8)}},
+			{Name: "dk", Type: TypeFloat, Cells: []Cell{CellFloat(0.5), CellFloat(1)}},
+			{Name: "n", Type: TypeInt, Cells: []Cell{CellInt(1), CellInt(2)}},
+		},
+	}
+}
+
+func outEntry(t *testing.T, pipeline []Transform, name string) SchemaEntry {
+	t.Helper()
+	out, err := EvalPipeline(pipeline, unitTable(t, true))
+	if err != nil {
+		t.Fatalf("refused: %v", err)
+	}
+	for _, e := range out.Schema {
+		if e.Name == name {
+			return e
+		}
+	}
+	t.Fatalf("no output column %q", name)
+	return SchemaEntry{}
+}
+
+func entryUnit(e SchemaEntry) string {
+	if e.Unit == nil {
+		return ""
+	}
+	return e.Unit.String()
+}
+
+func TestUnitAlgebraConversionFactor(t *testing.T) {
+	num, den, ok := ConversionFactor(*mustUnit(t, "km/h"), *mustUnit(t, "m/s"))
+	if !ok || num.String() != "5" || den.String() != "18" {
+		t.Fatalf("km/h -> m/s = %v/%v (%v), want 5/18", num, den, ok)
+	}
+	if _, _, ok := ConversionFactor(*mustUnit(t, "m"), *mustUnit(t, "s")); ok {
+		t.Fatal("m -> s converted")
+	}
+	if !CompatibleUnits(*mustUnit(t, "N"), *mustUnit(t, "kg.m/s2")) || CompatibleUnits(*mustUnit(t, "[GBP]"), *mustUnit(t, "[USD]")) {
+		t.Fatal("dimension comparison is wrong")
+	}
+	if p, ok := PowUnit(*mustUnit(t, "m/s"), 2); !ok || p.String() != "m2/s2" {
+		t.Fatalf("(m/s)^2 = %s", p.String())
+	}
+}
+
+// KEPT: a projection and a join keep the whole entry.
+func TestUnitEntryKept(t *testing.T) {
+	e := outEntry(t, []Transform{Project{Cols: []Pair{{A: "n", B: "count"}}}}, "count")
+	if e.Label == nil || *e.Label != "Count" || e.Description == nil || e.Ext["acme.k"] != "v" {
+		t.Fatalf("projection dropped metadata: %+v", e)
+	}
+	j := outEntry(t, []Transform{Join{Source: Embedded{Table: unitTable(t, true)}, On: []Pair{{A: "g", B: "g"}}, How: "inner"}}, "d_right")
+	if entryUnit(j) != "m" || j.Label == nil || *j.Label != "Distance" {
+		t.Fatalf("join's right side dropped metadata: %+v", j)
+	}
+}
+
+// DROPPED and UNIT-ONLY: a derive, an aggregate and a window build their own
+// entry — the derived unit, no label.
+func TestUnitEntryRebuilt(t *testing.T) {
+	d := outEntry(t, []Transform{Derive{Name: "v", Expr: Col{Name: "d"}}}, "v")
+	if entryUnit(d) != "m" || d.Label != nil {
+		t.Fatalf("derive: %+v", d)
+	}
+	n := outEntry(t, []Transform{Derive{Name: "n2", Expr: Col{Name: "n"}}}, "n2")
+	if n.HasMetadata() {
+		t.Fatalf("derive over a labelled unitless column states metadata: %+v", n)
+	}
+	c := outEntry(t, []Transform{GroupBy{Keys: []string{"g"}, Aggs: []Agg{{Name: "c", Fn: "count", Of: "d"}, {Name: "s", Fn: "sum", Of: "d"}}}}, "c")
+	if c.HasMetadata() {
+		t.Fatalf("count states metadata: %+v", c)
+	}
+	s := outEntry(t, []Transform{GroupBy{Keys: []string{"g"}, Aggs: []Agg{{Name: "s", Fn: "sum", Of: "d"}}}}, "s")
+	if entryUnit(s) != "m" || s.Label != nil {
+		t.Fatalf("sum: %+v", s)
+	}
+	w := outEntry(t, []Transform{Window{Spec: WindowSpec{OrderBy: []OrderKey{{Col: "n", Dir: "asc"}}, Fn: "lag", Of: "d", As: "p"}}}, "p")
+	if entryUnit(w) != "m" || w.Label != nil {
+		t.Fatalf("window: %+v", w)
+	}
+}
+
+// Go-red: each refusal is the UNIT check's — a UNIT_MISMATCH — and the same
+// pipeline over the same data answers once the units are withdrawn.
+func TestUnitMismatchIsTheUnitCheck(t *testing.T) {
+	cases := map[string]Transform{
+		"m + s":  Derive{Name: "x", Expr: Binary{Op: "add", Left: Col{Name: "d"}, Right: Col{Name: "t"}}},
+		"km + m": Derive{Name: "x", Expr: Binary{Op: "add", Left: Col{Name: "dk"}, Right: Col{Name: "d"}}},
+		"m > s":  Filter{Pred: Binary{Op: "gt", Left: Col{Name: "d"}, Right: Col{Name: "t"}}},
+		"m to s": Derive{Name: "x", Expr: Convert{Expr: Col{Name: "d"}, Unit: *mustUnit(t, "s")}},
+	}
+	for what, step := range cases {
+		if _, err := EvalPipeline([]Transform{step}, unitTable(t, true)); err == nil || err.Code != UnitMismatch {
+			t.Errorf("%s: want UNIT_MISMATCH, got %v", what, err)
+		}
+		if _, err := EvalPipeline([]Transform{step}, unitTable(t, false)); err != nil {
+			t.Errorf("%s without units: refused %v", what, err)
+		}
+	}
+}

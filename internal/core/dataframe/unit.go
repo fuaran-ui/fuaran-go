@@ -1,6 +1,7 @@
 package dataframe
 
 import (
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,8 +14,9 @@ import (
 // the reference's Fuaran.Core.Unit, fuaran-core Phase 426). A schema entry's
 // `unit` is read to a Unit and written back as its ONE canonical text, so two
 // spellings of one product (`s-1.m`, `m/s`) carry one set of bytes. This host
-// needs the parse, the render and equality only: no conversion factors, scales
-// or dimensions are carried. The atom table, the alias, the prefix try-order and
+// needs the parse, the render and equality, and (Phase 2208) the algebra the
+// dataframe evaluator's unit check reads: the product, quotient and integer
+// power of units, dimensions, and the exact conversion factor. The atom table, the alias, the prefix try-order and
 // the non-ratio / arbitrary sets are the reference's in full, so each refused
 // token is refused in the reference's class.
 
@@ -134,30 +136,82 @@ func (r *UnitRefusal) Error() string {
 	return at("numeric factor")
 }
 
-// unitAtoms is every admitted atom by its canonical symbol and whether SI
-// prefixes apply to it (the reference's UnitVocabulary.atoms, Metric flag).
-var unitAtoms = map[string]bool{
-	// The seven SI base dimensions; mass at the gram.
-	"m": true, "g": true, "s": true, "A": true, "K": true, "mol": true, "cd": true,
+// unitAtomDef is an admitted atom: whether SI prefixes apply, its scale
+// relative to the coherent base (metre, GRAM, second, ampere, kelvin, mole,
+// candela) as Num/Den, and its exponents over [length, mass, time, current,
+// temperature, amount, luminous intensity] — the reference's AtomDef.
+type unitAtomDef struct {
+	Metric bool
+	Num    int64
+	Den    int64
+	Dims   [7]int64
+}
+
+// unitAtoms is every admitted atom by its canonical symbol (the reference's
+// UnitVocabulary.atoms).
+var unitAtoms = map[string]unitAtomDef{
+	// The seven SI base dimensions; mass at the gram, UCUM's base.
+	"m":   {true, 1, 1, [7]int64{1, 0, 0, 0, 0, 0, 0}},
+	"g":   {true, 1, 1, [7]int64{0, 1, 0, 0, 0, 0, 0}},
+	"s":   {true, 1, 1, [7]int64{0, 0, 1, 0, 0, 0, 0}},
+	"A":   {true, 1, 1, [7]int64{0, 0, 0, 1, 0, 0, 0}},
+	"K":   {true, 1, 1, [7]int64{0, 0, 0, 0, 1, 0, 0}},
+	"mol": {true, 1, 1, [7]int64{0, 0, 0, 0, 0, 1, 0}},
+	"cd":  {true, 1, 1, [7]int64{0, 0, 0, 0, 0, 0, 1}},
 	// The SI coherent derived units (degree Celsius excepted: it is affine).
-	"rad": true, "sr": true, "Hz": true, "N": true, "Pa": true, "J": true, "W": true, "C": true,
-	"V": true, "F": true, "Ohm": true, "S": true, "Wb": true, "T": true, "H": true, "lm": true,
-	"lx": true, "Bq": true, "Gy": true, "Sv": true, "kat": true,
+	"rad": {true, 1, 1, [7]int64{0, 0, 0, 0, 0, 0, 0}},
+	"sr":  {true, 1, 1, [7]int64{0, 0, 0, 0, 0, 0, 0}},
+	"Hz":  {true, 1, 1, [7]int64{0, 0, -1, 0, 0, 0, 0}},
+	"N":   {true, 1000, 1, [7]int64{1, 1, -2, 0, 0, 0, 0}},
+	"Pa":  {true, 1000, 1, [7]int64{-1, 1, -2, 0, 0, 0, 0}},
+	"J":   {true, 1000, 1, [7]int64{2, 1, -2, 0, 0, 0, 0}},
+	"W":   {true, 1000, 1, [7]int64{2, 1, -3, 0, 0, 0, 0}},
+	"C":   {true, 1, 1, [7]int64{0, 0, 1, 1, 0, 0, 0}},
+	"V":   {true, 1000, 1, [7]int64{2, 1, -3, -1, 0, 0, 0}},
+	"F":   {true, 1, 1000, [7]int64{-2, -1, 4, 2, 0, 0, 0}},
+	"Ohm": {true, 1000, 1, [7]int64{2, 1, -3, -2, 0, 0, 0}},
+	"S":   {true, 1, 1000, [7]int64{-2, -1, 3, 2, 0, 0, 0}},
+	"Wb":  {true, 1000, 1, [7]int64{2, 1, -2, -1, 0, 0, 0}},
+	"T":   {true, 1000, 1, [7]int64{0, 1, -2, -1, 0, 0, 0}},
+	"H":   {true, 1000, 1, [7]int64{2, 1, -2, -2, 0, 0, 0}},
+	"lm":  {true, 1, 1, [7]int64{0, 0, 0, 0, 0, 0, 1}},
+	"lx":  {true, 1, 1, [7]int64{-2, 0, 0, 0, 0, 0, 1}},
+	"Bq":  {true, 1, 1, [7]int64{0, 0, -1, 0, 0, 0, 0}},
+	"Gy":  {true, 1, 1, [7]int64{2, 0, -2, 0, 0, 0, 0}},
+	"Sv":  {true, 1, 1, [7]int64{2, 0, -2, 0, 0, 0, 0}},
+	"kat": {true, 1, 1, [7]int64{0, 0, -1, 0, 0, 1, 0}},
 	// Metric non-SI units.
-	"L": true, "t": true, "bar": true,
+	"L":   {true, 1, 1000, [7]int64{3, 0, 0, 0, 0, 0, 0}},
+	"t":   {true, 1000000, 1, [7]int64{0, 1, 0, 0, 0, 0, 0}},
+	"bar": {true, 100000000, 1, [7]int64{-1, 1, -2, 0, 0, 0, 0}},
 	// Non-metric units: time, ratios, and the international customary set.
-	"min": false, "h": false, "d": false, "wk": false, "a": false,
-	"%": false, "[ppm]": false, "[ppb]": false,
-	"[in_i]": false, "[ft_i]": false, "[yd_i]": false, "[mi_i]": false, "[lb_av]": false, "[oz_av]": false,
+	"min":     {false, 60, 1, [7]int64{0, 0, 1, 0, 0, 0, 0}},
+	"h":       {false, 3600, 1, [7]int64{0, 0, 1, 0, 0, 0, 0}},
+	"d":       {false, 86400, 1, [7]int64{0, 0, 1, 0, 0, 0, 0}},
+	"wk":      {false, 604800, 1, [7]int64{0, 0, 1, 0, 0, 0, 0}},
+	"a":       {false, 31557600, 1, [7]int64{0, 0, 1, 0, 0, 0, 0}},
+	"%":       {false, 1, 100, [7]int64{0, 0, 0, 0, 0, 0, 0}},
+	"[ppm]":   {false, 1, 1000000, [7]int64{0, 0, 0, 0, 0, 0, 0}},
+	"[ppb]":   {false, 1, 1000000000, [7]int64{0, 0, 0, 0, 0, 0, 0}},
+	"[in_i]":  {false, 127, 5000, [7]int64{1, 0, 0, 0, 0, 0, 0}},
+	"[ft_i]":  {false, 381, 1250, [7]int64{1, 0, 0, 0, 0, 0, 0}},
+	"[yd_i]":  {false, 1143, 1250, [7]int64{1, 0, 0, 0, 0, 0, 0}},
+	"[mi_i]":  {false, 201168, 125, [7]int64{1, 0, 0, 0, 0, 0, 0}},
+	"[lb_av]": {false, 45359237, 100000, [7]int64{0, 1, 0, 0, 0, 0, 0}},
+	"[oz_av]": {false, 45359237, 1600000, [7]int64{0, 1, 0, 0, 0, 0, 0}},
 }
 
 // unitAliases are spellings read as another atom: UCUM's lower-case litre.
 var unitAliases = map[string]string{"l": "L"}
 
-// unitPrefixes are UCUM's twenty prefixes in the reference's TRY ORDER: `da`
-// first, so that `dam` reads as the decametre.
-var unitPrefixes = []string{
-	"da", "Y", "Z", "E", "P", "T", "G", "M", "k", "h", "d", "c", "m", "u", "n", "p", "f", "a", "z", "y",
+// unitPrefixPowers are UCUM's twenty prefixes and their powers of ten, in the
+// reference's TRY ORDER: `da` first, so that `dam` reads as the decametre.
+var unitPrefixPowers = []struct {
+	Prefix string
+	Power  int64
+}{
+	{"da", 1}, {"Y", 24}, {"Z", 21}, {"E", 18}, {"P", 15}, {"T", 12}, {"G", 9}, {"M", 6}, {"k", 3}, {"h", 2},
+	{"d", -1}, {"c", -2}, {"m", -3}, {"u", -6}, {"n", -9}, {"p", -12}, {"f", -15}, {"a", -18}, {"z", -21}, {"y", -24},
 }
 
 // unitNonRatio are UCUM's special units whose conversion is not a ratio.
@@ -214,13 +268,14 @@ func resolveAtom(tok string, pos int) (unitAtom, *UnitRefusal) {
 	case isCurrency(tok):
 		return unitAtom{Symbol: tok}, nil
 	}
-	for _, p := range unitPrefixes {
+	for _, pp := range unitPrefixPowers {
+		p := pp.Prefix
 		if len(tok) <= len(p) || !strings.HasPrefix(tok, p) {
 			continue
 		}
 		rest := tok[len(p):]
 		if sym, ok := tryAtom(rest); ok {
-			if unitAtoms[sym] {
+			if unitAtoms[sym].Metric {
 				return unitAtom{Symbol: sym, Prefix: p}, nil
 			}
 			return unitAtom{}, unitRefusal(UnitPrefixNotAllowed, tok, pos)
@@ -466,4 +521,134 @@ func ParseUnit(text string) (Unit, *UnitRefusal) {
 			return Unit{}, unitMalformed(charAt(text, pos), pos, expected)
 		}
 	}
+}
+
+// ── the algebra (Phase 2208) ────────────────────────────────────────────────
+//
+// What the evaluator's unit check reads (the reference's Unit.mul / div / pow /
+// compatible / conversionFactor, fuaran-core#426). Where the reference raises
+// because an exponent would leave ±2147483647, these answer ok=false and the
+// caller names the refusal.
+
+// MulUnit is the product of two units.
+func MulUnit(a, b Unit) (Unit, bool) {
+	f, ok := combineFactors(a.factors, 1, b.factors)
+	return Unit{factors: f}, ok
+}
+
+// DivUnit is the quotient a / b.
+func DivUnit(a, b Unit) (Unit, bool) {
+	f, ok := combineFactors(a.factors, -1, b.factors)
+	return Unit{factors: f}, ok
+}
+
+// PowUnit is u to the integer power n (dimensionless at n = 0).
+func PowUnit(u Unit, n int64) (Unit, bool) {
+	if n == 0 {
+		return Unit{}, true
+	}
+	out := make([]unitFactor, len(u.factors))
+	for i, f := range u.factors {
+		e := f.Exp * n
+		if (n != 0 && e/n != f.Exp) || e > maxUnitExp || e < -maxUnitExp {
+			return Unit{}, false
+		}
+		out[i] = unitFactor{Atom: f.Atom, Exp: e}
+	}
+	return Unit{factors: out}, true
+}
+
+// dimension is what a unit measures: non-zero exponents by base dimension, and
+// one dimension per currency.
+func (u Unit) dimension() map[string]int64 {
+	m := map[string]int64{}
+	for _, f := range u.factors {
+		if isCurrency(f.Atom.Symbol) {
+			m["["+f.Atom.Symbol] += f.Exp
+			continue
+		}
+		for i, x := range unitAtoms[f.Atom.Symbol].Dims {
+			m[strconv.Itoa(i)] += x * f.Exp
+		}
+	}
+	for k, x := range m {
+		if x == 0 {
+			delete(m, k)
+		}
+	}
+	return m
+}
+
+// CompatibleUnits reports whether two units measure one dimension, so a value
+// in one has a value in the other. Every currency is a dimension of its own.
+func CompatibleUnits(a, b Unit) bool {
+	da, db := a.dimension(), b.dimension()
+	if len(da) != len(db) {
+		return false
+	}
+	for k, x := range da {
+		if db[k] != x {
+			return false
+		}
+	}
+	return true
+}
+
+func bigPow(x int64, k int64) *big.Int {
+	return new(big.Int).Exp(big.NewInt(x), big.NewInt(k), nil)
+}
+
+// scale is the unit's scale relative to the coherent base, num/den in lowest
+// terms (the reference's scale).
+func (u Unit) scale() (*big.Int, *big.Int) {
+	num, den := big.NewInt(1), big.NewInt(1)
+	ten := int64(0)
+	for _, f := range u.factors {
+		for _, pp := range unitPrefixPowers {
+			if pp.Prefix == f.Atom.Prefix {
+				ten += pp.Power * f.Exp
+			}
+		}
+		if isCurrency(f.Atom.Symbol) {
+			continue
+		}
+		a := unitAtoms[f.Atom.Symbol]
+		if f.Exp > 0 {
+			num.Mul(num, bigPow(a.Num, f.Exp))
+			den.Mul(den, bigPow(a.Den, f.Exp))
+		} else {
+			num.Mul(num, bigPow(a.Den, -f.Exp))
+			den.Mul(den, bigPow(a.Num, -f.Exp))
+		}
+	}
+	if ten > 0 {
+		num.Mul(num, bigPow(10, ten))
+	} else if ten < 0 {
+		den.Mul(den, bigPow(10, -ten))
+	}
+	g := new(big.Int).GCD(nil, nil, num, den)
+	return num.Quo(num, g), den.Quo(den, g)
+}
+
+// ConversionFactor is the exact factor num/den that turns a value in source
+// into the same quantity in target (km/h to m/s is 5/18); ok=false where the
+// two are not compatible.
+func ConversionFactor(source, target Unit) (num, den *big.Int, ok bool) {
+	if !CompatibleUnits(source, target) {
+		return nil, nil, false
+	}
+	q, ok := DivUnit(source, target)
+	if !ok {
+		return nil, nil, false
+	}
+	num, den = q.scale()
+	return num, den, true
+}
+
+// ratioToFloat reads a ratio into a float literal as the reference does: each
+// side to its nearest double, then divided.
+func ratioToFloat(num, den *big.Int) float64 {
+	n, _ := new(big.Float).SetInt(num).Float64()
+	d, _ := new(big.Float).SetInt(den).Float64()
+	return n / d
 }

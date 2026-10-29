@@ -8,7 +8,13 @@ import (
 func toLower(s string) string { return strings.ToLower(s) }
 func toUpper(s string) string { return strings.ToUpper(s) }
 
-func evalFilter(f Frame, pred ColExpr) (Frame, *EvalError) {
+// evalFilter checks the predicate's units over the schema before any row, then
+// evaluates the resolved predicate.
+func evalFilter(f Frame, written ColExpr) (Frame, *EvalError) {
+	_, pred, ue := resolveUnits("filter", f.Cols, written)
+	if ue != nil {
+		return Frame{}, ue
+	}
 	var kept []row
 	for _, r := range f.Rows {
 		c, e := evalExpr(f.Cols, r, pred)
@@ -42,7 +48,6 @@ func repeatedOutput(verb string, outs [][2]string) *EvalError {
 func evalProject(f Frame, pairs []Pair) (Frame, *EvalError) {
 	type resolved struct {
 		out string
-		ty  string
 		idx int
 	}
 	res := make([]resolved, 0, len(pairs))
@@ -51,7 +56,7 @@ func evalProject(f Frame, pairs []Pair) (Frame, *EvalError) {
 		if i < 0 {
 			return Frame{}, unknownColumn(p.A, f.Cols)
 		}
-		res = append(res, resolved{out: p.B, ty: f.Cols[i].Type, idx: i})
+		res = append(res, resolved{out: p.B, idx: i})
 	}
 	outs := make([][2]string, len(pairs))
 	for i, p := range pairs {
@@ -62,7 +67,8 @@ func evalProject(f Frame, pairs []Pair) (Frame, *EvalError) {
 	}
 	cols := make(Schema, len(res))
 	for i, r := range res {
-		cols[i] = SchemaEntry{Name: r.out, Type: r.ty}
+		// A projection renames a column and states nothing new about it.
+		cols[i] = renamed(f.Cols[r.idx], r.out)
 	}
 	rows := make([]row, len(f.Rows))
 	for ri, r := range f.Rows {
@@ -75,11 +81,16 @@ func evalProject(f Frame, pairs []Pair) (Frame, *EvalError) {
 	return Frame{Cols: cols, Rows: rows}, nil
 }
 
-// evalDerive types its column by THE derived-column rule (typing.go): read off
-// the schema before any row, so a derive refused statically is refused on every
-// frame, an empty one included, and a decided one carries its type whatever rows
-// the frame holds.
-func evalDerive(f Frame, name string, expr ColExpr) (Frame, *EvalError) {
+// evalDerive checks its expression's units and types its column by THE
+// derived-column rule (typing.go): both read off the schema before any row, so a
+// derive refused statically is refused on every frame, an empty one included,
+// and a decided one carries its type, and its unit, whatever rows the frame
+// holds. The column's entry is its own: its name, its type and the derived unit.
+func evalDerive(f Frame, name string, written ColExpr) (Frame, *EvalError) {
+	unit, expr, ue := resolveUnits("derive '"+name+"'", f.Cols, written)
+	if ue != nil {
+		return Frame{}, ue
+	}
 	dt := deriveTyping(f.Cols, expr)
 	if dt.kind == derivedRefused {
 		return Frame{}, floatBesideDecimal(name)
@@ -99,7 +110,7 @@ func evalDerive(f Frame, name string, expr ColExpr) (Frame, *EvalError) {
 	i := colIndex(f.Cols, name)
 	if i >= 0 {
 		cols := append(Schema(nil), f.Cols...)
-		cols[i] = SchemaEntry{Name: cols[i].Name, Type: ty}
+		cols[i] = stated(unit, SchemaEntry{Name: cols[i].Name, Type: ty})
 		rows := make([]row, len(f.Rows))
 		for ri, r := range f.Rows {
 			nr := append(row(nil), r...)
@@ -108,7 +119,7 @@ func evalDerive(f Frame, name string, expr ColExpr) (Frame, *EvalError) {
 		}
 		return Frame{Cols: cols, Rows: rows}, nil
 	}
-	cols := append(append(Schema(nil), f.Cols...), SchemaEntry{Name: name, Type: ty})
+	cols := append(append(Schema(nil), f.Cols...), stated(unit, SchemaEntry{Name: name, Type: ty}))
 	rows := make([]row, len(f.Rows))
 	for ri, r := range f.Rows {
 		rows[ri] = append(append(row(nil), r...), newCells[ri])
@@ -164,15 +175,13 @@ func evalGroupBy(f Frame, keys []string, aggs []Agg) (Frame, *EvalError) {
 		return Frame{}, e
 	}
 	cols := make(Schema, 0, len(keys)+len(res))
-	for _, k := range keys {
-		t := colType(f.Cols, k)
-		if t == "" {
-			t = TypeString
-		}
-		cols = append(cols, SchemaEntry{Name: k, Type: t})
+	// A key keeps its entry; an aggregate's column keeps its source's unit, a
+	// count none.
+	for _, i := range idxs {
+		cols = append(cols, f.Cols[i])
 	}
 	for _, rc := range res {
-		cols = append(cols, SchemaEntry{Name: rc.a.Name, Type: aggType(rc.a.Fn, rc.ty)})
+		cols = append(cols, stated(aggregateUnit(rc.a.Fn, colUnit(f.Cols, rc.a.Of)), SchemaEntry{Name: rc.a.Name, Type: aggType(rc.a.Fn, rc.ty)}))
 	}
 	rows := make([]row, 0, len(order))
 	for _, k := range order {
@@ -240,6 +249,15 @@ func evalJoin(f, right Frame, on []Pair, how string) (Frame, *EvalError) {
 		li = append(li, il)
 		ri = append(ri, ir)
 	}
+	// A key pair is an equality, so the comparison's rule holds it: two stated
+	// units must be one unit.
+	for _, p := range on {
+		lu, ru := colUnit(f.Cols, p.A), colUnit(right.Cols, p.B)
+		if lu != nil && ru != nil && !lu.Equal(*ru) {
+			return Frame{}, unitMismatch("join key '"+p.A+"' = '"+p.B+"'",
+				Binary{Op: "eq", Left: Col{Name: p.A}, Right: Col{Name: p.B}}, lu.String(), ru.String())
+		}
+	}
 	keyMatch := func(lr, rr row) bool {
 		for k := range li {
 			if !cellEq(lr[li[k]], rr[ri[k]]) {
@@ -258,7 +276,7 @@ func evalJoin(f, right Frame, on []Pair, how string) (Frame, *EvalError) {
 		if leftNames[name] {
 			name += "_right"
 		}
-		rightCols[i] = SchemaEntry{Name: name, Type: e.Type}
+		rightCols[i] = renamed(e, name)
 	}
 	outCols := append(append(Schema(nil), f.Cols...), rightCols...)
 	leftNulls := make(row, len(f.Cols))
@@ -308,7 +326,17 @@ func evalUnion(f, other Frame) (Frame, *EvalError) {
 	if !strSliceEq(available(f.Cols), available(other.Cols)) {
 		return Frame{}, evalErr(JoinError, "union requires matching column names")
 	}
-	return Frame{Cols: f.Cols, Rows: append(append([]row(nil), f.Rows...), other.Rows...)}, nil
+	// The unit is the left's, the right's where only the right states one; two
+	// stated units are refused.
+	cols := make(Schema, len(f.Cols))
+	for i := range f.Cols {
+		c, ue := unitsAgree("union column", f.Cols[i], other.Cols[i])
+		if ue != nil {
+			return Frame{}, ue
+		}
+		cols[i] = c
+	}
+	return Frame{Cols: cols, Rows: append(append([]row(nil), f.Rows...), other.Rows...)}, nil
 }
 
 // evalSetOp keeps the left rows whose full row does (intersect) or does not
@@ -317,6 +345,13 @@ func evalUnion(f, other Frame) (Frame, *EvalError) {
 func evalSetOp(verb string, keepPresent bool, f, other Frame) (Frame, *EvalError) {
 	if !strSliceEq(available(f.Cols), available(other.Cols)) {
 		return Frame{}, evalErr(JoinError, verb+" requires matching column names")
+	}
+	// Row identity across two units is the comparison's error; the left schema
+	// is what the answer keeps.
+	for i := range f.Cols {
+		if _, ue := unitsAgree(verb+" column", f.Cols[i], other.Cols[i]); ue != nil {
+			return Frame{}, ue
+		}
 	}
 	present := make(map[string]bool, len(other.Rows))
 	for _, r := range other.Rows {
@@ -489,7 +524,7 @@ func evalWindow(f Frame, spec WindowSpec) (Frame, *EvalError) {
 			ty = TypeString
 		}
 	}
-	cols := append(append(Schema(nil), f.Cols...), SchemaEntry{Name: spec.As, Type: ty})
+	cols := append(append(Schema(nil), f.Cols...), stated(windowUnit(spec.Fn, colUnit(f.Cols, spec.Of)), SchemaEntry{Name: spec.As, Type: ty}))
 	rows := make([]row, len(f.Rows))
 	for ri, r := range f.Rows {
 		rows[ri] = append(append(row(nil), r...), computed[ri])
@@ -559,15 +594,14 @@ func evalPivot(f Frame, spec PivotSpec) (Frame, *EvalError) {
 		}
 	}
 	cols := make(Schema, 0, len(spec.Index)+len(onValues))
-	for _, n := range spec.Index {
-		t := colType(f.Cols, n)
-		if t == "" {
-			t = TypeString
-		}
-		cols = append(cols, SchemaEntry{Name: n, Type: t})
+	// An index column keeps its entry; every value column is one aggregate of
+	// Values, so each carries that aggregate's unit.
+	for _, i := range idxIdx {
+		cols = append(cols, f.Cols[i])
 	}
+	valueUnit := aggregateUnit(spec.Agg, colUnit(f.Cols, spec.Values))
 	for _, ov := range onValues {
-		cols = append(cols, SchemaEntry{Name: cellString(ov), Type: aggType(spec.Agg, valType)})
+		cols = append(cols, stated(valueUnit, SchemaEntry{Name: cellString(ov), Type: aggType(spec.Agg, valType)}))
 	}
 	rows := make([]row, 0, len(order))
 	for _, kc := range order {
@@ -617,12 +651,8 @@ func evalUnpivot(f Frame, idVars, valueVars []string) (Frame, *EvalError) {
 		return Frame{}, e
 	}
 	cols := make(Schema, 0, len(idVars)+2)
-	for _, n := range idVars {
-		t := colType(f.Cols, n)
-		if t == "" {
-			t = TypeString
-		}
-		cols = append(cols, SchemaEntry{Name: n, Type: t})
+	for _, i := range idIdx {
+		cols = append(cols, f.Cols[i])
 	}
 	// The value column is typed by the one derived-column rule, the value
 	// columns being its arms: their declared types' join where the schema
@@ -656,7 +686,8 @@ func evalUnpivot(f Frame, idVars, valueVars []string) (Frame, *EvalError) {
 	if te != nil {
 		return Frame{}, te
 	}
-	cols = append(cols, SchemaEntry{Name: "variable", Type: TypeString}, SchemaEntry{Name: "value", Type: valType})
+	cols = append(cols, SchemaEntry{Name: "variable", Type: TypeString},
+		stated(sharedUnit(f.Cols, valueVars), SchemaEntry{Name: "value", Type: valType}))
 	return Frame{Cols: cols, Rows: rows}, nil
 }
 

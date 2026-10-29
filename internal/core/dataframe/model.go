@@ -239,6 +239,18 @@ type Rounded struct {
 	Rounding Rounding
 }
 
+// Convert is the operand brought to Unit (Phase 2208, the reference's Phase
+// 429): the one explicit conversion between two units of one dimension, and the
+// one way to give a literal or a unitless column a unit. It resolves against the
+// step's schema before evaluation: over an operand stating no unit it is a tag
+// (the operand cast to float), over a compatible unit the float times the exact
+// factor, across dimensions a UnitMismatch.
+// Wire: {"$type":"convert","expr":…,"unit":"<canonical unit text>"}.
+type Convert struct {
+	Expr ColExpr
+	Unit Unit
+}
+
 func (Col) isColExpr()      {}
 func (Lit) isColExpr()      {}
 func (Binary) isColExpr()   {}
@@ -253,6 +265,7 @@ func (InParam) isColExpr()  {}
 func (IsNull) isColExpr()   {}
 func (Quotient) isColExpr() {}
 func (Rounded) isColExpr()  {}
+func (Convert) isColExpr()  {}
 
 // Closed vocabularies (wire tags) — additive only. The string predicates
 // (contains / startsWith / endsWith) and the string/date scalar fns (concat /
@@ -268,6 +281,7 @@ var (
 		"abs", "round", "floor", "ceil", "length", "lower", "upper", "substr", "datePart",
 		"concat", "trim", "replace", "dateDiffDays",
 		"pow", "exp", "ln", "log10",
+		"least", "greatest",
 	)
 	aggFns    = set("sum", "mean", "min", "max", "count", "median", "stddev", "first", "last", "countDistinct")
 	joinKinds = set("inner", "left", "right", "outer")
@@ -405,6 +419,8 @@ const (
 	ArityError       = "ARITY_ERROR"
 	UnresolvedSource = "UNRESOLVED_SOURCE"
 	UnboundParam     = "UNBOUND_PARAM"
+	// UnitMismatch is two units met where the rule requires one (Phase 2208).
+	UnitMismatch = "UNIT_MISMATCH"
 )
 
 // EvalError is a pipeline-semantic failure.

@@ -112,6 +112,7 @@ type (
 	Pivot        = core.Pivot
 	PivotSpec    = core.PivotSpec
 	Project      = core.Project
+	Convert      = core.Convert
 	Quotient     = core.Quotient
 	Ref          = core.Ref
 	Resolver     = core.Resolver

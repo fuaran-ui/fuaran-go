@@ -99,6 +99,8 @@ func exprParamNames(e ColExpr) []string {
 			if x.Rounding.ScaleParam != "" {
 				out = append(out, x.Rounding.ScaleParam)
 			}
+		case Convert:
+			walk(x.Expr)
 		case Rounded:
 			walk(x.Expr)
 			if x.Rounding.ScaleParam != "" {
@@ -201,6 +203,8 @@ func substListExpr(e ColExpr, listEnv map[string][]Cell) ColExpr {
 		return Quotient{Dividend: substListExpr(x.Dividend, listEnv), Divisor: substListExpr(x.Divisor, listEnv), Rounding: x.Rounding}
 	case Rounded:
 		return Rounded{Expr: substListExpr(x.Expr, listEnv), Rounding: x.Rounding}
+	case Convert:
+		return Convert{Expr: substListExpr(x.Expr, listEnv), Unit: x.Unit}
 	default: // Col, Lit, Param — a scalar param is never bound here
 		return e
 	}
@@ -255,6 +259,8 @@ func substExpr(e ColExpr, env map[string]Cell) ColExpr {
 		return Quotient{Dividend: substExpr(x.Dividend, env), Divisor: substExpr(x.Divisor, env), Rounding: bindScale(x.Rounding, env)}
 	case Rounded:
 		return Rounded{Expr: substExpr(x.Expr, env), Rounding: bindScale(x.Rounding, env)}
+	case Convert:
+		return Convert{Expr: substExpr(x.Expr, env), Unit: x.Unit}
 	default: // Col, Lit
 		return e
 	}

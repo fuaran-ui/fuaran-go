@@ -921,6 +921,28 @@ func DecodeExpr(el any) (ColExpr, *ColumnError) {
 			return nil, ce
 		}
 		return Rounded{Expr: inner, Rounding: r}, nil
+	case "convert":
+		uv, e := field(el, "unit")
+		if e != nil {
+			return nil, e
+		}
+		text, ok := uv.(string)
+		if !ok {
+			return nil, cerr(MalformedShape, "convert: unit must be a string")
+		}
+		u, r := ParseUnit(text)
+		if r != nil {
+			return nil, cerr(MalformedShape, "convert: '"+text+"' is not a unit")
+		}
+		v, e := field(el, "expr")
+		if e != nil {
+			return nil, e
+		}
+		inner, ce := DecodeExpr(v)
+		if ce != nil {
+			return nil, ce
+		}
+		return Convert{Expr: inner, Unit: u}, nil
 	// Expression-level string-predicate spellings:
 	// {"$type":"contains","expr":X,"other":Y} (also left/right) denotes
 	// exactly Binary(contains, X, Y); same for startsWith/endsWith. Canonical

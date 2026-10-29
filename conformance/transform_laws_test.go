@@ -13,13 +13,12 @@
 // manifest row (family id, kitVersion, seed, iterations, vector count) — no
 // count is restated here, so a re-emitted draw is noticed rather than misread.
 //
+// THE UNIT VECTORS RUN (Phase 2208): the evaluator carries field metadata
+// through every verb and checks units, so the `-unit-` vectors are asserted like
+// every other evalPipeline vector.
+//
 // NAMED EXCEPTIONS, each reported by name and counted, never silent:
 //
-//   - every evalPipeline vector whose id carries `-unit-`: carried by fuaran#2208
-//     — this host does not yet carry field metadata (fuaran#2207) or the unit
-//     algebra. The skip set is DERIVED from the ids, and every member must be an
-//     evalPipeline vector, so a unit vector renamed out of the pattern runs (and
-//     fails) rather than hiding;
 //   - the case kinds `columnOp` and `delta`: this host carries no ColumnOp
 //     surface and no table-delta surface. The set of case kinds in the file must
 //     be exactly {evalPipeline, columnOp, delta}, so a new kind fails loudly.
@@ -110,8 +109,6 @@ var transformLawKindsNotRun = map[string]string{
 	"delta":    "this host carries no table-delta surface",
 }
 
-const unitVectorReason = "carried by fuaran#2208 — this host does not yet carry field metadata (fuaran#2207) or the unit algebra"
-
 func TestTransformLaws(t *testing.T) {
 	row, raw := loadLawFamily(t, transformLawsFamily)
 	var doc struct {
@@ -163,29 +160,21 @@ func TestTransformLaws(t *testing.T) {
 			row.File, doc.Iterations, row.Iterations, kinds["evalPipeline"])
 	}
 
-	// The unit skip set, derived from the ids.
-	var unitSkipped []string
+	ran, units := 0, 0
 	for _, v := range doc.Vectors {
-		if strings.Contains(v.ID, "-unit-") {
-			if v.Case != "evalPipeline" {
-				t.Fatalf("vector %s carries -unit- but is a %s vector; the unit skip covers evalPipeline vectors only", v.ID, v.Case)
-			}
-			unitSkipped = append(unitSkipped, v.ID)
-		}
-	}
-
-	ran := 0
-	for _, v := range doc.Vectors {
-		if _, notRun := transformLawKindsNotRun[v.Case]; notRun || strings.Contains(v.ID, "-unit-") {
+		if _, notRun := transformLawKindsNotRun[v.Case]; notRun {
 			continue // reported by name below
 		}
 		ran++
+		if strings.Contains(v.ID, "-unit-") {
+			units++
+		}
 		v := v
 		t.Run(v.ID, func(t *testing.T) { runTransformLawVector(t, v) })
 	}
 
-	for _, id := range unitSkipped {
-		t.Logf("transformLaws: not run %s — %s", id, unitVectorReason)
+	if units == 0 {
+		t.Fatalf("laws/%s carries no -unit- vector; the unit leg is stale", row.File)
 	}
 	notRunKinds := make([]string, 0, len(transformLawKindsNotRun))
 	for k := range transformLawKindsNotRun {
@@ -195,10 +184,10 @@ func TestTransformLaws(t *testing.T) {
 	for _, k := range notRunKinds {
 		t.Logf("transformLaws: not run %d %s vector(s) — %s", kinds[k], k, transformLawKindsNotRun[k])
 	}
-	t.Logf("transformLaws (kitVersion %s): ran %d evalPipeline vectors; skipped %d unit vectors, %d columnOp, %d delta",
-		doc.KitVersion, ran, len(unitSkipped), kinds["columnOp"], kinds["delta"])
-	if ran+len(unitSkipped) != kinds["evalPipeline"] {
-		t.Fatalf("ran %d + unit-skipped %d != %d evalPipeline vectors", ran, len(unitSkipped), kinds["evalPipeline"])
+	t.Logf("transformLaws (kitVersion %s): ran %d evalPipeline vectors (%d of them unit vectors); skipped %d columnOp, %d delta",
+		doc.KitVersion, ran, units, kinds["columnOp"], kinds["delta"])
+	if ran != kinds["evalPipeline"] {
+		t.Fatalf("ran %d != %d evalPipeline vectors", ran, kinds["evalPipeline"])
 	}
 }
 
