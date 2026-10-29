@@ -249,7 +249,7 @@ func frameColumnParts(name string, colEl any) ([]any, []any) {
 }
 
 // inferFrameColumnType infers one column's type from its present cells —
-// pinned rules: all-int => int, any fractional => float, all-bool => bool,
+// pinned rules: all-int => int (a whole value inside int32), any other number => float, all-bool => bool,
 // all-string => string; never date/timestamp; empty or mixed is a didactic
 // reject naming the explicit-schema remedy.
 func inferFrameColumnType(name string, values []any) string {
@@ -260,7 +260,9 @@ func inferFrameColumnType(name string, values []any) string {
 	for _, v := range values {
 		switch t := v.(type) {
 		case json.Number:
-			if isIntegerLiteral(string(t)) {
+			// By value (WIRE_FORMAT §3.6.28): a whole value inside the int32
+			// range is an int, anything else a float.
+			if _, ok := coredf.Int32Value(t); ok {
 				seen["int"] = true
 			} else {
 				seen["float"] = true
@@ -293,8 +295,13 @@ func inferFrameColumnType(name string, values []any) string {
 func frameCell(name, ty string, v any) Value {
 	switch ty {
 	case "int":
-		if n, ok := v.(json.Number); ok && isIntegerLiteral(string(n)) {
-			return numberValue(n)
+		// A signed 32-bit integer, read by value (WIRE_FORMAT §3.6.28): 2.0 is 2;
+		// a fraction or a value past either end is refused, never truncated or widened.
+		if n, ok := v.(json.Number); ok {
+			if i, ok := coredf.Int32Value(n); ok {
+				return Int(int64(i))
+			}
+			cfail("column '%s': an int column holds signed 32-bit integers, and %s is not one", name, string(n))
 		}
 	case "float":
 		if n, ok := v.(json.Number); ok {

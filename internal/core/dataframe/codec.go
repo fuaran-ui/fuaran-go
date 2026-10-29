@@ -24,6 +24,17 @@ func cerr(code, detail string) *ColumnError { return &ColumnError{Code: code, De
 
 func isIntToken(n json.Number) bool { return !strings.ContainsAny(string(n), ".eE") }
 
+// Int32Value is the value of a number token that is whole-valued and inside the
+// signed 32-bit range — an int column's value under WIRE_FORMAT §3.6.28 (§7.1's
+// integer-slot rule), read by value rather than spelling — or ok=false.
+func Int32Value(n json.Number) (int32, bool) {
+	f, err := n.Float64()
+	if err != nil || f != math.Floor(f) || f < math.MinInt32 || f > math.MaxInt32 {
+		return 0, false
+	}
+	return int32(f), true
+}
+
 func field(obj any, key string) (any, *ColumnError) {
 	m, ok := obj.(map[string]any)
 	if !ok {
@@ -244,18 +255,16 @@ func ReadInstant(col, ty string, v any) (text, malformed string, mismatch bool) 
 func decodeCellValue(col, ty string, v any) (Cell, *ColumnError) {
 	switch ty {
 	case TypeInt:
-		if n, ok := v.(json.Number); ok && isIntToken(n) {
-			// Int64 REFUSES rather than clamping. The error it returns is
-			// out-of-range for an integer literal wider than int64 — a real
-			// case, since the wire's integers are arbitrary-precision text and
-			// the discarded error left the cell holding a silently wrong
-			// number that then travelled as data.
-			i, convErr := n.Int64()
-			if convErr != nil {
-				return Cell{}, cerr(TypeMismatch,
-					col+": integer literal "+string(n)+" does not fit an int64 cell")
+		if n, ok := v.(json.Number); ok {
+			// An int column holds signed 32-bit integers (WIRE_FORMAT §3.6.28):
+			// a whole value inside the range is accepted whatever its spelling
+			// (2.0 reads as 2); a fraction, or a value past either end, is
+			// refused rather than truncated, widened or wrapped.
+			if i, ok := Int32Value(n); ok {
+				return CellInt(int64(i)), nil
 			}
-			return CellInt(i), nil
+			return Cell{}, cerr(TypeMismatch,
+				"column '"+col+"': an int column holds signed 32-bit integers, and "+string(n)+" is not one")
 		}
 	case TypeFloat:
 		if n, ok := v.(json.Number); ok {
@@ -517,7 +526,8 @@ func decodeColumn(columnsObj any, name, ty string) (Column, *ColumnError) {
 }
 
 // inferColumnType infers one column's type from its present cells. PINNED
-// deterministic rules: all-int numerics => int, any fractional => float,
+// deterministic rules: all-int numerics => int (a whole value inside int32,
+// WIRE_FORMAT §3.6.28), any other number => float,
 // all-bool => bool, all-string => string — never date/timestamp (temporal
 // types require a declared schema). An empty column, or mixed kinds, is a
 // didactic reject naming the explicit-schema remedy.
@@ -530,7 +540,10 @@ func inferColumnType(name string, values []any) (string, *ColumnError) {
 	for _, v := range values {
 		switch t := v.(type) {
 		case json.Number:
-			if isIntToken(t) {
+			// By value (WIRE_FORMAT §3.6.28): a whole value inside the int32
+			// range is an int, anything else — a fraction, or a whole value
+			// past the range — a float.
+			if _, ok := Int32Value(t); ok {
 				seen["int"] = true
 			} else {
 				seen["float"] = true
