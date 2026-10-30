@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/fuaran-ui/fuaran-go/wire"
@@ -42,6 +43,9 @@ type coerced struct {
 	ok     bool
 	value  wire.Value
 	detail string
+	// overLimit marks a refusal that is a §21 bound rather than a type: the
+	// value is one the slot can hold (Phase 1925).
+	overLimit bool
 }
 
 type coercer func(wire.Value) coerced
@@ -118,11 +122,28 @@ func coerceEnum(allowed map[string]bool, sorted []string) coercer {
 	}
 }
 
+// coerceInt reads an integer slot through the decoder's own §7.1 rule
+// (Phase 1925): 3.0 is the integer 3; a fractional value or one outside the
+// signed 32-bit range is refused, never truncated or stored wide.
 func coerceInt(v wire.Value) coerced {
-	if i, ok := v.(wire.Int); ok {
-		return coerced{ok: true, value: i}
+	i, err := wire.DecodeIntSlot(v)
+	if err != nil {
+		return coerced{detail: err.Error()}
 	}
-	return coerced{detail: "expected an integer"}
+	return coerced{ok: true, value: i}
+}
+
+// coerceSkeletonRows is `Skeleton.rows`: §7.1 first, then the §21.9 bound, the
+// decoder's two rules in the decoder's order. A bound breach is overLimit, so
+// it answers LimitExceeded rather than KindMismatch.
+func coerceSkeletonRows(v wire.Value) coerced {
+	rows, err := wire.DecodeSkeletonRows(v)
+	if err != nil {
+		var de *wire.DecodeError
+		limit := errors.As(err, &de) && de.Code == wire.CodeLimitExceeded
+		return coerced{detail: err.Error(), overLimit: limit}
+	}
+	return coerced{ok: true, value: rows}
 }
 
 func coerceFloat(v wire.Value) coerced {
@@ -209,7 +230,7 @@ var propFields = map[string]map[string]fieldEntry{
 		"Variant": {wireKey: "variant", coerce: coerceBadgeVariant},
 	},
 	"Skeleton": {
-		"Rows": {wireKey: "rows", coerce: coerceInt},
+		"Rows": {wireKey: "rows", coerce: coerceSkeletonRows},
 	},
 	// Phase 821 — the standalone Icon display kind's field surface.
 	"Icon": {
@@ -285,6 +306,7 @@ const (
 	outcomeUnknownField
 	outcomeNotSupported
 	outcomeTypeMismatch
+	outcomeOverLimit
 )
 
 type fieldOutcome struct {
@@ -406,6 +428,9 @@ func updateField(field string, value wire.Value, kind wire.Obj) fieldOutcome {
 	}
 	result := entry.coerce(value)
 	if !result.ok {
+		if result.overLimit {
+			return fieldOutcome{tag: outcomeOverLimit, detail: result.detail}
+		}
 		return fieldOutcome{tag: outcomeTypeMismatch, detail: result.detail}
 	}
 	return fieldOutcome{tag: outcomeUpdated, kind: withKindField(kind, entry.wireKey, result.value)}

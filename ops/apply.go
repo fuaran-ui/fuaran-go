@@ -124,11 +124,12 @@ func checkInstalledIDs(installed []wire.Node, result wire.Node) *ApplyError {
 }
 
 // CanApply is the dry-run: it reports whether op would apply cleanly to tree,
-// without mutating anything (Apply is pure, so the law canApply ≡ apply
-// success holds by construction; the conformance tests pin it).
+// without mutating anything. It CALLS Apply (Apply is pure), so the law
+// canApply ≡ apply success holds by construction - the §21 limit and §8.1
+// id guards included, which a dry-run over applyOne alone skipped (Phase 1925).
 func CanApply(op wire.Obj, tree wire.Node) bool {
-	_, applyErr := applyOne(op, tree)
-	return applyErr == nil
+	_, err := Apply(op, tree)
+	return err == nil
 }
 
 // ── Narrowing helpers (the decoded op fields are typed Value) ───────────────
@@ -495,6 +496,9 @@ func applyUpdateProp(fields map[string]wire.Value, root wire.Node) (wire.Node, *
 		case outcomeNotSupported:
 			return root, apErr(CodePathNotSupportedYet, fmt.Sprintf(
 				"Path '%s' on node '%s' is not yet supported by the apply engine.", path, target))
+		case outcomeOverLimit:
+			return root, apErr(CodeLimitExceeded, fmt.Sprintf(
+				"UpdateProp value for '%s' on '%s' is past a wire limit: %s", path, target, outcome.detail))
 		default:
 			return root, apErr(CodeKindMismatch, fmt.Sprintf(
 				"UpdateProp value for '%s' on '%s' does not match the field's expected type: %s",

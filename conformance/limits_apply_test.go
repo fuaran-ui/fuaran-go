@@ -16,7 +16,8 @@ import (
 // (Phase 2141): an op that can grow the tree is checked on its result, and one
 // that takes the tree past a wire limit is refused with LimitExceeded. The same
 // runner certifies apply/duplicate-ids-apply.json (Phase 2172) and
-// apply/style-normalise-apply.json (Phase 2313). Each vector's tree and op are
+// apply/style-normalise-apply.json (Phase 2313) and apply/update-prop-apply.json
+// (Phase 1925), and checks CanApply against Apply on every vector. Each vector's tree and op are
 // decoded by this host's own decoder and applied; an accepting vector that pins
 // `expected.tree` also requires the applied tree to re-encode to those bytes.
 
@@ -44,6 +45,12 @@ func TestDuplicateIdsApplyCorpus(t *testing.T) { certifyApplyFamily(t, "duplicat
 // family (Phase 2313): a style result equal to the default record is stored as
 // the absent slot, so the applied tree encodes with no `style` member.
 func TestStyleNormaliseApplyCorpus(t *testing.T) { certifyApplyFamily(t, "styleNormaliseApply") }
+
+// TestUpdatePropApplyCorpus certifies the apply/update-prop-apply.json family
+// (Phase 1925): an UpdateProp value is read through the decoder's own field
+// rules - the 7.1 integer slot, the 21.9 row bound, omission at a declared
+// default.
+func TestUpdatePropApplyCorpus(t *testing.T) { certifyApplyFamily(t, "updatePropApply") }
 
 // certifyApplyFamily decodes and applies every vector of one apply/ family.
 func certifyApplyFamily(t *testing.T, familyID string) {
@@ -87,6 +94,10 @@ func certifyApplyFamily(t *testing.T, familyID string) {
 				t.Fatalf("the op did not decode: %v", err)
 			}
 			applied, applyErr := ops.Apply(op, tree)
+			// The dry-run law (Phase 1925): CanApply answers exactly what Apply does.
+			if can := ops.CanApply(op, tree); can != (applyErr == nil) {
+				t.Fatalf("CanApply = %v, but Apply returned %v", can, applyErr)
+			}
 			switch v.Expected.Verdict {
 			case "accept":
 				if applyErr != nil {

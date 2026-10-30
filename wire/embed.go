@@ -75,3 +75,31 @@ func DecodeNodeValue(raw any) (node Node, err error) {
 func ValueFromParsed(raw any) Value {
 	return fromJSON(raw)
 }
+
+// Field rules for the write path (Phase 1925). An apply engine that writes a
+// value into a kind field reads it through the SAME rule the decoder reads the
+// member with, so an UpdateProp admits exactly what a decode admits. Each takes
+// a decoded wire Value, re-reads its canonical bytes, and returns the value in
+// the decoder's form or a *DecodeError carrying the decoder's own code.
+
+// DecodeIntSlot reads v through the §7.1 integer-slot rule: a finite integral
+// number inside the signed 32-bit range, whatever its spelling (3.0 is the
+// integer 3). A fractional, non-finite or out-of-range value is WRONG_TYPE.
+func DecodeIntSlot(v Value) (Value, error) {
+	return readThrough(decodeInt, v)
+}
+
+// DecodeSkeletonRows reads v as `Skeleton.rows`: §7.1 first, then the §21.9
+// bound, which a breach answers with LIMIT_EXCEEDED.
+func DecodeSkeletonRows(v Value) (Value, error) {
+	return readThrough(decodeSkeletonRows, v)
+}
+
+func readThrough(dec fieldDecoder, v Value) (out Value, err error) {
+	text, encErr := encodeValue(v)
+	if encErr != nil {
+		return nil, &DecodeError{Code: CodeWrongType, Path: "$value", Message: encErr.Error()}
+	}
+	defer recoverDecode(&err)
+	return dec(nil, parseJSON(text), "$value"), nil
+}
