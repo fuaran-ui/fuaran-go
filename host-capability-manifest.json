@@ -84,6 +84,12 @@
     "merge-conformance": "covered",
     "node-round-trip": "covered",
     "op-round-trip": "covered",
+    "operability": {
+      "pending": "the operability family (WIRE_FORMAT section 31: affordances, derivation, resolution) lands with fuaran#2517; this host decodes the affordance member leniently and does not yet run the family"
+    },
+    "page-document": {
+      "notApplicable": "this host renders no stored page"
+    },
     "reject": "covered",
     "repair": {
       "pending": "this host has no §28 repair function yet"
@@ -99,9 +105,6 @@
     },
     "teleport-reject": {
       "pending": "the teleport package is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures"
-    },
-    "operability": {
-      "pending": "the operability family (WIRE_FORMAT section 31: affordances, derivation, resolution) lands with fuaran#2517; this host decodes the affordance member leniently and does not yet run the family"
     }
   },
   "tokens": [
@@ -150,6 +153,14 @@
     "Action.SetState.valueFrom",
     "Action.WriteToClipboard",
     "Action.WriteToClipboard.text",
+    "Affordance.aliases",
+    "Affordance.clearable",
+    "Affordance.description",
+    "Affordance.neverControllable",
+    "Affordance.patterns",
+    "Affordance.readPatterns",
+    "AffordanceAlias.alias",
+    "AffordanceAlias.value",
     "Binding.Computed",
     "Binding.Computed.fn",
     "Binding.Expr",
@@ -339,6 +350,7 @@
     "FilterSpec.kind",
     "FilterSpec.label",
     "FilterSpec.name",
+    "FormField.affordance",
     "FormField.help",
     "FormField.id",
     "FormField.kind",
@@ -478,6 +490,7 @@
     "Kind.Box.layout",
     "Kind.Box.role",
     "Kind.Button",
+    "Kind.Button.affordance",
     "Kind.Button.disabled",
     "Kind.Button.icon",
     "Kind.Button.label",
@@ -685,6 +698,7 @@
     "Kind.ScrollArea.maxWidth",
     "Kind.ScrollArea.orientation",
     "Kind.Select",
+    "Kind.Select.affordance",
     "Kind.Select.disabled",
     "Kind.Select.label",
     "Kind.Select.multiple",

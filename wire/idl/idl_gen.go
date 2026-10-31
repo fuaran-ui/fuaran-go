@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "08ca738ed16bd740e160879588ee8aa778a2d6724beffc08126fedf462d47019"
+const SourceSHA256 = "6c868d199afb85263b42344ce1930b1604dd6abf3a209dfab1d4267e081a47f3"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -29,6 +29,7 @@ var (
 		{Name: "icon", Optionality: Optional, Type: Type{Kind: TStr}},
 		{Name: "tooltip", Optionality: HostOnly, Type: Type{Kind: TFn, Wire: "<closure>"}},
 		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
+		{Name: "affordance", Optionality: Optional, Type: Type{Kind: TRecord, Name: "Affordance"}},
 	}}
 	KindCallout = Kind{Tag: "Callout", Category: "Display", Fields: []Field{
 		{Name: "body", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
@@ -271,6 +272,7 @@ var (
 		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
 		{Name: "multiple", Optionality: Optional, Type: Type{Kind: TBool}},
 		{Name: "values", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TList, Elem: &Type{Kind: TStr}}}}},
+		{Name: "affordance", Optionality: Optional, Type: Type{Kind: TRecord, Name: "Affordance"}},
 	}}
 	KindSkeleton = Kind{Tag: "Skeleton", Category: "Display", Fields: []Field{
 		{Name: "rows", Optionality: Required, Type: Type{Kind: TInt}},
@@ -921,6 +923,18 @@ var (
 		{Name: "role", Optionality: Optional, Type: Type{Kind: THosted, Wire: "json"}},
 		{Name: "speak", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
 	}}
+	RecordAffordance = Record{Name: "Affordance", Fields: []Field{
+		{Name: "patterns", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TStr}}},
+		{Name: "readPatterns", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TStr}}},
+		{Name: "aliases", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "AffordanceAlias"}}},
+		{Name: "description", Optionality: Optional, Type: Type{Kind: TStr}},
+		{Name: "clearable", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
+		{Name: "neverControllable", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
+	}}
+	RecordAffordanceAlias = Record{Name: "AffordanceAlias", Fields: []Field{
+		{Name: "alias", Optionality: Required, Type: Type{Kind: TStr}},
+		{Name: "value", Optionality: Required, Type: Type{Kind: TStr}},
+	}}
 	RecordButtonGroupItem = Record{Name: "ButtonGroupItem", Fields: []Field{
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "onClick", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
@@ -993,6 +1007,7 @@ var (
 		{Name: "required", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
 		{Name: "help", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "rule", Optionality: Optional, Type: Type{Kind: TRecord, Name: "FieldRule"}},
+		{Name: "affordance", Optionality: Optional, Type: Type{Kind: TRecord, Name: "Affordance"}},
 	}}
 	RecordGuestChannel = Record{Name: "GuestChannel", Fields: []Field{
 		{Name: "direction", Optionality: Required, Type: Type{Kind: TEnum, Name: "ChannelDirection"}},
@@ -1160,7 +1175,7 @@ var Enums = []*Enum{&EnumBadgeVariant, &EnumBoxRole, &EnumButtonVariant, &EnumCa
 var Unions = []*Union{&UnionAction, &UnionBinding, &UnionBoxLayout, &UnionCallResultTarget, &UnionCellFormat, &UnionCellKindErased, &UnionChartAnnotation, &UnionChartAnnotationRange, &UnionChartAnnotationX, &UnionColumnWidth, &UnionCurveCommand, &UnionFormFieldKind, &UnionFormat, &UnionFragmentArg, &UnionHoleDecl, &UnionHoleValueSpace, &UnionLocalFlushTrigger, &UnionLocaleSource, &UnionMediaKind, &UnionScalar, &UnionShape, &UnionTextSource}
 
 // Records is every record row, in idl.json order.
-var Records = []*Record{&RecordAccessibility, &RecordButtonGroupItem, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordMetricComparison, &RecordRangePair, &RecordSelectOption, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
+var Records = []*Record{&RecordAccessibility, &RecordAffordance, &RecordAffordanceAlias, &RecordButtonGroupItem, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordMetricComparison, &RecordRangePair, &RecordSelectOption, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
 
 // Ops is every TreeOp row, in idl.json order.
 var Ops = []*Op{&OpBatch, &OpEditNode, &OpInsertChild, &OpMoveNode, &OpPatchStyle, &OpRemoveNode, &OpReorderChildren, &OpReplaceBinding, &OpReplaceRoot, &OpUpdateProp, &OpUpdateState, &OpUpdateStyle}
