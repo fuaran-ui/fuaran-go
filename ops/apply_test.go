@@ -305,3 +305,65 @@ func TestPatchStyle(t *testing.T) {
 		}
 	})
 }
+
+// Phase 2527 — the two trait ops replace their slot, and each has a spelling that
+// removes it.
+func TestTraitOps(t *testing.T) {
+	apply := func(t *testing.T, op, tree string) string {
+		t.Helper()
+		decodedOp, err := wire.DecodeOp(op)
+		if err != nil {
+			t.Fatalf("DecodeOp: %v", err)
+		}
+		node, err := wire.DecodeNode(tree)
+		if err != nil {
+			t.Fatalf("DecodeNode: %v", err)
+		}
+		after, applyErr := Apply(decodedOp, node)
+		if applyErr != nil {
+			t.Fatalf("Apply: %v", applyErr)
+		}
+		got, err := wire.EncodeNode(after)
+		if err != nil {
+			t.Fatalf("EncodeNode: %v", err)
+		}
+		return got
+	}
+	const plain = `{"id":"m","kind":{"$type":"Markdown","text":"x"}}`
+	const trait = `{"accessibility":{"describedBy":"h"},"id":"m","kind":{"$type":"Markdown","text":"x"}}`
+	const hinted = `{"id":"m","kind":{"$type":"Markdown","text":"x"},"tooltip":"t"}`
+
+	cases := []struct{ name, op, tree, want string }{
+		{"set accessibility", `{"$type":"UpdateAccessibility","accessibility":{"describedBy":"h"},"target":"m"}`, plain, trait},
+		{"replace, not merge", `{"$type":"UpdateAccessibility","accessibility":{"labelledBy":"l"},"target":"m"}`, trait,
+			`{"accessibility":{"labelledBy":"l"},"id":"m","kind":{"$type":"Markdown","text":"x"}}`},
+		{"an empty record removes the trait", `{"$type":"UpdateAccessibility","accessibility":{},"target":"m"}`, trait, plain},
+		{"set tooltip", `{"$type":"UpdateTooltip","target":"m","tooltip":"t"}`, plain, hinted},
+		{"an absent member clears it", `{"$type":"UpdateTooltip","target":"m"}`, hinted, plain},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := apply(t, c.op, c.tree); got != c.want {
+				t.Errorf("got %s\nwant %s", got, c.want)
+			}
+		})
+	}
+
+	node, err := wire.DecodeNode(plain)
+	if err != nil {
+		t.Fatalf("DecodeNode: %v", err)
+	}
+	for _, raw := range []string{
+		`{"$type":"UpdateAccessibility","accessibility":{},"target":"ghost"}`,
+		`{"$type":"UpdateTooltip","target":"ghost"}`,
+	} {
+		op, err := wire.DecodeOp(raw)
+		if err != nil {
+			t.Fatalf("DecodeOp: %v", err)
+		}
+		var refused *ApplyError
+		if _, applyErr := Apply(op, node); !errors.As(applyErr, &refused) || refused.Code != CodeNodeNotFound {
+			t.Errorf("%s: want NodeNotFound, got %v", raw, applyErr)
+		}
+	}
+}

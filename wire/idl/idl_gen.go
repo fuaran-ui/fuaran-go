@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "6c868d199afb85263b42344ce1930b1604dd6abf3a209dfab1d4267e081a47f3"
+const SourceSHA256 = "3d7b02a648d9b15cfd67622ede39e11272f227893097986a786bd2b86e825a8c"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -1138,6 +1138,10 @@ var (
 	OpReplaceRoot = Op{Tag: "ReplaceRoot", Fields: []Field{
 		{Name: "node", Optionality: Required, Type: Type{Kind: TNode}},
 	}}
+	OpUpdateAccessibility = Op{Tag: "UpdateAccessibility", Fields: []Field{
+		{Name: "accessibility", Optionality: Required, Type: Type{Kind: TRecord, Name: "Accessibility"}},
+		{Name: "target", Optionality: Required, Type: Type{Kind: TStr}},
+	}}
 	OpUpdateProp = Op{Tag: "UpdateProp", Fields: []Field{
 		{Name: "path", Optionality: Required, Type: Type{Kind: TStr}},
 		{Name: "target", Optionality: Required, Type: Type{Kind: TStr}},
@@ -1150,6 +1154,10 @@ var (
 	OpUpdateStyle = Op{Tag: "UpdateStyle", Fields: []Field{
 		{Name: "style", Optionality: Required, Type: Type{Kind: TRecord, Name: "SemanticStyle"}},
 		{Name: "target", Optionality: Required, Type: Type{Kind: TStr}},
+	}}
+	OpUpdateTooltip = Op{Tag: "UpdateTooltip", Fields: []Field{
+		{Name: "target", Optionality: Required, Type: Type{Kind: TStr}},
+		{Name: "tooltip", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
 	}}
 )
 
@@ -1178,4 +1186,4 @@ var Unions = []*Union{&UnionAction, &UnionBinding, &UnionBoxLayout, &UnionCallRe
 var Records = []*Record{&RecordAccessibility, &RecordAffordance, &RecordAffordanceAlias, &RecordButtonGroupItem, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordMetricComparison, &RecordRangePair, &RecordSelectOption, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
 
 // Ops is every TreeOp row, in idl.json order.
-var Ops = []*Op{&OpBatch, &OpEditNode, &OpInsertChild, &OpMoveNode, &OpPatchStyle, &OpRemoveNode, &OpReorderChildren, &OpReplaceBinding, &OpReplaceRoot, &OpUpdateProp, &OpUpdateState, &OpUpdateStyle}
+var Ops = []*Op{&OpBatch, &OpEditNode, &OpInsertChild, &OpMoveNode, &OpPatchStyle, &OpRemoveNode, &OpReorderChildren, &OpReplaceBinding, &OpReplaceRoot, &OpUpdateAccessibility, &OpUpdateProp, &OpUpdateState, &OpUpdateStyle, &OpUpdateTooltip}

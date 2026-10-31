@@ -20,14 +20,15 @@
 // accessibility). It favours a localised edit over replacing the whole tree,
 // but never at the cost of correctness.
 //
-// A style change is the one granular facet (Phase 2314, the reference engine's
-// rule since Phase 2291): when a matched node differs from its counterpart in
-// its style and nothing else of its own, the diff emits the style edit —
-// PatchStyle naming exactly the members that moved, the whole-record
-// UpdateStyle only when all six did — instead of the replace, and a layout
-// node's children are then recursed as usual. Every host's diff records a
-// restyle as the same op, so two restyles of different members of one node
-// carry disjoint member sets wherever they were recorded.
+// The style and the two traits are the granular facets (Phase 2314, the
+// reference engine's rule since Phase 2291, and Phase 2527): when a matched node
+// differs from its counterpart in those and nothing else of its own, the diff
+// emits their edits instead of the replace — PatchStyle naming exactly the
+// members that moved, the whole-record UpdateStyle only when all six did, then
+// UpdateAccessibility and UpdateTooltip — and a layout node's children are then
+// recursed as usual. Every host's diff records these edits as the same ops, so
+// two restyles of different members of one node carry disjoint member sets
+// wherever they were recorded.
 //
 // The recursion descends through the kinds the apply engine addresses
 // structurally — the kinds whose generated idl.json table carries an ordered
@@ -103,17 +104,20 @@ func ownContentSame(a, b wire.Node) bool {
 	return encode(stripStructuralChildren(a)) == encode(stripStructuralChildren(b))
 }
 
-// withStyleOf returns n carrying src's style slot (absent when src's is), so
-// comparing it against src isolates every difference that is NOT the style.
-func withStyleOf(n, src wire.Node) wire.Node {
-	extras := make(map[string]wire.Value, len(n.Extras)+1)
+// withFacetsOf returns n carrying src's style and trait slots (each absent when
+// src's is), so comparing it against src isolates every difference that is NOT
+// a granular facet.
+func withFacetsOf(n, src wire.Node) wire.Node {
+	extras := make(map[string]wire.Value, len(n.Extras)+3)
 	for k, v := range n.Extras {
 		extras[k] = v
 	}
-	if style, ok := src.Extras["style"]; ok {
-		extras["style"] = style
-	} else {
-		delete(extras, "style")
+	for _, slot := range []string{"style", "accessibility", "tooltip"} {
+		if v, ok := src.Extras[slot]; ok {
+			extras[slot] = v
+		} else {
+			delete(extras, slot)
+		}
 	}
 	return wire.Node{ID: n.ID, Kind: n.Kind, Extras: extras}
 }
@@ -171,6 +175,39 @@ func styleEdit(a, b wire.Node) []wire.Obj {
 	}
 }
 
+// accessibilityRecord is a node's accessibility trait, an absent slot reading as
+// the empty record: the two are one trait, as the apply engine stores it.
+func accessibilityRecord(n wire.Node) wire.Obj {
+	record, _ := n.Extras["accessibility"].(wire.Obj)
+	return wire.Obj{Fields: record.Fields}
+}
+
+// traitEdits is the ops taking a's two traits to b's, each only when it moved.
+func traitEdits(a, b wire.Node) []wire.Obj {
+	var edits []wire.Obj
+	if after := accessibilityRecord(b); !sameValue(accessibilityRecord(a), after) {
+		edits = append(edits, wire.Obj{Tag: "UpdateAccessibility", Fields: map[string]wire.Value{
+			"accessibility": after,
+			"target":        wire.Str(b.ID),
+		}})
+	}
+	before, hadTooltip := a.Extras["tooltip"]
+	after, hasTooltip := b.Extras["tooltip"]
+	if hadTooltip != hasTooltip || (hasTooltip && !sameValue(before, after)) {
+		fields := map[string]wire.Value{"target": wire.Str(b.ID)}
+		if hasTooltip {
+			fields["tooltip"] = after
+		}
+		edits = append(edits, wire.Obj{Tag: "UpdateTooltip", Fields: fields})
+	}
+	return edits
+}
+
+// facetEdits is the style edit, then the trait edits.
+func facetEdits(a, b wire.Node) []wire.Obj {
+	return append(styleEdit(a, b), traitEdits(a, b)...)
+}
+
 // ── op constructors (the decoded wire.Obj form ops.Apply consumes) ───────────
 
 func replaceRoot(node wire.Node) wire.Obj {
@@ -223,20 +260,20 @@ func diffNode(a, b wire.Node, parent *seat, script *[]wire.Obj) {
 	if encode(a) == encode(b) {
 		return // identical subtree — nothing to do
 	}
-	// a restyled to b's style: what still differs from b is everything else.
-	restyled := withStyleOf(a, b)
-	if encode(restyled) == encode(b) {
-		*script = append(*script, styleEdit(a, b)...) // the style is the only difference
+	// a given b's style and traits: what still differs from b is everything else.
+	faceted := withFacetsOf(a, b)
+	if encode(faceted) == encode(b) {
+		*script = append(*script, facetEdits(a, b)...) // the facets are the only difference
 		return
 	}
 	ak, aOK := structuralChildren(a)
 	bk, bOK := structuralChildren(b)
 	// Recurse only when both sides are layout kinds, their own content is
-	// unchanged but for the style, and their children line up id-for-id in
+	// unchanged but for the facets, and their children line up id-for-id in
 	// order — every other difference (kind change, state drift, insert / remove
 	// / reorder) escalates to a whole-node replace at this seat.
-	if aOK && bOK && ownContentSame(restyled, b) && sameChildIDs(ak, bk) {
-		*script = append(*script, styleEdit(a, b)...)
+	if aOK && bOK && ownContentSame(faceted, b) && sameChildIDs(ak, bk) {
+		*script = append(*script, facetEdits(a, b)...)
 		for i := range ak {
 			child := seat{parentID: a.ID, position: i, siblingIDs: childIDs(bk)}
 			diffNode(ak[i], bk[i], &child, script)

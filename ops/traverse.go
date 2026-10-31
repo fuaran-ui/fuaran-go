@@ -33,6 +33,17 @@ func setExtra(n wire.Node, key string, value wire.Value) wire.Node {
 	return wire.Node{ID: n.ID, Kind: n.Kind, Extras: extras}
 }
 
+// dropExtra returns n without the envelope slot key.
+func dropExtra(n wire.Node, key string) wire.Node {
+	extras := make(map[string]wire.Value, len(n.Extras))
+	for k, v := range n.Extras {
+		if k != key {
+			extras[k] = v
+		}
+	}
+	return wire.Node{ID: n.ID, Kind: n.Kind, Extras: extras}
+}
+
 func setStateChild(n wire.Node, key string, child wire.Node) wire.Node {
 	fields := make(map[string]wire.Value)
 	if state, ok := n.Extras["state"].(wire.Obj); ok {

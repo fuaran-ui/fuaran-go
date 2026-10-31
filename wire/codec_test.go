@@ -228,6 +228,10 @@ func TestPatchStyleRoundTrip(t *testing.T) {
 		`{"$type":"PatchStyle","style":{"tone":"Default"},"target":"metric-1"}`,
 		`{"$type":"PatchStyle","style":{"direction":"auto","emphasis":"Normal","role":"None","tone":"Default","voice":"Default","weight":"Standard"},"target":"metric-1"}`,
 		`{"$type":"Batch","ops":[{"$type":"PatchStyle","style":{"weight":"Spacious"},"target":"a"}]}`,
+		`{"$type":"UpdateAccessibility","accessibility":{"describedBy":"h","role":"status"},"target":"a"}`,
+		`{"$type":"UpdateAccessibility","accessibility":{},"target":"a"}`,
+		`{"$type":"UpdateTooltip","target":"a","tooltip":"Updated nightly."}`,
+		`{"$type":"UpdateTooltip","target":"a"}`,
 	} {
 		op, err := DecodeOp(in)
 		if err != nil {

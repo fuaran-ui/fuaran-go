@@ -29,8 +29,8 @@ import (
 // stacks two depths that each passed. A Batch is checked when any member is.
 //
 // The rest cannot grow the tree and are not charged a walk: UpdateProp,
-// ReplaceBinding, UpdateStyle and PatchStyle carry no node, RemoveNode shrinks, and
-// ReorderChildren permutes. They still apply to a tree that is already over a
+// ReplaceBinding, UpdateStyle, PatchStyle, UpdateAccessibility and UpdateTooltip
+// carry no node, RemoveNode shrinks, and ReorderChildren permutes. They still apply to a tree that is already over a
 // limit, which they did not put there.
 
 // CodeLimitExceeded — the applied tree breaches a §21 wire limit. Named the
