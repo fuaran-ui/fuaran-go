@@ -64,6 +64,7 @@ var hostCorpusFamilies = map[string]any{
 	"design-seam-reject":        familyPending(noDesignSeamCodec),
 	"operability":               familyPending("the operability family (WIRE_FORMAT section 31: affordances, derivation, resolution) lands with fuaran#2517; this host decodes the affordance member leniently and does not yet run the family"),
 	"page-document":             familyNotApplicable("this host renders no stored page"),
+	"server-driven":             familyNotApplicable("this host neither produces nor applies a server-driven frame (WIRE_FORMAT section 33); only the reference host does today"),
 	"apply/duplicateIdsApply":   "covered",
 	"apply/limitsApply":         "covered",
 	"apply/styleNormaliseApply": "covered",
