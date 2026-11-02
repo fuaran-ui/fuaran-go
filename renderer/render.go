@@ -1995,7 +1995,7 @@ func (r *renderer) button(fields map[string]wire.Value, semanticAttrs []attr) st
 
 func (r *renderer) selectControl(fields map[string]wire.Value) string {
 	label := element("span", []attr{{"class", "fuaran-select-label"}}, escapeText(r.text(fields["label"])))
-	options := r.renderOptions(fields["source"], fields["placeholder"])
+	options := r.renderGroupedOptions(fields["source"], fields["placeholder"], fields["groups"])
 	selectAttrs := []attr{{"class", "fuaran-select-control"}}
 	// A multi-select emits the multiple attribute; a controlled
 	// <select multiple> rejects a scalar value, so none is emitted here.
@@ -2007,6 +2007,54 @@ func (r *renderer) selectControl(fields map[string]wire.Value) string {
 	}
 	control := element("select", selectAttrs, options)
 	return element("label", []attr{{"class", "fuaran-select"}}, label+control)
+}
+
+// renderGroupedOptions draws a Select's options under its Phase 2571 `groups`
+// (WIRE_FORMAT.md §3.6.30): the placeholder first, then one <optgroup label> per
+// group in list order holding the options it names in `source` order, then the
+// options no group names. No groups: renderOptions exactly.
+func (r *renderer) renderGroupedOptions(source, placeholder, groups wire.Value) string {
+	gs, _ := groups.(wire.Arr)
+	if len(gs) == 0 {
+		return r.renderOptions(source, placeholder)
+	}
+	var items strings.Builder
+	if placeholder != nil {
+		items.WriteString(textElement("option", []attr{{"value", ""}}, r.text(placeholder)))
+	}
+	resolved, _ := r.resolve(source).(wire.Arr)
+	option := func(opt wire.Obj) string {
+		value := strValue(opt.Fields["value"])
+		labelText := value
+		if label, ok := opt.Fields["label"]; ok {
+			labelText = r.text(label)
+		}
+		return textElement("option", []attr{{"value", value}}, labelText)
+	}
+	named := map[string]bool{}
+	for _, g := range gs {
+		group, _ := g.(wire.Obj)
+		members := map[string]bool{}
+		if values, ok := group.Fields["values"].(wire.Arr); ok {
+			for _, v := range values {
+				members[strValue(v)] = true
+				named[strValue(v)] = true
+			}
+		}
+		var inner strings.Builder
+		for _, opt := range resolved {
+			if o, ok := opt.(wire.Obj); ok && members[strValue(o.Fields["value"])] {
+				inner.WriteString(option(o))
+			}
+		}
+		items.WriteString(element("optgroup", []attr{{"label", strValue(group.Fields["label"])}}, inner.String()))
+	}
+	for _, opt := range resolved {
+		if o, ok := opt.(wire.Obj); ok && !named[strValue(o.Fields["value"])] {
+			items.WriteString(option(o))
+		}
+	}
+	return items.String()
 }
 
 func (r *renderer) renderOptions(source, placeholder wire.Value) string {

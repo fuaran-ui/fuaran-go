@@ -3852,7 +3852,70 @@ func (handArms) armSelect(w *walkState, obj map[string]any, path string) Obj {
 	s.field("multiple", decodeBool)
 	s.field("values", decodeBindingStringList)
 	s.sentinel("onChangeMulti")
-	return s.build("Select")
+	o := s.build("Select")
+	checkSelectGroups(o, path)
+	return o
+}
+
+// checkSelectGroups applies the Phase 2571 option-group refusals (WIRE_FORMAT.md
+// §3.6.30), both WRONG_TYPE at the offending `values` element: a value named more
+// than once (by two groups, or twice by one), and — over STATIC options only — a
+// value naming no option. A bound source resolves at render, where the decoder
+// cannot judge it. `groups` itself is read from its IDL row (omit-at-default).
+func checkSelectGroups(o Obj, path string) {
+	groups, ok := o.Fields["groups"].(Arr)
+	if !ok || len(groups) == 0 {
+		return
+	}
+	var known map[string]bool
+	if src, ok := o.Fields["source"].(Obj); ok && src.Tag == "Static" {
+		known = map[string]bool{}
+		if opts, ok := src.Fields["value"].(Arr); ok {
+			for _, opt := range opts {
+				if rec, ok := opt.(Obj); ok {
+					if v, ok := rec.Fields["value"].(Str); ok {
+						if string(v) == opaqueSentinel {
+							known = nil
+							break
+						}
+						known[string(v)] = true
+					}
+				}
+			}
+		}
+	}
+	type naming struct {
+		group int
+		label string
+	}
+	seen := map[string]naming{}
+	for gi, g := range groups {
+		rec, _ := g.(Obj)
+		label, _ := rec.Fields["label"].(Str)
+		values, _ := rec.Fields["values"].(Arr)
+		for vi, raw := range values {
+			v, _ := raw.(Str)
+			value := string(v)
+			at := fmt.Sprintf("%s.groups[%d].values[%d]", path, gi, vi)
+			if first, dup := seen[value]; dup {
+				failExpecting(CodeWrongType, at,
+					fmt.Sprintf("option value '%s' is already named by group %d ('%s'): an option belongs to at most one group",
+						value, first.group, first.label),
+					"a value no other group (and no earlier entry of this group) names")
+			}
+			if known != nil && !known[value] {
+				names := make([]string, 0, len(known))
+				for k := range known {
+					names = append(names, "'"+k+"'")
+				}
+				sort.Strings(names)
+				failExpecting(CodeWrongType, at,
+					fmt.Sprintf("option value '%s' names no option of this Select: a group can only gather the options its Select carries", value),
+					"the value of one of this Select's options: "+strings.Join(names, ", "))
+			}
+			seen[value] = naming{gi, string(label)}
+		}
+	}
 }
 
 // onDismiss is optional and — unlike the closure-sentinel handlers — a
