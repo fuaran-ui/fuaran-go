@@ -383,9 +383,7 @@ func TestFactProps(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if got, want := mustEncode(t, after), fact(`"icon":"star",`); got != want {
-		t.Errorf("icon not set:
- got %s
-want %s", got, want)
+		t.Errorf("icon not set:\n got %s\nwant %s", got, want)
 	}
 	after, err = Apply(set("Reference", "fact:a"), mustDecode(t, fact("")))
 	if err != nil {
@@ -393,8 +391,6 @@ want %s", got, want)
 	}
 	want := `{"id":"f","kind":{"$type":"Fact","label":"Revenue","reference":"fact:a","value":"1"}}`
 	if got := mustEncode(t, after); got != want {
-		t.Errorf("reference not set:
- got %s
-want %s", got, want)
+		t.Errorf("reference not set:\n got %s\nwant %s", got, want)
 	}
 }
