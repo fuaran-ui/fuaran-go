@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "514121018ffc157776d234c63295c8686f399d42a55f589a2756fe3974968f18"
+const SourceSHA256 = "3ce196fda6ce09924bd2a9f38c97c2a0c4492e99411169fbccaeff8c66d73b33"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -122,6 +122,7 @@ var (
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "tone", Optionality: OmitDefault, Default: "\"Default\"", Type: Type{Kind: TEnum, Name: "ToneVariant"}},
 		{Name: "value", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
+		{Name: "reference", Optionality: Optional, Type: Type{Kind: TStr}},
 	}}
 	KindFileUpload = Kind{Tag: "FileUpload", Category: "Input", Fields: []Field{
 		{Name: "accept", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TStr}}},

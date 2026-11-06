@@ -1120,7 +1120,12 @@ func (r *renderer) fact(fields map[string]wire.Value) string {
 	if help, ok := fields["help"]; ok {
 		parts.WriteString(textElement("div", []attr{{"class", "fuaran-fact-help"}}, r.text(help)))
 	}
-	return element("div", []attr{{"class", "fuaran-fact fuaran-fact-" + tone + emphasis}}, parts.String())
+	attrs := []attr{{"class", "fuaran-fact fuaran-fact-" + tone + emphasis}}
+	if reference, ok := fields["reference"].(wire.Str); ok {
+		// WIRE_FORMAT 3.6.31 — the citation, through the ordinary attribute encoder.
+		attrs = append(attrs, attr{"data-fact", string(reference)})
+	}
+	return element("div", attrs, parts.String())
 }
 
 func lowerEnum(v wire.Value, def string) string {
