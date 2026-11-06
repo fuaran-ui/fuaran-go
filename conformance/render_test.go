@@ -30,6 +30,12 @@ type markdownFixture struct {
 	// (WIRE_FORMAT.md §14.1). Absent means permissive — the pure source → html
 	// function this corpus has always pinned.
 	Policy string `json:"policy"`
+	// Citations are the figures the text cites (WIRE_FORMAT.md §3.6.32).
+	Citations []struct {
+		Name      string `json:"name"`
+		Reference string `json:"reference"`
+		Label     string `json:"label"`
+	} `json:"citations"`
 }
 
 type markdownCorpus struct {
@@ -87,14 +93,18 @@ func TestMarkdownCorpus(t *testing.T) {
 		}
 		t.Run(fx.ID, func(t *testing.T) {
 			policy := egressPolicyFor(t, fx.Policy)
-			got := renderer.MarkdownToHTMLWithEgress(policy, fx.Source)
+			citations := make([]renderer.Citation, len(fx.Citations))
+			for i, c := range fx.Citations {
+				citations[i] = renderer.Citation{Name: c.Name, Reference: c.Reference, Label: c.Label}
+			}
+			got := renderer.MarkdownToHTMLCited(policy, citations, fx.Source)
 			if got != fx.HTML {
 				t.Errorf("render diverged: %s", firstDiff(got, fx.HTML))
 			}
 			// The pure function IS the permissive case, and this is what pins
 			// it: wherever the fixture's policy is permissive, MarkdownToHTML
 			// must reproduce the same bytes.
-			if policyIsPermissive(fx.Policy) {
+			if policyIsPermissive(fx.Policy) && len(fx.Citations) == 0 {
 				if pure := renderer.MarkdownToHTML(fx.Source); pure != got {
 					t.Errorf("MarkdownToHTML is not the permissive case of MarkdownToHTMLWithEgress: %s",
 						firstDiff(pure, got))
@@ -119,11 +129,15 @@ func policyIsPermissive(name string) bool { return name == "" || name == "permis
 // ambient leg's whole claim is about what happens to a DECODED tree, so a
 // hand-built struct that never met the codec would be testing a different
 // posture from the one being asserted.
-func markdownNode(t *testing.T, source string) wire.Node {
+func markdownNode(t *testing.T, source string, citations ...wire.Value) wire.Node {
 	t.Helper()
+	fields := map[string]wire.Value{"text": wire.Str(source)}
+	if len(citations) > 0 {
+		fields["citations"] = wire.Arr(citations)
+	}
 	built := wire.Node{
 		ID:   "md",
-		Kind: wire.Obj{Tag: "Markdown", Fields: map[string]wire.Value{"text": wire.Str(source)}},
+		Kind: wire.Obj{Tag: "Markdown", Fields: fields},
 	}
 	canonical, err := wire.EncodeNode(built)
 	if err != nil {
@@ -164,7 +178,15 @@ func TestMarkdownCorpusAmbient(t *testing.T) {
 	ambientDefault := 0
 	for _, fx := range m.Fixtures {
 		t.Run(fx.ID, func(t *testing.T) {
-			node := markdownNode(t, fx.Source)
+			var citations []wire.Value
+			for _, c := range fx.Citations {
+				entry := map[string]wire.Value{"name": wire.Str(c.Name), "reference": wire.Str(c.Reference)}
+				if c.Label != "" {
+					entry["label"] = wire.Str(c.Label)
+				}
+				citations = append(citations, wire.Obj{Fields: entry})
+			}
+			node := markdownNode(t, fx.Source, citations...)
 			var html string
 			if fx.Policy == "denyNonLocal" {
 				// No policy named — the ambient default IS denyNonLocal.

@@ -3501,8 +3501,57 @@ func (handArms) armHeading(w *walkState, obj map[string]any, path string) Obj {
 	return s.build("Heading")
 }
 
+// decodeCitationName — what a cite:<name> destination can say without escaping
+// (WIRE_FORMAT.md §3.6.32).
+func decodeCitationName(w *walkState, raw any, path string) Value {
+	s := expectString(raw, path)
+	valid := s != ""
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			valid = false
+		}
+	}
+	if !valid {
+		fail(CodeWrongType, path, "expected a citation name of letters, digits, '-' and '_' at "+path)
+	}
+	return Str(s)
+}
+
+func decodeMarkdownCitation(w *walkState, raw any, path string) Obj {
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordMarkdownCitation)
+	s.field("label", decodeTextSource)
+	s.field("name", decodeCitationName)
+	s.field("reference", decodeString)
+	return s.buildStrict("")
+}
+
+// decodeMarkdownCitations — Phase 2591. Absent is the one spelling of none, so an
+// empty array is refused rather than dropped, and a name may be used once. The
+// reference stays opaque, as on Fact.
+func decodeMarkdownCitations(w *walkState, raw any, path string) Value {
+	items := expectArray(raw, path)
+	if len(items) == 0 {
+		fail(CodeWrongType, path, "expected a non-empty citation list, or no member at all, at "+path)
+	}
+	seen := make(map[string]bool, len(items))
+	out := make(Arr, len(items))
+	for i, item := range items {
+		itemPath := path + "[" + strconv.Itoa(i) + "]"
+		entry := decodeMarkdownCitation(w, item, itemPath)
+		name, _ := entry.Fields["name"].(Str)
+		if seen[string(name)] {
+			fail(CodeWrongType, itemPath+".name", "expected a citation name no other citation in this list uses at "+itemPath+".name")
+		}
+		seen[string(name)] = true
+		out[i] = entry
+	}
+	return out
+}
+
 func (handArms) armMarkdown(w *walkState, obj map[string]any, path string) Obj {
 	s := newKindSpec(w, obj, path, &idl.KindMarkdown)
+	s.field("citations", decodeMarkdownCitations)
 	s.field("text", decodeTextSource)
 	return s.build("Markdown")
 }

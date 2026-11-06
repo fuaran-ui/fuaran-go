@@ -204,6 +204,16 @@ var propFields = map[string]map[string]fieldEntry{
 	"Markdown": {
 		"Text": {wireKey: "text", coerce: coerceTextSource},
 	},
+	// The row Phase 2535 left out: every other host's Fact takes these fields.
+	"Fact": {
+		"Label":     {wireKey: "label", coerce: coerceTextSource},
+		"Value":     {wireKey: "value", coerce: coerceTextSource},
+		"Tone":      {wireKey: "tone", coerce: coerceTone},
+		"Emphasis":  {wireKey: "emphasis", coerce: coerceBool},
+		"Help":      {wireKey: "help", coerce: coerceTextSource},
+		"Icon":      {wireKey: "icon", coerce: coerceString},
+		"Reference": {wireKey: "reference", coerce: coerceString},
+	},
 	"Badge": {
 		"Label":   {wireKey: "label", coerce: coerceTextSource},
 		"Variant": {wireKey: "variant", coerce: coerceBadgeVariant},

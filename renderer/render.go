@@ -988,8 +988,24 @@ func (r *renderer) heading(fields map[string]wire.Value) string {
 // is no longer reachable from a node render — a decoded markdown body is the
 // easiest place in the whole tree to hide an exfiltrating image.
 func (r *renderer) markdown(fields map[string]wire.Value) string {
+	var cited []Citation
+	if citations, ok := fields["citations"].(wire.Arr); ok {
+		for _, item := range citations {
+			entry, ok := item.(wire.Obj)
+			if !ok {
+				continue
+			}
+			name, _ := entry.Fields["name"].(wire.Str)
+			reference, _ := entry.Fields["reference"].(wire.Str)
+			citation := Citation{Name: string(name), Reference: string(reference)}
+			if label, ok := entry.Fields["label"]; ok {
+				citation.Label = r.text(label)
+			}
+			cited = append(cited, citation)
+		}
+	}
 	return element("div", []attr{{"class", "fuaran-markdown"}},
-		MarkdownToHTMLWithEgress(r.egress, r.text(fields["text"])))
+		MarkdownToHTMLCited(r.egress, cited, r.text(fields["text"])))
 }
 
 // metricValueText is the TEXT a Metric's numeric value slot reads — the

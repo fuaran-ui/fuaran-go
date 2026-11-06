@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "3ce196fda6ce09924bd2a9f38c97c2a0c4492e99411169fbccaeff8c66d73b33"
+const SourceSHA256 = "59b30bfa4b6bf50e0623f6672dc27a23170dead76c4cbda6c181bd7e6e704c59"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -205,6 +205,7 @@ var (
 		{Name: "onMarkerClick", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 	}}
 	KindMarkdown = Kind{Tag: "Markdown", Category: "Display", Fields: []Field{
+		{Name: "citations", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "MarkdownCitation"}}},
 		{Name: "text", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 	}}
 	KindMath = Kind{Tag: "Math", Category: "Display", Fields: []Field{
@@ -1024,6 +1025,11 @@ var (
 		{Name: "latitude", Optionality: Required, Type: Type{Kind: TFloat}},
 		{Name: "longitude", Optionality: Required, Type: Type{Kind: TFloat}},
 	}}
+	RecordMarkdownCitation = Record{Name: "MarkdownCitation", Fields: []Field{
+		{Name: "label", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
+		{Name: "name", Optionality: Required, Type: Type{Kind: TStr}},
+		{Name: "reference", Optionality: Required, Type: Type{Kind: TStr}},
+	}}
 	RecordMetricComparison = Record{Name: "MetricComparison", Fields: []Field{
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "value", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}},
@@ -1189,7 +1195,7 @@ var Enums = []*Enum{&EnumBadgeVariant, &EnumBoxRole, &EnumButtonVariant, &EnumCa
 var Unions = []*Union{&UnionAction, &UnionBinding, &UnionBoxLayout, &UnionCallResultTarget, &UnionCellFormat, &UnionCellKindErased, &UnionChartAnnotation, &UnionChartAnnotationRange, &UnionChartAnnotationX, &UnionColumnWidth, &UnionCurveCommand, &UnionFormFieldKind, &UnionFormat, &UnionFragmentArg, &UnionHoleDecl, &UnionHoleValueSpace, &UnionLocalFlushTrigger, &UnionLocaleSource, &UnionMediaKind, &UnionScalar, &UnionShape, &UnionTextSource}
 
 // Records is every record row, in idl.json order.
-var Records = []*Record{&RecordAccessibility, &RecordAffordance, &RecordAffordanceAlias, &RecordButtonGroupItem, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordMetricComparison, &RecordRangePair, &RecordSelectOption, &RecordSelectOptionGroup, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
+var Records = []*Record{&RecordAccessibility, &RecordAffordance, &RecordAffordanceAlias, &RecordButtonGroupItem, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordMarkdownCitation, &RecordMetricComparison, &RecordRangePair, &RecordSelectOption, &RecordSelectOptionGroup, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
 
 // Ops is every TreeOp row, in idl.json order.
 var Ops = []*Op{&OpBatch, &OpEditNode, &OpInsertChild, &OpMoveNode, &OpPatchStyle, &OpRemoveNode, &OpReorderChildren, &OpReplaceBinding, &OpReplaceRoot, &OpUpdateAccessibility, &OpUpdateProp, &OpUpdateState, &OpUpdateStyle, &OpUpdateTooltip}

@@ -367,3 +367,34 @@ func TestTraitOps(t *testing.T) {
 		}
 	}
 }
+
+// The row Phase 2535 left out: UpdateProp reaches a Fact's reference and icon.
+func TestFactProps(t *testing.T) {
+	fact := func(slot string) string {
+		return `{"id":"f","kind":{"$type":"Fact",` + slot + `"label":"Revenue",` + `"value":"1"}}`
+	}
+	set := func(path, value string) wire.Obj {
+		return wire.Obj{Tag: "UpdateProp", Fields: map[string]wire.Value{
+			"path": wire.Str(path), "target": wire.Str("f"), "value": wire.Str(value),
+		}}
+	}
+	after, err := Apply(set("Icon", "star"), mustDecode(t, fact("")))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got, want := mustEncode(t, after), fact(`"icon":"star",`); got != want {
+		t.Errorf("icon not set:
+ got %s
+want %s", got, want)
+	}
+	after, err = Apply(set("Reference", "fact:a"), mustDecode(t, fact("")))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	want := `{"id":"f","kind":{"$type":"Fact","label":"Revenue","reference":"fact:a","value":"1"}}`
+	if got := mustEncode(t, after); got != want {
+		t.Errorf("reference not set:
+ got %s
+want %s", got, want)
+	}
+}
