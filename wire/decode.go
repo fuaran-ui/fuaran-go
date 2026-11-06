@@ -3265,12 +3265,70 @@ func decodeGridPageSize(w *walkState, raw any, path string) Value {
 // Phase 801 optional sort-intent slots. Both omitted re-encodes byte-identically
 // to the pre-801 wire.
 func decodeStaticRows(w *walkState, raw any, path string) Value {
-	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordStaticRows)
+	obj := expectObject(raw, path)
+	s := newRecordSpec(w, obj, path, &idl.RecordStaticRows)
 	s.field("headers", decodeTextSourceArray)
 	s.field("rows", decodeStaticRowCells)
 	s.field("sortable", decodeBool)
 	s.field("defaultSort", decodeDefaultSort)
+	// Phase 2592 — read against the rows, so a bad row list is reported first.
+	s.field("citations", func(w *walkState, raw any, path string) Value {
+		rows, _ := obj["rows"].([]any)
+		return decodeTableCitations(w, raw, path, rows)
+	})
 	return s.buildStrict("")
+}
+
+// decodeTableCoordinate — a cited cell's row or column: a non-negative integer,
+// as the header index is.
+func decodeTableCoordinate(w *walkState, raw any, path string) Value {
+	index := expectInt(raw, path)
+	if index < 0 {
+		fail(CodeWrongType, path, "expected a non-negative integer index at "+path)
+	}
+	return Int(index)
+}
+
+func decodeTableCitation(w *walkState, raw any, path string) Obj {
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordTableCitation)
+	s.field("column", decodeTableCoordinate)
+	s.field("label", decodeTextSource)
+	s.field("reference", decodeString)
+	s.field("row", decodeTableCoordinate)
+	return s.buildStrict("")
+}
+
+// decodeTableCitations — Phase 2592 (WIRE_FORMAT.md §3.6.33). Absent is the one
+// spelling of none, so an empty array is refused rather than dropped; a coordinate
+// names a cell that exists, read against the rows; a cell is cited once. The
+// reference stays opaque, as on Fact.
+func decodeTableCitations(w *walkState, raw any, path string, rows []any) Value {
+	items := expectArray(raw, path)
+	if len(items) == 0 {
+		fail(CodeWrongType, path, "expected a non-empty citation list, or no member at all, at "+path)
+	}
+	seen := make(map[[2]int64]bool, len(items))
+	out := make(Arr, len(items))
+	for i, item := range items {
+		itemPath := path + "[" + strconv.Itoa(i) + "]"
+		entry := decodeTableCitation(w, item, itemPath)
+		row, _ := entry.Fields["row"].(Int)
+		column, _ := entry.Fields["column"].(Int)
+		if int64(row) >= int64(len(rows)) {
+			fail(CodeWrongType, itemPath+".row", "expected a row index this table has at "+itemPath+".row")
+		}
+		cells, _ := rows[row].([]any)
+		if int64(column) >= int64(len(cells)) {
+			fail(CodeWrongType, itemPath+".column", "expected a column index the cited row has at "+itemPath+".column")
+		}
+		cell := [2]int64{int64(row), int64(column)}
+		if seen[cell] {
+			fail(CodeWrongType, itemPath, "expected a cell no other citation in this list names at "+itemPath)
+		}
+		seen[cell] = true
+		out[i] = entry
+	}
+	return out
 }
 
 // decodeStaticRowCells — StaticRows.rows: a list of rows of TextSource cells.

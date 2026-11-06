@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "59b30bfa4b6bf50e0623f6672dc27a23170dead76c4cbda6c181bd7e6e704c59"
+const SourceSHA256 = "5defc2bc8886228c73a3f41b4b225de6df5b9e0068db44ac74378471ff9a6665"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -1066,6 +1066,7 @@ var (
 		{Name: "onLoading", Optionality: Optional, Type: Type{Kind: TNode}},
 	}}
 	RecordStaticRows = Record{Name: "StaticRows", Fields: []Field{
+		{Name: "citations", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "TableCitation"}}},
 		{Name: "defaultSort", Optionality: Optional, Type: Type{Kind: TRecord, Name: "DefaultSort"}},
 		{Name: "headers", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TUnion, Name: "TextSource"}}},
 		{Name: "rows", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TList, Elem: &Type{Kind: TUnion, Name: "TextSource"}}}},
@@ -1088,6 +1089,12 @@ var (
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "icon", Optionality: Optional, Type: Type{Kind: TStr}},
 		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
+	}}
+	RecordTableCitation = Record{Name: "TableCitation", Fields: []Field{
+		{Name: "column", Optionality: Required, Type: Type{Kind: TInt}},
+		{Name: "label", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
+		{Name: "reference", Optionality: Required, Type: Type{Kind: TStr}},
+		{Name: "row", Optionality: Required, Type: Type{Kind: TInt}},
 	}}
 	RecordTrackEntry = Record{Name: "TrackEntry", Fields: []Field{
 		{Name: "default", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
@@ -1195,7 +1202,7 @@ var Enums = []*Enum{&EnumBadgeVariant, &EnumBoxRole, &EnumButtonVariant, &EnumCa
 var Unions = []*Union{&UnionAction, &UnionBinding, &UnionBoxLayout, &UnionCallResultTarget, &UnionCellFormat, &UnionCellKindErased, &UnionChartAnnotation, &UnionChartAnnotationRange, &UnionChartAnnotationX, &UnionColumnWidth, &UnionCurveCommand, &UnionFormFieldKind, &UnionFormat, &UnionFragmentArg, &UnionHoleDecl, &UnionHoleValueSpace, &UnionLocalFlushTrigger, &UnionLocaleSource, &UnionMediaKind, &UnionScalar, &UnionShape, &UnionTextSource}
 
 // Records is every record row, in idl.json order.
-var Records = []*Record{&RecordAccessibility, &RecordAffordance, &RecordAffordanceAlias, &RecordButtonGroupItem, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordMarkdownCitation, &RecordMetricComparison, &RecordRangePair, &RecordSelectOption, &RecordSelectOptionGroup, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
+var Records = []*Record{&RecordAccessibility, &RecordAffordance, &RecordAffordanceAlias, &RecordButtonGroupItem, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordMarkdownCitation, &RecordMetricComparison, &RecordRangePair, &RecordSelectOption, &RecordSelectOptionGroup, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTableCitation, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
 
 // Ops is every TreeOp row, in idl.json order.
 var Ops = []*Op{&OpBatch, &OpEditNode, &OpInsertChild, &OpMoveNode, &OpPatchStyle, &OpRemoveNode, &OpReorderChildren, &OpReplaceBinding, &OpReplaceRoot, &OpUpdateAccessibility, &OpUpdateProp, &OpUpdateState, &OpUpdateStyle, &OpUpdateTooltip}

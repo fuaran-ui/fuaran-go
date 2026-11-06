@@ -2251,16 +2251,42 @@ func (r *renderer) staticTable(fields map[string]wire.Value) string {
 			headerCells.WriteString(textElement("th", []attr{{"class", "fuaran-table-header"}}, r.text(h)))
 		}
 	}
+	// Phase 2592 — the cited cells by coordinate (WIRE_FORMAT.md §3.6.33).
+	cited := map[[2]int64]wire.Obj{}
+	if citations, ok := fields["citations"].(wire.Arr); ok {
+		for _, c := range citations {
+			if citation, ok := c.(wire.Obj); ok {
+				row, _ := citation.Fields["row"].(wire.Int)
+				column, _ := citation.Fields["column"].(wire.Int)
+				cited[[2]int64{int64(row), int64(column)}] = citation
+			}
+		}
+	}
 	var bodyRows strings.Builder
 	if rows, ok := fields["rows"].(wire.Arr); ok {
-		for _, row := range rows {
+		for i, row := range rows {
 			rowArr, ok := row.(wire.Arr)
 			if !ok {
 				continue
 			}
 			var cells strings.Builder
-			for _, c := range rowArr {
-				cells.WriteString(textElement("td", []attr{{"class", "fuaran-table-cell"}}, r.text(c)))
+			for j, c := range rowArr {
+				citation, isCited := cited[[2]int64{int64(i), int64(j)}]
+				if !isCited {
+					cells.WriteString(textElement("td", []attr{{"class", "fuaran-table-cell"}}, r.text(c)))
+					continue
+				}
+				// The reference on the cell, a label as its first child.
+				reference, _ := citation.Fields["reference"].(wire.Str)
+				label := ""
+				if l, ok := citation.Fields["label"]; ok {
+					if text := r.text(l); text != "" {
+						label = textElement("span", []attr{{"class", "fuaran-cited-label"}}, text+" ")
+					}
+				}
+				cells.WriteString(element("td",
+					[]attr{{"class", "fuaran-table-cell"}, {"data-fact", string(reference)}},
+					label+escapeText(r.text(c))))
 			}
 			bodyRows.WriteString(element("tr", []attr{{"class", "fuaran-table-row"}}, cells.String()))
 		}
