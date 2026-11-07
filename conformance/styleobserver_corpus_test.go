@@ -80,6 +80,8 @@ type soVector struct {
 	ExpectedManifestFlags []string      `json:"expectedManifestFlags"`
 	NodeAreas             []soNodeArea  `json:"nodeAreas"`
 	ExpectedBudgetFlags   []string      `json:"expectedBudgetFlags"`
+	// Phase 2133 — the manifest-validation tier.
+	ExpectedManifestDefects []string `json:"expectedManifestDefects"`
 }
 
 func (c soRgba) rgba() styleobserver.Rgba { return styleobserver.RGBA(c.R, c.G, c.B, c.A) }
@@ -197,6 +199,20 @@ func TestStyleObserverCorpusFamily(t *testing.T) {
 				got := encodedFlags(styleobserver.VerifyUsageBudgets(m, nodes))
 				if !eqStrings(got, v.ExpectedBudgetFlags) {
 					t.Errorf("usage-budget flags differ:\n got %v\nwant %v", got, v.ExpectedBudgetFlags)
+				}
+
+			case "manifest-validation":
+				// Phase 2133 — the tolerant decode, then the shared validation pass.
+				m, err := tm.Decode(v.Manifest)
+				if err != nil {
+					t.Fatalf("the vector's manifest does not decode in this host: %v", err)
+				}
+				got := []string{}
+				for _, d := range tm.Validate(m) {
+					got = append(got, tm.EncodeManifestDefect(d))
+				}
+				if !eqStrings(got, v.ExpectedManifestDefects) {
+					t.Errorf("manifest validation defects differ:\n got %v\nwant %v", got, v.ExpectedManifestDefects)
 				}
 
 			default:

@@ -148,8 +148,13 @@ func parseInvariant(j any) (Invariant, bool) {
 		return Invariant{}, false
 	}
 	weight := numOr(obj["weight"], DefaultWeight)
+	// An object with no non-empty string `kind` is not an invariant of any kind.
+	kind := asStr(obj["kind"])
+	if kind == nil || *kind == "" {
+		return Invariant{}, false
+	}
 	var inner InvariantKind
-	switch strOr(obj["kind"], "") {
+	switch *kind {
 	case "ContrastFloor":
 		inner = ContrastFloor{Role: strOr(obj["role"], ""), MinRatio: numOr(obj["minRatio"], 0.0)}
 	case "UsageBudget":
@@ -164,7 +169,15 @@ func parseInvariant(j any) (Invariant, bool) {
 			Easing:        asStr(obj["easing"]),
 		}}
 	default:
-		return Invariant{}, false
+		// Phase 2133 — kept with its members, never dropped: Validate reports it
+		// unenforced.
+		members := make(map[string]any, len(obj))
+		for k, v := range obj {
+			if k != "kind" && k != "weight" {
+				members[k] = v
+			}
+		}
+		inner = UnknownInvariant{Kind: *kind, Members: members}
 	}
 	return Invariant{Kind: inner, Weight: weight}, true
 }
