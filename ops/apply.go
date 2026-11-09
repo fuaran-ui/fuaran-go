@@ -75,7 +75,7 @@ func Apply(op wire.Obj, tree wire.Node) (wire.Node, error) {
 	}
 	// The §8.1 id-uniqueness guard, AFTER the limits: an op breaching both
 	// reports LimitExceeded (the limitsApply corpus pins that order).
-	if dupErr := checkInstalledIDs(insertedNodes(op), result); dupErr != nil {
+	if dupErr := checkInstalledIDs(InsertedNodes(op), result); dupErr != nil {
 		return tree, dupErr
 	}
 	return result, nil

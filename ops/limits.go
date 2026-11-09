@@ -21,7 +21,7 @@ import (
 // crossed it.
 //
 // WHICH OPS ARE CHECKED IS DERIVED FROM WHAT THEY CARRY, not listed. An op that
-// puts nodes into the tree (insertedNodes non-empty) is checked: InsertChild,
+// puts nodes into the tree (InsertedNodes non-empty) is checked: InsertChild,
 // ReplaceRoot, an EditNode whose new kind holds children, an UpdateState that
 // attaches onLoading / onEmpty. The derivation reads NODES, never ids, because
 // a payload whose ids repeat has fewer ids than nodes. MoveNode is checked as
@@ -75,11 +75,11 @@ func checkTreeLimits(tree wire.Node) *ApplyError {
 	return nil
 }
 
-// insertedNodes returns the subtree roots op puts INTO the tree, in the order
+// InsertedNodes returns the subtree roots op puts INTO the tree, in the order
 // it names them: an inserted child, a replacement root, the nodes a new kind
 // holds (EditNode), a new state block's onLoading / onEmpty (UpdateState), and
 // a Batch's members' insertions. Every other op carries no node.
-func insertedNodes(op wire.Obj) []wire.Node {
+func InsertedNodes(op wire.Obj) []wire.Node {
 	switch op.Tag {
 	case "InsertChild":
 		if child, ok := op.Fields["child"].(wire.Node); ok {
@@ -114,7 +114,7 @@ func insertedNodes(op wire.Obj) []wire.Node {
 			var held []wire.Node
 			for _, item := range inner {
 				if innerOp, ok := item.(wire.Obj); ok {
-					held = append(held, insertedNodes(innerOp)...)
+					held = append(held, InsertedNodes(innerOp)...)
 				}
 			}
 			return held
@@ -142,7 +142,7 @@ func opCanGrow(op wire.Obj) bool {
 		}
 		return false
 	default:
-		return len(insertedNodes(op)) > 0
+		return len(InsertedNodes(op)) > 0
 	}
 }
 
