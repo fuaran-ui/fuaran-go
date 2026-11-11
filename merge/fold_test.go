@@ -9,6 +9,24 @@ import (
 // Policy cases the foldFixtures corpus does not pin (the corpus leg is
 // conformance/fold_test.go).
 
+func decode(t *testing.T, s string) wire.Node {
+	t.Helper()
+	n, err := wire.DecodeNode(s)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return n
+}
+
+func encode(t *testing.T, n wire.Node) string {
+	t.Helper()
+	s, err := wire.EncodeNode(n)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return s
+}
+
 func foldOps(t *testing.T, texts ...string) []wire.Obj {
 	t.Helper()
 	out := make([]wire.Obj, len(texts))
@@ -73,9 +91,10 @@ func TestFoldEmptyDeltasDeriveTheBase(t *testing.T) {
 }
 
 // Two appends under one parent interleave by the child-order rule: the runs
-// keep their own order and merge by heads. Where the fold's order (A then B)
-// differs from the rule's, the merge records one ReorderChildren, and the
-// derivation is the same whichever delta is named first.
+// keep their own order and merge by heads. The merge records the rule's
+// ReorderChildren whichever delta is named first — even where the fold's order
+// is already the rule's (fuaran#2645: the script, not the checked fold order,
+// fixes the children a replay reaches).
 func TestFoldInterleaveRecordsTheScript(t *testing.T) {
 	base := boxOf(t, "k")
 	a := foldOps(t, insertOp("z"))
@@ -98,13 +117,40 @@ func TestFoldInterleaveRecordsTheScript(t *testing.T) {
 		t.Errorf("derived tree = %s, want %s", got, want)
 	}
 
-	// Named the other way round, the fold's order is already the rule's.
+	// Named the other way round, the fold's order is already the rule's, and
+	// the script is recorded anyway, the same op.
 	swapped, fault := ReconcileFold(base, b, a)
 	if fault != nil {
 		t.Fatalf("swapped refused: %+v", fault)
 	}
-	if len(swapped.Script) != 0 || encode(t, swapped.Tree) != encode(t, r.Tree) {
-		t.Errorf("swapped derivation differs: script %d ops, tree %s", len(swapped.Script), encode(t, swapped.Tree))
+	if len(swapped.Script) != 1 || encode(t, swapped.Tree) != encode(t, r.Tree) {
+		t.Fatalf("swapped derivation differs: script %d ops, tree %s", len(swapped.Script), encode(t, swapped.Tree))
+	}
+	if again, _ := wire.EncodeOp(swapped.Script[0]); again != script {
+		t.Errorf("swapped script = %s, want %s", again, script)
+	}
+}
+
+// A reorder beside an append to its parent is a REBASE (fuaran#2671): the
+// reorder applies to the children the parent holds when the fold reaches it,
+// the append follows the reordered run, and both orders agree. Two reorders of
+// one parent that differ still refuse.
+func TestFoldReorderBesideAnAppendIsRebased(t *testing.T) {
+	base := boxOf(t, "a", "b")
+	reorder := foldOps(t, `{"$type":"ReorderChildren","newOrder":["b","a"],"parentId":"root"}`)
+	appendC := foldOps(t, insertOp("c"))
+	for _, order := range [][2][]wire.Obj{{reorder, appendC}, {appendC, reorder}} {
+		r, fault := ReconcileFold(base, order[0], order[1])
+		if fault != nil {
+			t.Fatalf("a rebase refused: %+v", fault)
+		}
+		if got, want := encode(t, r.Tree), encode(t, boxOf(t, "b", "a", "c")); got != want || r.Interleaves != 1 {
+			t.Errorf("rebased tree = %s (interleaves %d), want %s", got, r.Interleaves, want)
+		}
+	}
+	other := foldOps(t, `{"$type":"ReorderChildren","newOrder":["a","b"],"parentId":"root"}`)
+	if _, fault := ReconcileFold(base, reorder, other); fault == nil || fault.Kind != FaultRefused {
+		t.Errorf("two differing reorders must refuse, got %+v", fault)
 	}
 }
 

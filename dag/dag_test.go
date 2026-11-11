@@ -2,6 +2,7 @@ package dag
 
 import (
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/fuaran-ui/fuaran-go/opstream"
@@ -9,20 +10,19 @@ import (
 )
 
 func TestDagRecordRoundTrip(t *testing.T) {
-	// A two-parent merge node with an outcome hash + prompt id exercises every
-	// optional field and the Ordinal key order. The agent actor is the
+	// A two-parent merge node (its op the script, as a Batch) with a prompt id
+	// exercises every optional field and the Ordinal key order. The agent actor is the
 	// four-member case — the one whose PINNED (unsorted) member order a
 	// key-sorting encoder would silently rewrite.
 	in := `{"actor":{"kind":"agent","model":"claude","version":"4.8","id":"planner"},` +
-		`"hash":"h3","op":{"$type":"RemoveNode","target":"x"},` +
-		`"outcomeHash":"o1","parents":["h1","h2"],"promptId":"p-9",` +
-		`"resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1700000000,` +
-		`"tombstoned":false}`
+		`"hash":"h3","op":{"$type":"Batch","ops":[]},` +
+		`"parents":["h1","h2"],"promptId":"p-9",` +
+		`"resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1700000000}`
 	record, err := DecodeDagRecord(in)
 	if err != nil {
 		t.Fatalf("DecodeDagRecord: %v", err)
 	}
-	if len(record.Parents) != 2 || record.OutcomeHash == nil || *record.OutcomeHash != "o1" {
+	if len(record.Parents) != 2 || record.Op.Tag != "Batch" {
 		t.Errorf("decoded record wrong: %+v", record)
 	}
 	agent, ok := record.Actor.(opstream.AgentActor)
@@ -42,12 +42,12 @@ func TestDagRecordFailureEnvelopeAndMissingField(t *testing.T) {
 	in := `{"actor":{"kind":"human","id":"u"},` +
 		`"hash":"h","op":{"$type":"RemoveNode","target":"x"},"parents":[],` +
 		`"resultEnvelope":{"$type":"Failure","code":"E","message":"m"},` +
-		`"streamId":"s","timestamp":1,"tombstoned":true}`
+		`"streamId":"s","timestamp":1}`
 	record, err := DecodeDagRecord(in)
 	if err != nil {
 		t.Fatalf("DecodeDagRecord: %v", err)
 	}
-	if record.Result.Kind != "Failure" || record.Result.Code != "E" || !record.Tombstoned {
+	if record.Result.Kind != "Failure" || record.Result.Code != "E" {
 		t.Errorf("failure envelope not decoded: %+v", record.Result)
 	}
 	if human, ok := record.Actor.(opstream.HumanActor); !ok || human.ID != "u" {
@@ -66,6 +66,28 @@ func TestDagRecordFailureEnvelopeAndMissingField(t *testing.T) {
 	}
 }
 
+// A pre-2645 record — one carrying the retired outcomeHash or tombstoned
+// member — is refused BY NAME: its address does not recompute under the cut.
+func TestAPre2645RecordIsRefusedByName(t *testing.T) {
+	post := `{"actor":{"kind":"human","id":"u1"},"hash":"h",` +
+		`"op":{"$type":"RemoveNode","target":"x"},"parents":[],` +
+		`"resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1`
+	for member, extra := range map[string]string{
+		"tombstoned":  `,"tombstoned":false}`,
+		"outcomeHash": `,"outcomeHash":"o1"}`,
+	} {
+		_, err := DecodeDagRecord(post + extra)
+		var de *wire.DecodeError
+		if !asDecodeError(err, &de) || de.Path != "$."+member ||
+			!strings.Contains(de.Message, "pre-2645") || !strings.Contains(de.Message, "do not carry forward") {
+			t.Errorf("%s: expected a pre-2645 refusal at $.%s, got %v", member, member, err)
+		}
+	}
+	if _, err := DecodeDagRecord(post + "}"); err != nil {
+		t.Errorf("the post-cut record decodes: %v", err)
+	}
+}
+
 // ─── The typed actor on the DAG record (Phase 1144 / 1168) ───────────────────
 //
 // These pin what the four curated `dag/` corpus fixtures do not reach. The
@@ -78,10 +100,10 @@ func TestDagRecordFailureEnvelopeAndMissingField(t *testing.T) {
 // rather than shifting bytes silently.
 func TestDagRecordTopLevelKeysAreOrdinalSorted(t *testing.T) {
 	in := `{"actor":{"kind":"agent","model":"claude","version":"4.8","id":"planner"},` +
-		`"hash":"h3","op":{"$type":"RemoveNode","target":"x"},"outcomeHash":"o1",` +
+		`"hash":"h3","op":{"$type":"RemoveNode","target":"x"},` +
 		`"parents":["h1","h2"],"promptId":"p-9",` +
 		`"resultEnvelope":{"$type":"Failure","code":"E","message":"m"},` +
-		`"streamId":"s","timestamp":1700000000,"tombstoned":true}`
+		`"streamId":"s","timestamp":1700000000}`
 	record, err := DecodeDagRecord(in)
 	if err != nil {
 		t.Fatalf("DecodeDagRecord: %v", err)
@@ -95,8 +117,8 @@ func TestDagRecordTopLevelKeysAreOrdinalSorted(t *testing.T) {
 	}
 
 	keys := topLevelKeys(got)
-	want := []string{"actor", "hash", "op", "outcomeHash", "parents", "promptId",
-		"resultEnvelope", "streamId", "timestamp", "tombstoned"}
+	want := []string{"actor", "hash", "op", "parents", "promptId",
+		"resultEnvelope", "streamId", "timestamp"}
 	if len(keys) != len(want) {
 		t.Fatalf("top-level keys: got %v, want %v", keys, want)
 	}
@@ -159,8 +181,7 @@ func TestNestedActorKeepsItsPinnedMemberOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			in := `{"actor":` + tc.actor +
 				`,"hash":"h","op":{"$type":"RemoveNode","target":"x"},"parents":[],` +
-				`"resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1,` +
-				`"tombstoned":false}`
+				`"resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1}`
 			record, err := DecodeDagRecord(in)
 			if err != nil {
 				t.Fatalf("DecodeDagRecord: %v", err)
@@ -182,7 +203,7 @@ func TestNestedActorKeepsItsPinnedMemberOrder(t *testing.T) {
 func TestPre1144UserIDEnvelopeIsRefusedByName(t *testing.T) {
 	in := `{"hash":"h","op":{"$type":"RemoveNode","target":"x"},"parents":[],` +
 		`"resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1,` +
-		`"tombstoned":false,"userId":"u1"}`
+		`"userId":"u1"}`
 	_, err := DecodeDagRecord(in)
 	var de *wire.DecodeError
 	if !asDecodeError(err, &de) {
@@ -201,8 +222,7 @@ func TestPre1144UserIDEnvelopeIsRefusedByName(t *testing.T) {
 // pre-1144 one above so the two diagnoses stay tellable apart.
 func TestRecordWithNoActorAtAllIsRefused(t *testing.T) {
 	in := `{"hash":"h","op":{"$type":"RemoveNode","target":"x"},"parents":[],` +
-		`"resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1,` +
-		`"tombstoned":false}`
+		`"resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1}`
 	_, err := DecodeDagRecord(in)
 	var de *wire.DecodeError
 	if !asDecodeError(err, &de) {
@@ -238,8 +258,7 @@ func TestMalformedActorIsNamedNeverDefaulted(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			in := `{"actor":` + tc.actor +
 				`,"hash":"h","op":{"$type":"RemoveNode","target":"x"},"parents":[],` +
-				`"resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1,` +
-				`"tombstoned":false}`
+				`"resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1}`
 			_, err := DecodeDagRecord(in)
 			var de *wire.DecodeError
 			if !asDecodeError(err, &de) {

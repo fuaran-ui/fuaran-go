@@ -1,11 +1,15 @@
 package conformance
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/canonical"
 	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
 	"github.com/fuaran-ui/fuaran-go/merge"
 	"github.com/fuaran-ui/fuaran-go/wire"
@@ -21,12 +25,13 @@ import (
 //     envelopeFile, sha256 == envelopeHash, and the swapped reconcile refuses
 //     with every entry's left and right swapped and nothing else changed.
 //   - merge-fold-gated: the fold derives and the sample validator (the
-//     test-side port in merge_test.go) finds defects neither head carries; the
-//     verdict is byte-identical to verdictFile, sha256 == verdictHash, in both
-//     branch orders.
+//     test-side port below) finds defects neither head carries; the verdict is
+//     byte-identical to verdictFile, sha256 == verdictHash, in both branch
+//     orders.
 //
-// It lives beside the tree-merge legs because the gated fixture runs under the
-// same sample validator, introduced-defect diff and verdict codec they share.
+// Since fuaran#2645 the family is the corpus's only one (manifest version 2):
+// the three-way tree merge and its triad legs retired (fuaran#2646), and
+// TestMergeCorpusIsTheFoldFamilyAlone fails BY NAME if a triad key returns.
 
 type foldFixture struct {
 	ID           string `json:"id"`
@@ -182,4 +187,125 @@ func TestMergeFoldCorpus(t *testing.T) {
 			t.Errorf("foldFixtures holds no %s fixture", k)
 		}
 	}
+}
+
+// TestMergeCorpusIsTheFoldFamilyAlone pins the manifest's version 2: the
+// foldFixtures family alone. A retired tree-merge key reappearing would be a
+// family this host no longer certifies, so it fails here rather than passing
+// unread.
+func TestMergeCorpusIsTheFoldFamilyAlone(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(corpusroot.ForTest(t), "merge-conformance", "manifest.json"))
+	if err != nil {
+		t.Fatalf("merge corpus not found: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("parsing merge manifest: %v", err)
+	}
+	if string(m["version"]) != "2" {
+		t.Errorf("merge-conformance manifest version = %s, want 2", m["version"])
+	}
+	for _, retired := range []string{"fixtures", "refusalFixtures", "totalityFixtures"} {
+		if _, present := m[retired]; present {
+			t.Errorf("merge-conformance carries the retired tree-merge family %q", retired)
+		}
+	}
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// ── test-side sample validator + verdict codec (Phase-184 port) ─────────────
+
+type mergeDefect struct {
+	code, nodeID, facet, message string
+}
+
+func nodeChildren(n wire.Node) []wire.Node {
+	arr, ok := n.Kind.Fields["children"].(wire.Arr)
+	if !ok {
+		return nil
+	}
+	var out []wire.Node
+	for _, item := range arr {
+		if c, ok := item.(wire.Node); ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func nodeTone(n wire.Node) string {
+	if style, ok := n.Extras["style"].(wire.Obj); ok {
+		if v, ok := style.Fields["tone"].(wire.Str); ok {
+			return string(v)
+		}
+	}
+	return "Default"
+}
+
+// gatedValidator is the sample domain rule: "at most one Brand-toned pane per
+// dashboard" — inspects the root node only (mirrors the sibling walkers).
+func gatedValidator(tree wire.Node) []mergeDefect {
+	role, _ := tree.Kind.Fields["role"].(wire.Str)
+	if tree.Kind.Tag != "Box" || role != "Dashboard" {
+		return nil
+	}
+	var brand []wire.Node
+	for _, c := range nodeChildren(tree) {
+		if nodeTone(c) == "Brand" {
+			brand = append(brand, c)
+		}
+	}
+	if len(brand) <= 1 {
+		return nil
+	}
+	var out []mergeDefect
+	for _, c := range brand {
+		out = append(out, mergeDefect{
+			code: "TESTBRAND001", nodeID: c.ID, facet: "style.tone",
+			message: "Pane '" + c.ID + "' shares Brand tone with a sibling — at most one Brand pane per dashboard.",
+		})
+	}
+	return out
+}
+
+func defectIdentity(d mergeDefect) string { return d.code + " " + d.nodeID + " " + d.facet }
+func defectOrderKey(d mergeDefect) string { return d.nodeID + " " + d.facet + " " + d.code }
+
+func introducedDefects(parentA, parentB, merged wire.Node) []mergeDefect {
+	parentKeys := make(map[string]bool)
+	for _, d := range gatedValidator(parentA) {
+		parentKeys[defectIdentity(d)] = true
+	}
+	for _, d := range gatedValidator(parentB) {
+		parentKeys[defectIdentity(d)] = true
+	}
+	var introduced []mergeDefect
+	for _, d := range gatedValidator(merged) {
+		if !parentKeys[defectIdentity(d)] {
+			introduced = append(introduced, d)
+		}
+	}
+	sort.Slice(introduced, func(i, j int) bool {
+		return defectOrderKey(introduced[i]) < defectOrderKey(introduced[j])
+	})
+	return introduced
+}
+
+func encodeVerdict(defects []mergeDefect) string {
+	sort.Slice(defects, func(i, j int) bool { return defectOrderKey(defects[i]) < defectOrderKey(defects[j]) })
+	out := "["
+	for i, d := range defects {
+		if i > 0 {
+			out += ","
+		}
+		out += "{" + `"code":` + canonical.EscapeString(d.code) +
+			`,"facet":` + canonical.EscapeString(d.facet) +
+			`,"message":` + canonical.EscapeString(d.message) +
+			`,"nodeId":` + canonical.EscapeString(d.nodeID) + "}"
+	}
+	return out + "]"
 }

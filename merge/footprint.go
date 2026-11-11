@@ -32,16 +32,24 @@
 //     out. Anything the walk does not locate takes the pure arm. A Batch is
 //     threaded member by member, and from an op that does not apply onwards
 //     every op takes the pure arm.
+//   - THE CHILD LIST (fuaran#2691, Core 0.42.0 D246). Core compares a
+//     structure write of p against a slot access as a read and a write of
+//     (p, "#children"), so every arm that reads or rewrites a node's structural
+//     children by slot declares that slot: a resolved reorder and a resolved
+//     move's source parent (beside the `kind` slot the tier holds the list
+//     in), an EditNode, and any in-place edit whose held set moved.
+//   - A resolved MOVE (fuaran#2651, #2670, #2691) touches no parent whole: the
+//     target is read and written at its `parent` slot, the source parent at
+//     its `kind` and child-list slots, the destination and every ancestor above
+//     it are read at their `parent` slots (the cycle check reads the chain),
+//     and the destination keeps Core's named structure write and read. A
+//     resolved REORDER (fuaran#2670) reads and writes its parent at the `kind`
+//     and child-list slots and reads each listed child at its `parent` slot.
 //
 // Ids are counted over every position a node holds another in (keyedIDs, the
 // reference's keyed walk); the base-aware arms LOCATE through the ordered child
 // lists alone (structuralChildren), as Core's resolution does, so a node held
 // only in a keyed position takes the pure arm.
-//
-// The move rule is the one the reference ships today: a move's source parent is
-// read and structure-written. fuaran#2651 will re-emit
-// `fold-refusal-move-and-source-edit` when it changes the reference's rule;
-// the MoveNode arm of resolvedAt is the one place that follows it.
 //
 // Sets enumerate in ordinal (UTF-16) order wherever order is observable (the
 // conflict report). Pure, total, no IO.
@@ -386,6 +394,36 @@ func slotted(writes, readSlots []string, target string, touched IDSet) Footprint
 	return Footprint{Reads: touched, ContentWrites: touched, SlotReads: sr, SlotWrites: sw}
 }
 
+// childListSlot is Core's child-list slot (`Footprint.childListSlot`,
+// fuaran-core Phase 625).
+const childListSlot = "#children"
+
+// slotEdit is Core's `slotEdit`: a read and a write of one slot of a node.
+func slotEdit(node, slot string) Footprint {
+	return Footprint{SlotReads: SlotSet{{node, slot}: true}, SlotWrites: SlotSet{{node, slot}: true}}
+}
+
+// readingSlot is Core's `readingSlot`: a read of one slot of a node.
+func readingSlot(node, slot string) Footprint {
+	return Footprint{SlotReads: SlotSet{{node, slot}: true}}
+}
+
+// childList is f with a read and a write of node's child-list slot beside it.
+func childList(node string, f Footprint) Footprint {
+	return unionFootprint(f, slotEdit(node, childListSlot))
+}
+
+// guarded is slotted for an op whose contract moves no node: where its held set
+// moved anyway (touched non-empty), the child list is written too. Empty for
+// every such op the engine has, so the slot is a guard, not an arm.
+func guarded(writes, readSlots []string, target string, touched IDSet) Footprint {
+	f := slotted(writes, readSlots, target, touched)
+	if len(touched) == 0 {
+		return f
+	}
+	return childList(target, f)
+}
+
 // styleFields is the wire member names a PatchStyle delta sets.
 func styleFields(op wire.Obj) []string {
 	delta, _ := op.Fields["style"].(wire.Obj)
@@ -461,25 +499,57 @@ func resolvedAt(state wire.Node, after *wire.Node, op wire.Obj) Footprint {
 		if !located || !hasParent || destination == nil {
 			return FootprintOf(op)
 		}
-		reads := idSet(id, np, parent.ID)
+		// A resolved move touches no parent WHOLE: the source parent's child
+		// list, held in its `kind`, is read and written at its `kind` and
+		// child-list slots; the destination and every ancestor above it are
+		// read at their `parent` slot (the cycle check reads the chain), and
+		// the destination keeps Core's named read and structure write — the
+		// address the fold interleaves two appends at. The target changes its
+		// position and nothing of itself: its `parent` slot. A move within one
+		// parent keeps the parent whole.
+		source := ""
+		if parent.ID != np {
+			source = parent.ID
+		}
+		f := Footprint{Reads: idSet(np), StructureWrites: idSet(np)}
+		f = unionFootprint(f, slotEdit(id, "parent"))
+		f = unionFootprint(f, readingSlot(np, "parent"))
 		for _, n := range destination[:len(destination)-1] {
-			reads[n.ID] = true
+			if n.ID != id && n.ID != source {
+				f = unionFootprint(f, readingSlot(n.ID, "parent"))
+			}
 		}
-		return Footprint{
-			Reads:           reads,
-			StructureWrites: idSet(parent.ID, np),
-			ContentWrites:   idSet(id),
+		if source != "" {
+			f = unionFootprint(f, childList(source, slotEdit(source, "kind")))
 		}
+		return f
+	case "ReorderChildren":
+		// A resolved reorder permutes the parent's child list, held in its
+		// `kind`, and touches no child: the parent at its `kind` and child-list
+		// slots, each listed child read at its `parent` slot.
+		parent := opStr(op, "parentId")
+		if _, ok := findStructural(state, parent); !ok || after == nil {
+			return FootprintOf(op)
+		}
+		f := childList(parent, slotEdit(parent, "kind"))
+		if order, ok := op.Fields["newOrder"].(wire.Arr); ok {
+			for _, v := range order {
+				if c, ok := v.(wire.Str); ok {
+					f = unionFootprint(f, readingSlot(string(c), "parent"))
+				}
+			}
+		}
+		return f
 	case "EditNode":
 		return verticalAt(func(node wire.Node) Footprint {
 			old := ops.InsertedNodes(wire.Obj{Tag: "EditNode", Fields: map[string]wire.Value{
 				"newKind": node.Kind, "target": wire.Str(id),
 			}})
-			return slotted([]string{"kind"}, nil, id, unionIDs(idsOf(old), idsOf(ops.InsertedNodes(op))))
+			return slotted([]string{"kind", childListSlot}, nil, id, unionIDs(idsOf(old), idsOf(ops.InsertedNodes(op))))
 		})
 	case "UpdateProp", "ReplaceBinding":
 		return verticalAt(func(node wire.Node) Footprint {
-			return slotted([]string{"kind"}, nil, id, heldChange(id, node))
+			return guarded([]string{"kind"}, nil, id, heldChange(id, node))
 		})
 	case "UpdateState":
 		return verticalAt(func(node wire.Node) Footprint {
@@ -487,19 +557,19 @@ func resolvedAt(state wire.Node, after *wire.Node, op wire.Obj) Footprint {
 		})
 	case "UpdateStyle":
 		return verticalAt(func(node wire.Node) Footprint {
-			return slotted([]string{"style"}, nil, id, heldChange(id, node))
+			return guarded([]string{"style"}, nil, id, heldChange(id, node))
 		})
 	case "UpdateAccessibility":
 		return verticalAt(func(node wire.Node) Footprint {
-			return slotted([]string{"accessibility"}, nil, id, heldChange(id, node))
+			return guarded([]string{"accessibility"}, nil, id, heldChange(id, node))
 		})
 	case "UpdateTooltip":
 		return verticalAt(func(node wire.Node) Footprint {
-			return slotted([]string{"tooltip"}, nil, id, heldChange(id, node))
+			return guarded([]string{"tooltip"}, nil, id, heldChange(id, node))
 		})
 	case "PatchStyle":
 		return verticalAt(func(node wire.Node) Footprint {
-			return slotted(styleFields(op), []string{"style"}, id, heldChange(id, node))
+			return guarded(styleFields(op), []string{"style"}, id, heldChange(id, node))
 		})
 	case "ReplaceRoot":
 		plain := FootprintOf(op)
@@ -509,7 +579,7 @@ func resolvedAt(state wire.Node, after *wire.Node, op wire.Obj) Footprint {
 		plain.StructureWrites = unionIDs(plain.StructureWrites, idSet(state.ID))
 		return plain
 	}
-	// InsertChild, ReorderChildren: the pure arm names everything they touch.
+	// InsertChild: the pure arm names everything it touches.
 	return FootprintOf(op)
 }
 
@@ -605,8 +675,20 @@ func intersectInto(into, a, b IDSet) {
 	}
 }
 
-// slotClash is the slots one side writes and the other reads or writes —
-// Core's `Footprint.slotClash`, ordered by node then slot.
+// childListSlots is the child-list slots a footprint's structure writes denote
+// — Core's `Footprint.childListSlots` (fuaran-core Phase 625).
+func childListSlots(f Footprint) SlotSet {
+	out := SlotSet{}
+	for p := range f.StructureWrites {
+		out[Slot{p, childListSlot}] = true
+	}
+	return out
+}
+
+// slotClash is the slots one side writes and the other reads or writes, and
+// the child-list slot of each parent one side structure-writes that the other
+// accesses as a slot — Core's `Footprint.slotClash` (0.42.0), ordered by node
+// then slot.
 func slotClash(a, b Footprint) []Slot {
 	hits := SlotSet{}
 	meet := func(x, y SlotSet) {
@@ -619,6 +701,8 @@ func slotClash(a, b Footprint) []Slot {
 	meet(a.SlotWrites, b.SlotWrites)
 	meet(a.SlotWrites, b.SlotReads)
 	meet(a.SlotReads, b.SlotWrites)
+	meet(childListSlots(a), unionSlots(b.SlotWrites, b.SlotReads))
+	meet(unionSlots(a.SlotWrites, a.SlotReads), childListSlots(b))
 	out := make([]Slot, 0, len(hits))
 	for s := range hits {
 		out = append(out, s)
@@ -640,16 +724,27 @@ func slotNodes(s SlotSet) IDSet {
 	return out
 }
 
-// slotsAgainstNode adds the nodes a accesses through a slot that b touches
-// whole — Core's `slotsAgainstNode`.
+// slotsAgainstNode adds the nodes a accesses through a slot that b WRITES
+// WHOLE — Core's `slotsAgainstNode` (0.42.0): a read of the node is of its
+// existence and a structure write is compared at the child-list slot, so only
+// a content write collides here.
 func slotsAgainstNode(into IDSet, a, b Footprint) {
-	whole := unionIDs(unionIDs(b.ContentWrites, b.Reads), b.StructureWrites)
-	intersectInto(into, slotNodes(a.SlotWrites), whole)
-	intersectInto(into, slotNodes(a.SlotReads), b.ContentWrites)
+	intersectInto(into, slotNodes(unionSlots(a.SlotWrites, a.SlotReads)), b.ContentWrites)
 }
 
+// writesStructure is Core's `Footprint.structural` non-empty (0.42.0): a named
+// parent's child list, an unknown source parent, or a child-list slot read or
+// written — the set the unknown-parent clause meets.
 func writesStructure(f Footprint) bool {
-	return len(f.StructureWrites) > 0 || len(f.UnknownParentWrites) > 0
+	if len(f.StructureWrites) > 0 || len(f.UnknownParentWrites) > 0 {
+		return true
+	}
+	for s := range unionSlots(f.SlotWrites, f.SlotReads) {
+		if s.Slot == childListSlot {
+			return true
+		}
+	}
+	return false
 }
 
 type opAt struct {
