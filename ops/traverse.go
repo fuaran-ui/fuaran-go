@@ -1,6 +1,8 @@
 package ops
 
 import (
+	"sort"
+
 	"github.com/fuaran-ui/fuaran-go/wire"
 	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
@@ -13,7 +15,8 @@ import (
 // slot — Modal and ScrollArea included — and the set cannot drift from the one
 // the diff and the island walk read. A Switch's case children and the state
 // surfaces are enumerated by childSlots by hand: they sit inside a record and
-// the node envelope, not in a kind slot.
+// the node envelope, not in a kind slot. So are the slot arguments (a
+// FragmentRef's args, a Mount's inputs): each sits inside a SlotArg record.
 
 func setKindField(n wire.Node, key string, value wire.Value) wire.Node {
 	fields := make(map[string]wire.Value, len(n.Kind.Fields)+1)
@@ -137,6 +140,45 @@ func childSlots(n wire.Node) []childSlot {
 					}})
 				}
 			}
+		}
+	}
+
+	// The subtree of every slot argument — a FragmentRef's `args`, a Mount's
+	// `inputs` (fuaran#2701) — in key order. The reference engine edits through
+	// every position the tree holds a node in, so an op naming a node held only
+	// there applies. The value arguments (Int / Float / Bool / Str) hold no node.
+	for _, bag := range []string{"args", "inputs"} {
+		args, ok := fields[bag].(wire.Obj)
+		if !ok {
+			continue
+		}
+		keys := make([]string, 0, len(args.Fields))
+		for k := range args.Fields {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			arg, ok := args.Fields[k].(wire.Obj)
+			if !ok || arg.Tag != "SlotArg" {
+				continue
+			}
+			tree, ok := arg.Fields["tree"].(wire.Node)
+			if !ok {
+				continue
+			}
+			slots = append(slots, childSlot{tree, func(c wire.Node) wire.Node {
+				argFields := make(map[string]wire.Value, len(arg.Fields))
+				for f, v := range arg.Fields {
+					argFields[f] = v
+				}
+				argFields["tree"] = c
+				bagFields := make(map[string]wire.Value, len(args.Fields))
+				for f, v := range args.Fields {
+					bagFields[f] = v
+				}
+				bagFields[k] = wire.Obj{Tag: arg.Tag, Fields: argFields}
+				return setKindField(n, bag, wire.Obj{Tag: args.Tag, Fields: bagFields})
+			}})
 		}
 	}
 

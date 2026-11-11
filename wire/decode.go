@@ -2376,8 +2376,9 @@ func decodeJSONValue(w *walkState, raw any, path string) Value {
 }
 
 // decodeJSONPassthrough is the null-LENIENT structural decoder — for positions
-// that can legitimately carry a §5 obj-erased opaque seam (Mount inputs embed
-// whole node trees, whose Binding.Static values may be null).
+// carried structurally rather than typed (a FragmentDecl's holes and effect).
+// A Mount's inputs no longer pass through here (fuaran#2701): they decode by
+// their table row, so their node trees are typed.
 func decodeJSONPassthrough(w *walkState, raw any, _ string) Value {
 	return fromJSON(raw)
 }
@@ -4338,15 +4339,17 @@ func (handArms) armFragmentDecl(w *walkState, obj map[string]any, path string) O
 	return s.build("FragmentDecl")
 }
 
-// Isolation/embedding boundary (§4o). inputs passes through WITHOUT
-// null-strictness — it embeds whole node trees whose Binding.Static
-// values are §5 opaque seams.
+// Isolation/embedding boundary (§4o). `inputs` is read by its table row
+// (fuaran#2701), the `Map<string, FragmentArg>` a FragmentRef's `args` is read
+// by: a `SlotArg`'s `tree` decodes as a node, so the traversal and the merge
+// footprint visit the nodes a Mount's inputs hold, as the reference does. The
+// subtree decodes through the ordinary node decoder, so a Binding.Static value
+// inside it keeps the §5 opaque-seam handling it has anywhere else in a tree.
 func (handArms) armMount(w *walkState, obj map[string]any, path string) Obj {
 	s := newKindSpec(w, obj, path, &idl.KindMount)
 	s.field("scopeId", decodeString)
 	s.field("channel", decodeGuestChannel)
 	s.field("capabilities", decodeJSONValue)
-	s.field("inputs", decodeJSONPassthrough)
 	return s.build("Mount")
 }
 

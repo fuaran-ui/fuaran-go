@@ -545,6 +545,34 @@ pinned by `wire/determinism_test.go`.
 This host declares no stability policy yet (pre-1.0), so the change is recorded here rather than
 in a `STABILITY.md` it does not have; it rides the current unreleased version.
 
+## A Mount's inputs are typed, and the fold reaches them — Phase 2701
+
+A `Mount`'s `inputs` used to decode as an opaque JSON passthrough, so a `SlotArg` subtree inside
+them was bytes this host carried and never read as a tree. They now decode by their table row, the
+`Map<string, FragmentArg>` a `FragmentRef`'s `args` already decoded by: a slot input's `tree` is a
+node, and every walk that visits a node held in a slot argument (a `FragmentRef`'s `args`, a
+`Mount`'s `inputs`) now visits it — the apply engine's lookup (`ops`, so an op naming such a node
+applies, as it does on the reference host) and the merge footprint's keyed walk (`merge`), per
+WIRE_FORMAT.md §34.2.
+
+**Conformance statement — additive.** A document re-encodes byte-identically as before (the
+corpus round-trip legs are the check; a `Mount` with inputs is among their fixtures), and nothing
+in a `Mount` stays opaque. What changes is reach: an op on a node held only in a `Mount`'s inputs
+used to stop the fold before any judgement (`DeltaDoesNotApply`, the node not found), so a merge
+the policy derives was refused and one it refuses was refused for the wrong reason. The fold now
+answers as the policy does: it derives `fold-mount-input-insert`, and refuses
+`fold-refusal-mount-input-tone`, `-disjoint` and `-delete-modify` with the committed envelopes.
+The footprint reports more, never less: a host program that merged trees with a `Mount` may now
+see a pair refused that it could not judge before. Certified by `conformance/fold_test.go` over
+the corpus's `merge-conformance/` family, at corpus commit `0b2ec20`.
+
+One input this host still reads as authored rather than as a tree: a value argument (`Int`,
+`Float`, `Bool`, `Str`) holds no node, so the walks skip it. A `FragmentDecl`'s `holes` and
+`effect` remain structural passthrough, as before — neither holds a node.
+
+This host declares no stability policy yet (pre-1.0), so the change is recorded here rather than
+in a `STABILITY.md` it does not have; it rides the current unreleased version.
+
 ## Layout
 
 ```

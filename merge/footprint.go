@@ -175,8 +175,9 @@ func structuralChildren(n wire.Node) []wire.Node {
 
 // heldNodes is every node n holds another in: its ordered child list, the
 // kind's single-node arms and Switch case children, the envelope's state
-// alternatives and its `fallback`, and the subtree of every slot argument this
-// host decodes as a node (a FragmentRef's `args`). The reference's `Reach.all`.
+// alternatives and its `fallback`, and the subtree of every slot argument (a
+// FragmentRef's `args`, a Mount's `inputs`, typed since fuaran#2701). The
+// reference's `Reach.keyed`.
 func heldNodes(n wire.Node) []wire.Node {
 	out := structuralChildren(n)
 	fields := n.Kind.Fields
