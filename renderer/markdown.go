@@ -469,7 +469,26 @@ type mdToken struct {
 
 func nodeToken(node inline) *mdToken { return &mdToken{node: node} }
 
-func tokenize(refs map[string]refDef, policy EgressPolicy, text string) []*mdToken {
+// Citation is one figure a text cites, its label already a string (Phase 2591,
+// WIRE_FORMAT.md §3.6.32).
+type Citation struct {
+	Name      string
+	Reference string
+	Label     string
+}
+
+// citedSpan is the span a cited figure draws, in the line of text. The reference
+// stylesheet hides the label visually, so it reaches a screen reader without
+// being printed in the sentence.
+func citedSpan(citation Citation, titleAttr, inner string) string {
+	label := ""
+	if citation.Label != "" {
+		label = `<span class="fuaran-cited-label">` + mdEscape(citation.Label) + ` </span>`
+	}
+	return `<span class="fuaran-cited" data-fact="` + mdEscape(citation.Reference) + `"` + titleAttr + ">" + label + inner + "</span>"
+}
+
+func tokenize(refs map[string]refDef, policy EgressPolicy, citations []Citation, text string) []*mdToken {
 	var toks []*mdToken
 	n := len(text)
 	i := 0
@@ -489,7 +508,7 @@ func tokenize(refs map[string]refDef, policy EgressPolicy, text string) []*mdTok
 	}
 	makeImage := func(labelText, url, title string, hasTitle bool) {
 		flush()
-		alt := plainText(parseInlines(refs, policy, labelText))
+		alt := plainText(parseInlines(refs, policy, citations, labelText))
 		safe, markers := markdownDestination(policy, EgressMedia, url)
 		titleAttr := ""
 		if hasTitle {
@@ -500,12 +519,18 @@ func tokenize(refs map[string]refDef, policy EgressPolicy, text string) []*mdTok
 	}
 	makeLink := func(labelText, url, title string, hasTitle bool) {
 		flush()
-		inner := renderInlines(parseInlines(refs, policy, labelText))
-		safe, markers := markdownDestination(policy, EgressHyperlink, url)
+		inner := renderInlines(parseInlines(refs, policy, citations, labelText))
 		titleAttr := ""
 		if hasTitle {
 			titleAttr = ` title="` + mdEscape(title) + `"`
 		}
+		for i := range citations {
+			if "cite:"+citations[i].Name == url {
+				toks = append(toks, nodeToken(inline{kind: "raw", text: citedSpan(citations[i], titleAttr, inner)}))
+				return
+			}
+		}
+		safe, markers := markdownDestination(policy, EgressHyperlink, url)
 		toks = append(toks, nodeToken(inline{kind: "raw",
 			text: `<a href="` + mdEscape(safe) + `"` + titleAttr + egressAttrs(markers) + ">" + inner + "</a>"}))
 	}
@@ -763,12 +788,12 @@ func processEmphasis(toks []*mdToken) []inline {
 	return result
 }
 
-func parseInlines(refs map[string]refDef, policy EgressPolicy, text string) []inline {
-	return processEmphasis(tokenize(refs, policy, text))
+func parseInlines(refs map[string]refDef, policy EgressPolicy, citations []Citation, text string) []inline {
+	return processEmphasis(tokenize(refs, policy, citations, text))
 }
 
-func renderInlineText(refs map[string]refDef, policy EgressPolicy, text string) string {
-	return renderInlines(parseInlines(refs, policy, text))
+func renderInlineText(refs map[string]refDef, policy EgressPolicy, citations []Citation, text string) string {
+	return renderInlines(parseInlines(refs, policy, citations, text))
 }
 
 // ── Block parsing ───────────────────────────────────────────────────────────
@@ -1236,23 +1261,23 @@ func alignAttr(a string) string {
 	return ""
 }
 
-func renderBlocks(refs map[string]refDef, policy EgressPolicy, blocks []mdBlock) string {
+func renderBlocks(refs map[string]refDef, policy EgressPolicy, citations []Citation, blocks []mdBlock) string {
 	var sb strings.Builder
 	for _, b := range blocks {
-		sb.WriteString(renderBlock(refs, policy, b))
+		sb.WriteString(renderBlock(refs, policy, citations, b))
 	}
 	return sb.String()
 }
 
-func renderBlock(refs map[string]refDef, policy EgressPolicy, b mdBlock) string {
+func renderBlock(refs map[string]refDef, policy EgressPolicy, citations []Citation, b mdBlock) string {
 	switch b.kind {
 	case "hr":
 		return "<hr />\n"
 	case "heading":
 		lvl := strconv.Itoa(b.level)
-		return "<h" + lvl + ">" + renderInlineText(refs, policy, b.text) + "</h" + lvl + ">\n"
+		return "<h" + lvl + ">" + renderInlineText(refs, policy, citations, b.text) + "</h" + lvl + ">\n"
 	case "paragraph":
-		return "<p>" + renderInlineText(refs, policy, b.text) + "</p>\n"
+		return "<p>" + renderInlineText(refs, policy, citations, b.text) + "</p>\n"
 	case "fenced":
 		cls := ""
 		if b.lang != "" {
@@ -1262,7 +1287,7 @@ func renderBlock(refs map[string]refDef, policy EgressPolicy, b mdBlock) string 
 	case "indented":
 		return "<pre><code>" + mdEscape(b.text) + "\n</code></pre>\n"
 	case "blockquote":
-		return "<blockquote>\n" + renderBlocks(refs, policy, b.blocks) + "</blockquote>\n"
+		return "<blockquote>\n" + renderBlocks(refs, policy, citations, b.blocks) + "</blockquote>\n"
 	case "table":
 		var sb strings.Builder
 		sb.WriteString(`<table class="fuaran-table"><thead><tr>`)
@@ -1271,7 +1296,7 @@ func renderBlock(refs map[string]refDef, policy EgressPolicy, b mdBlock) string 
 			if idx < len(b.aligns) {
 				a = b.aligns[idx]
 			}
-			sb.WriteString(`<th class="fuaran-table-header"` + alignAttr(a) + ">" + renderInlineText(refs, policy, h) + "</th>")
+			sb.WriteString(`<th class="fuaran-table-header"` + alignAttr(a) + ">" + renderInlineText(refs, policy, citations, h) + "</th>")
 		}
 		sb.WriteString("</tr></thead><tbody>")
 		for _, row := range b.rows {
@@ -1285,25 +1310,25 @@ func renderBlock(refs map[string]refDef, policy EgressPolicy, b mdBlock) string 
 				if idx < len(b.aligns) {
 					a = b.aligns[idx]
 				}
-				sb.WriteString(`<td class="fuaran-table-cell"` + alignAttr(a) + ">" + renderInlineText(refs, policy, cell) + "</td>")
+				sb.WriteString(`<td class="fuaran-table-cell"` + alignAttr(a) + ">" + renderInlineText(refs, policy, citations, cell) + "</td>")
 			}
 			sb.WriteString("</tr>")
 		}
 		sb.WriteString("</tbody></table>\n")
 		return sb.String()
 	case "bullet":
-		return "<ul>\n" + renderItems(refs, policy, b.tight, b.items) + "</ul>\n"
+		return "<ul>\n" + renderItems(refs, policy, citations, b.tight, b.items) + "</ul>\n"
 	case "ordered":
 		startAttr := ""
 		if b.level != 1 {
 			startAttr = ` start="` + strconv.Itoa(b.level) + `"`
 		}
-		return "<ol" + startAttr + ">\n" + renderItems(refs, policy, b.tight, b.items) + "</ol>\n"
+		return "<ol" + startAttr + ">\n" + renderItems(refs, policy, citations, b.tight, b.items) + "</ol>\n"
 	}
 	return ""
 }
 
-func renderItems(refs map[string]refDef, policy EgressPolicy, tight bool, items []listItem) string {
+func renderItems(refs map[string]refDef, policy EgressPolicy, citations []Citation, tight bool, items []listItem) string {
 	var sb strings.Builder
 	for _, item := range items {
 		checkbox := ""
@@ -1320,14 +1345,14 @@ func renderItems(refs map[string]refDef, policy EgressPolicy, tight bool, items 
 			var inner strings.Builder
 			for _, blk := range item.blocks {
 				if blk.kind == "paragraph" {
-					inner.WriteString(renderInlineText(refs, policy, blk.text))
+					inner.WriteString(renderInlineText(refs, policy, citations, blk.text))
 				} else {
-					inner.WriteString("\n" + renderBlock(refs, policy, blk))
+					inner.WriteString("\n" + renderBlock(refs, policy, citations, blk))
 				}
 			}
 			sb.WriteString("<li" + liClass + ">" + checkbox + inner.String() + "</li>\n")
 		} else {
-			sb.WriteString("<li" + liClass + ">\n" + checkbox + renderBlocks(refs, policy, item.blocks) + "</li>\n")
+			sb.WriteString("<li" + liClass + ">\n" + checkbox + renderBlocks(refs, policy, citations, item.blocks) + "</li>\n")
 		}
 	}
 	return sb.String()
@@ -1339,6 +1364,14 @@ func renderItems(refs map[string]refDef, policy EgressPolicy, tight bool, items 
 // destination renders the inert EgressRefusalURL plus a marker naming the class
 // and the host — never the path or the query.
 func MarkdownToHTMLWithEgress(policy EgressPolicy, source string) string {
+	return MarkdownToHTMLCited(policy, nil, source)
+}
+
+// MarkdownToHTMLCited is MarkdownToHTMLWithEgress with the figures the text cites
+// (WIRE_FORMAT.md §3.6.32): a link whose destination is cite:<a declared name>
+// draws a span carrying data-fact, and asks no egress question because it has no
+// destination. Anything else is the link it always was.
+func MarkdownToHTMLCited(policy EgressPolicy, citations []Citation, source string) string {
 	if source == "" {
 		return ""
 	}
@@ -1347,7 +1380,7 @@ func MarkdownToHTMLWithEgress(policy EgressPolicy, source string) string {
 	rawLines := strings.Split(normalized, "\n")
 	refs, lines := extractRefDefs(rawLines)
 	blocks := parseBlocks(lines)
-	return sanitizeMarkdownHTML(renderBlocks(refs, policy, blocks))
+	return sanitizeMarkdownHTML(renderBlocks(refs, policy, citations, blocks))
 }
 
 // MarkdownToHTML renders GFM markdown source to deterministic, cross-host

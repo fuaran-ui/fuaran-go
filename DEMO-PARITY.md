@@ -31,7 +31,7 @@ by hand. It is what this file can honestly assert from inside the repo, and it i
 | `server-driven` (driver + transport-neutral channel + reconnect replay) | ✅ | `serverdriven/` | driver / channel / SSE / stdlib-WebSocket suites + the state-seeding leg |
 | `opstream-hashchain` (SHA-256 chain, verify, replay, sink) | ✅ | `opstream/` | chain corpus golden, byte-identical |
 | `dag-record` (DAG record wire form) | ✅ | `dag/` | `dag/` corpus fixtures, both actor cases |
-| `merge-dag` (3-way tree merge) | ✅ | `merge/` | merge-conformance corpus (tree + outcome) |
+| `merge-dag` (merge by fold, WIRE_FORMAT §34 — the only merge since fuaran#2645) | ✅ | `merge/` | merge-conformance `foldFixtures` (derived tree / refusal envelope / gated verdict + hash, both orders) |
 | `tree-diff` (before→after op-script) | ✅ | `diff/` | diff leg over the corpus |
 | `transform-eval` (`Binding.Transform` dataframe pipeline) | ✅ | `dataframe/` | dataframe + list-param legs; canonical round-trip |
 | `function-capability` (declared capability surface + codec) | ✅ | `function/` | capability-laws leg |

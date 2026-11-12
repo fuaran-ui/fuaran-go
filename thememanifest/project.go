@@ -228,6 +228,10 @@ func invariantKey(inv Invariant) string {
 			e = *k.Budget.Easing
 		}
 		return name + "|" + itoa(k.Budget.MaxDurationMs) + "|" + e + "|" + ftoa(inv.Weight)
+	case UnknownInvariant:
+		// The whole invariant's canonical bytes: two unknown invariants are the
+		// same one exactly when they encode alike.
+		return name + "|" + encodeInvariant(inv)
 	}
 	return name
 }

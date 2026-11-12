@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "08ca738ed16bd740e160879588ee8aa778a2d6724beffc08126fedf462d47019"
+const SourceSHA256 = "c694bd27beacf7d3f6a9c794ec15f03e02b78ca98bbbe56333b648410d14ef19"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -29,6 +29,7 @@ var (
 		{Name: "icon", Optionality: Optional, Type: Type{Kind: TStr}},
 		{Name: "tooltip", Optionality: HostOnly, Type: Type{Kind: TFn, Wire: "<closure>"}},
 		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
+		{Name: "affordance", Optionality: Optional, Type: Type{Kind: TRecord, Name: "Affordance"}},
 	}}
 	KindCallout = Kind{Tag: "Callout", Category: "Display", Fields: []Field{
 		{Name: "body", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
@@ -121,6 +122,7 @@ var (
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "tone", Optionality: OmitDefault, Default: "\"Default\"", Type: Type{Kind: TEnum, Name: "ToneVariant"}},
 		{Name: "value", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
+		{Name: "reference", Optionality: Optional, Type: Type{Kind: TStr}},
 	}}
 	KindFileUpload = Kind{Tag: "FileUpload", Category: "Input", Fields: []Field{
 		{Name: "accept", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TStr}}},
@@ -203,6 +205,7 @@ var (
 		{Name: "onMarkerClick", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 	}}
 	KindMarkdown = Kind{Tag: "Markdown", Category: "Display", Fields: []Field{
+		{Name: "citations", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "MarkdownCitation"}}},
 		{Name: "text", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 	}}
 	KindMath = Kind{Tag: "Math", Category: "Display", Fields: []Field{
@@ -271,6 +274,8 @@ var (
 		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
 		{Name: "multiple", Optionality: Optional, Type: Type{Kind: TBool}},
 		{Name: "values", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TList, Elem: &Type{Kind: TStr}}}}},
+		{Name: "affordance", Optionality: Optional, Type: Type{Kind: TRecord, Name: "Affordance"}},
+		{Name: "groups", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "SelectOptionGroup"}}},
 	}}
 	KindSkeleton = Kind{Tag: "Skeleton", Category: "Display", Fields: []Field{
 		{Name: "rows", Optionality: Required, Type: Type{Kind: TInt}},
@@ -921,6 +926,18 @@ var (
 		{Name: "role", Optionality: Optional, Type: Type{Kind: THosted, Wire: "json"}},
 		{Name: "speak", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
 	}}
+	RecordAffordance = Record{Name: "Affordance", Fields: []Field{
+		{Name: "patterns", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TStr}}},
+		{Name: "readPatterns", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TStr}}},
+		{Name: "aliases", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "AffordanceAlias"}}},
+		{Name: "description", Optionality: Optional, Type: Type{Kind: TStr}},
+		{Name: "clearable", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
+		{Name: "neverControllable", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
+	}}
+	RecordAffordanceAlias = Record{Name: "AffordanceAlias", Fields: []Field{
+		{Name: "alias", Optionality: Required, Type: Type{Kind: TStr}},
+		{Name: "value", Optionality: Required, Type: Type{Kind: TStr}},
+	}}
 	RecordButtonGroupItem = Record{Name: "ButtonGroupItem", Fields: []Field{
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "onClick", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
@@ -993,6 +1010,7 @@ var (
 		{Name: "required", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
 		{Name: "help", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "rule", Optionality: Optional, Type: Type{Kind: TRecord, Name: "FieldRule"}},
+		{Name: "affordance", Optionality: Optional, Type: Type{Kind: TRecord, Name: "Affordance"}},
 	}}
 	RecordGuestChannel = Record{Name: "GuestChannel", Fields: []Field{
 		{Name: "direction", Optionality: Required, Type: Type{Kind: TEnum, Name: "ChannelDirection"}},
@@ -1007,6 +1025,11 @@ var (
 		{Name: "latitude", Optionality: Required, Type: Type{Kind: TFloat}},
 		{Name: "longitude", Optionality: Required, Type: Type{Kind: TFloat}},
 	}}
+	RecordMarkdownCitation = Record{Name: "MarkdownCitation", Fields: []Field{
+		{Name: "label", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
+		{Name: "name", Optionality: Required, Type: Type{Kind: TStr}},
+		{Name: "reference", Optionality: Required, Type: Type{Kind: TStr}},
+	}}
 	RecordMetricComparison = Record{Name: "MetricComparison", Fields: []Field{
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "value", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TFloat}}}},
@@ -1020,6 +1043,10 @@ var (
 	RecordSelectOption = Record{Name: "SelectOption", Fields: []Field{
 		{Name: "label", Optionality: Required, Type: Type{Kind: TStr}},
 		{Name: "value", Optionality: Required, Type: Type{Kind: TStr}},
+	}}
+	RecordSelectOptionGroup = Record{Name: "SelectOptionGroup", Fields: []Field{
+		{Name: "label", Optionality: Required, Type: Type{Kind: TStr}},
+		{Name: "values", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TStr}}},
 	}}
 	RecordSemanticStyle = Record{Name: "SemanticStyle", Fields: []Field{
 		{Name: "direction", Optionality: OmitDefault, Default: "\"auto\"", Type: Type{Kind: TEnum, Name: "TextDirection"}},
@@ -1039,6 +1066,7 @@ var (
 		{Name: "onLoading", Optionality: Optional, Type: Type{Kind: TNode}},
 	}}
 	RecordStaticRows = Record{Name: "StaticRows", Fields: []Field{
+		{Name: "citations", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "TableCitation"}}},
 		{Name: "defaultSort", Optionality: Optional, Type: Type{Kind: TRecord, Name: "DefaultSort"}},
 		{Name: "headers", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TUnion, Name: "TextSource"}}},
 		{Name: "rows", Optionality: Required, Type: Type{Kind: TList, Elem: &Type{Kind: TList, Elem: &Type{Kind: TUnion, Name: "TextSource"}}}},
@@ -1061,6 +1089,12 @@ var (
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "icon", Optionality: Optional, Type: Type{Kind: TStr}},
 		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
+	}}
+	RecordTableCitation = Record{Name: "TableCitation", Fields: []Field{
+		{Name: "column", Optionality: Required, Type: Type{Kind: TInt}},
+		{Name: "label", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
+		{Name: "reference", Optionality: Required, Type: Type{Kind: TStr}},
+		{Name: "row", Optionality: Required, Type: Type{Kind: TInt}},
 	}}
 	RecordTrackEntry = Record{Name: "TrackEntry", Fields: []Field{
 		{Name: "default", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
@@ -1123,6 +1157,10 @@ var (
 	OpReplaceRoot = Op{Tag: "ReplaceRoot", Fields: []Field{
 		{Name: "node", Optionality: Required, Type: Type{Kind: TNode}},
 	}}
+	OpUpdateAccessibility = Op{Tag: "UpdateAccessibility", Fields: []Field{
+		{Name: "accessibility", Optionality: Required, Type: Type{Kind: TRecord, Name: "Accessibility"}},
+		{Name: "target", Optionality: Required, Type: Type{Kind: TStr}},
+	}}
 	OpUpdateProp = Op{Tag: "UpdateProp", Fields: []Field{
 		{Name: "path", Optionality: Required, Type: Type{Kind: TStr}},
 		{Name: "target", Optionality: Required, Type: Type{Kind: TStr}},
@@ -1135,6 +1173,10 @@ var (
 	OpUpdateStyle = Op{Tag: "UpdateStyle", Fields: []Field{
 		{Name: "style", Optionality: Required, Type: Type{Kind: TRecord, Name: "SemanticStyle"}},
 		{Name: "target", Optionality: Required, Type: Type{Kind: TStr}},
+	}}
+	OpUpdateTooltip = Op{Tag: "UpdateTooltip", Fields: []Field{
+		{Name: "target", Optionality: Required, Type: Type{Kind: TStr}},
+		{Name: "tooltip", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
 	}}
 )
 
@@ -1160,7 +1202,7 @@ var Enums = []*Enum{&EnumBadgeVariant, &EnumBoxRole, &EnumButtonVariant, &EnumCa
 var Unions = []*Union{&UnionAction, &UnionBinding, &UnionBoxLayout, &UnionCallResultTarget, &UnionCellFormat, &UnionCellKindErased, &UnionChartAnnotation, &UnionChartAnnotationRange, &UnionChartAnnotationX, &UnionColumnWidth, &UnionCurveCommand, &UnionFormFieldKind, &UnionFormat, &UnionFragmentArg, &UnionHoleDecl, &UnionHoleValueSpace, &UnionLocalFlushTrigger, &UnionLocaleSource, &UnionMediaKind, &UnionScalar, &UnionShape, &UnionTextSource}
 
 // Records is every record row, in idl.json order.
-var Records = []*Record{&RecordAccessibility, &RecordButtonGroupItem, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordMetricComparison, &RecordRangePair, &RecordSelectOption, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
+var Records = []*Record{&RecordAccessibility, &RecordAffordance, &RecordAffordanceAlias, &RecordButtonGroupItem, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordMarkdownCitation, &RecordMetricComparison, &RecordRangePair, &RecordSelectOption, &RecordSelectOptionGroup, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTableCitation, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
 
 // Ops is every TreeOp row, in idl.json order.
-var Ops = []*Op{&OpBatch, &OpEditNode, &OpInsertChild, &OpMoveNode, &OpPatchStyle, &OpRemoveNode, &OpReorderChildren, &OpReplaceBinding, &OpReplaceRoot, &OpUpdateProp, &OpUpdateState, &OpUpdateStyle}
+var Ops = []*Op{&OpBatch, &OpEditNode, &OpInsertChild, &OpMoveNode, &OpPatchStyle, &OpRemoveNode, &OpReorderChildren, &OpReplaceBinding, &OpReplaceRoot, &OpUpdateAccessibility, &OpUpdateProp, &OpUpdateState, &OpUpdateStyle, &OpUpdateTooltip}

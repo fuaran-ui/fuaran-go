@@ -478,3 +478,40 @@ func assertGoldenBytes(t *testing.T, script []wire.Obj, want []string) {
 		}
 	}
 }
+
+// Phase 2527 — a trait-only edit is one op, and the seat replace is not reached.
+func TestTraitOnlyChangeIsOneTraitOp(t *testing.T) {
+	node := func(envelope string) wire.Node {
+		t.Helper()
+		n, err := wire.DecodeNode(`{` + envelope + `"id":"m","kind":{"$type":"Markdown","text":"x"}}`)
+		if err != nil {
+			t.Fatalf("DecodeNode: %v", err)
+		}
+		return n
+	}
+	cases := []struct {
+		name, before, after, want string
+	}{
+		{"accessibility set", ``, `"accessibility":{"role":"status"},`,
+			`{"$type":"UpdateAccessibility","accessibility":{"role":"status"},"target":"m"}`},
+		{"accessibility removed", `"accessibility":{"role":"status"},`, ``,
+			`{"$type":"UpdateAccessibility","accessibility":{},"target":"m"}`},
+		{"tooltip set", ``, `"tooltip":"t",`, `{"$type":"UpdateTooltip","target":"m","tooltip":"t"}`},
+		{"tooltip cleared", `"tooltip":"t",`, ``, `{"$type":"UpdateTooltip","target":"m"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			script := Diff(node(c.before), node(c.after))
+			if len(script) != 1 {
+				t.Fatalf("want one op, got %d", len(script))
+			}
+			got, err := wire.EncodeOp(script[0])
+			if err != nil {
+				t.Fatalf("EncodeOp: %v", err)
+			}
+			if got != c.want {
+				t.Errorf("got %s\nwant %s", got, c.want)
+			}
+		})
+	}
+}

@@ -6,9 +6,19 @@
 // DAG codecs.
 //
 // The wire shape is a plain (non-$type) object whose keys sort in Ordinal order
-// (actor < hash < op < outcomeHash < parents < promptId < resultEnvelope <
-// streamId < timestamp < tombstoned). Byte-stable round-trip
-// (EncodeDagRecord(DecodeDagRecord(x)) == x) is the conformance property.
+// (actor < hash < op < parents < promptId < resultEnvelope < streamId <
+// timestamp). Byte-stable round-trip (EncodeDagRecord(DecodeDagRecord(x)) == x)
+// is the conformance property.
+//
+// # The cut (Phase 2645)
+//
+// Since fuaran#2645 a DAG record is a Fuaran Core DAG node over the linear
+// chain's provenance entry (WIRE_FORMAT §5.3.3): Hash is Core's Dag.nodeId over
+// the sorted parents, the actor and the v2 stream entry, and a merge node is an
+// ordinary node whose op is its reconciliation script as a Batch. The
+// outcomeHash and tombstoned members were retired at the cut; a record carrying
+// either is a pre-2645 record whose address does not recompute, and it is
+// refused BY NAME (fuaran#2646), never lifted.
 //
 // # The typed actor (Phase 1144), and what this host does not do
 //
@@ -28,7 +38,8 @@
 // FORWARD — a pre-1144 hash is not reproducible under the new pre-image and is
 // not a valid parent link for a post-1144 node.
 //
-// fuaran-go is a CODEC host for this artefact: it mints no DAG content address
+// fuaran-go is a CODEC host for this artefact (§5.3.5 — it does not claim the
+// address profile): it mints no DAG content address
 // and verifies none (the only pre-images this module computes are the LINEAR
 // chain's, in package opstream), so Hash is an opaque string it round-trips.
 // There was no Go pre-image to re-derive; the reference envelope above is
@@ -64,8 +75,9 @@ var Success = ResultEnvelope{Kind: "Success"}
 
 // Record is a content-addressed, multi-parent op-stream record (the DAG
 // generalisation of the linear OpRecord). Parents is in author order (head =
-// primary parent); OutcomeHash is set only on a merge node; a single-parent
-// record is the degenerate linear step and a zero-parent record is a genesis.
+// primary parent); a two-parent record is a merge node whose Op is its script
+// as a Batch, a single-parent record is the degenerate linear step and a
+// zero-parent record is a genesis.
 type Record struct {
 	StreamID string
 	Hash     string
@@ -73,12 +85,10 @@ type Record struct {
 	Op       wire.Obj
 	// Actor is who authored the op — the typed actor (Phase 1144, replacing the
 	// bare UserID). Nested on the wire in its own pinned member order.
-	Actor       opstream.Actor
-	Timestamp   int64
-	Result      ResultEnvelope
-	Tombstoned  bool
-	OutcomeHash *string // nil = absent (a non-merge node)
-	PromptID    *string // nil = absent
+	Actor     opstream.Actor
+	Timestamp int64
+	Result    ResultEnvelope
+	PromptID  *string // nil = absent
 }
 
 func envelopeObj(env ResultEnvelope) wire.Obj {
@@ -91,8 +101,7 @@ func envelopeObj(env ResultEnvelope) wire.Obj {
 }
 
 // EncodeDagRecord encodes a Record to its canonical wire JSON. Keys emit in
-// Ordinal order; the optional outcomeHash / promptId are included only when
-// present. The nested op re-encodes through the shared TreeOp encoder and the
+// Ordinal order; the optional promptId is included only when present. The nested op re-encodes through the shared TreeOp encoder and the
 // nested actor through opstream.EncodeActor, so the output is byte-identical to
 // the sibling hosts.
 //
@@ -128,11 +137,6 @@ func EncodeDagRecord(record Record) (string, error) {
 		{"resultEnvelope", envJSON},
 		{"streamId", canonical.EscapeString(record.StreamID)},
 		{"timestamp", strconv.FormatInt(record.Timestamp, 10)},
-		{"tombstoned", strconv.FormatBool(record.Tombstoned)},
-	}
-	if record.OutcomeHash != nil {
-		members = append(members, struct{ key, value string }{
-			"outcomeHash", canonical.EscapeString(*record.OutcomeHash)})
 	}
 	if record.PromptID != nil {
 		members = append(members, struct{ key, value string }{
@@ -168,6 +172,16 @@ func DecodeDagRecord(text string) (Record, error) {
 	obj, ok := raw.(map[string]any)
 	if !ok {
 		return Record{}, &wire.DecodeError{Code: wire.CodeWrongType, Path: "$", Message: "expected an object at $"}
+	}
+
+	// A pre-2645 envelope is refused BY NAME: its address folded a merge outcome
+	// or a pre-cut pre-image, so it cannot recompute under the cut.
+	for _, retired := range []string{"tombstoned", "outcomeHash"} {
+		if _, present := obj[retired]; present {
+			return Record{}, &wire.DecodeError{Code: wire.CodeWrongType, Path: "$." + retired,
+				Message: "pre-2645 record — 'tombstoned' / 'outcomeHash' were retired at the cut, " +
+					"and DAG content addresses do not carry forward (re-mint the store)"}
+		}
 	}
 
 	// A pre-1144 envelope is refused BY NAME, not lifted — see the package doc.
@@ -221,13 +235,6 @@ func DecodeDagRecord(text string) (Record, error) {
 	}
 	if env, ok := obj["resultEnvelope"].(map[string]any); ok {
 		rec.Result = decodeEnvelope(env)
-	}
-	if t, ok := obj["tombstoned"].(bool); ok {
-		rec.Tombstoned = t
-	}
-	if oh, ok := obj["outcomeHash"]; ok {
-		s := asString(oh)
-		rec.OutcomeHash = &s
 	}
 	if pid, ok := obj["promptId"]; ok {
 		s := asString(pid)

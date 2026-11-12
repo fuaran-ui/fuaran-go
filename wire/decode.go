@@ -2376,8 +2376,9 @@ func decodeJSONValue(w *walkState, raw any, path string) Value {
 }
 
 // decodeJSONPassthrough is the null-LENIENT structural decoder — for positions
-// that can legitimately carry a §5 obj-erased opaque seam (Mount inputs embed
-// whole node trees, whose Binding.Static values may be null).
+// carried structurally rather than typed (a FragmentDecl's holes and effect).
+// A Mount's inputs no longer pass through here (fuaran#2701): they decode by
+// their table row, so their node trees are typed.
 func decodeJSONPassthrough(w *walkState, raw any, _ string) Value {
 	return fromJSON(raw)
 }
@@ -3265,12 +3266,70 @@ func decodeGridPageSize(w *walkState, raw any, path string) Value {
 // Phase 801 optional sort-intent slots. Both omitted re-encodes byte-identically
 // to the pre-801 wire.
 func decodeStaticRows(w *walkState, raw any, path string) Value {
-	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordStaticRows)
+	obj := expectObject(raw, path)
+	s := newRecordSpec(w, obj, path, &idl.RecordStaticRows)
 	s.field("headers", decodeTextSourceArray)
 	s.field("rows", decodeStaticRowCells)
 	s.field("sortable", decodeBool)
 	s.field("defaultSort", decodeDefaultSort)
+	// Phase 2592 — read against the rows, so a bad row list is reported first.
+	s.field("citations", func(w *walkState, raw any, path string) Value {
+		rows, _ := obj["rows"].([]any)
+		return decodeTableCitations(w, raw, path, rows)
+	})
 	return s.buildStrict("")
+}
+
+// decodeTableCoordinate — a cited cell's row or column: a non-negative integer,
+// as the header index is.
+func decodeTableCoordinate(w *walkState, raw any, path string) Value {
+	index := expectInt(raw, path)
+	if index < 0 {
+		fail(CodeWrongType, path, "expected a non-negative integer index at "+path)
+	}
+	return Int(index)
+}
+
+func decodeTableCitation(w *walkState, raw any, path string) Obj {
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordTableCitation)
+	s.field("column", decodeTableCoordinate)
+	s.field("label", decodeTextSource)
+	s.field("reference", decodeString)
+	s.field("row", decodeTableCoordinate)
+	return s.buildStrict("")
+}
+
+// decodeTableCitations — Phase 2592 (WIRE_FORMAT.md §3.6.33). Absent is the one
+// spelling of none, so an empty array is refused rather than dropped; a coordinate
+// names a cell that exists, read against the rows; a cell is cited once. The
+// reference stays opaque, as on Fact.
+func decodeTableCitations(w *walkState, raw any, path string, rows []any) Value {
+	items := expectArray(raw, path)
+	if len(items) == 0 {
+		fail(CodeWrongType, path, "expected a non-empty citation list, or no member at all, at "+path)
+	}
+	seen := make(map[[2]int64]bool, len(items))
+	out := make(Arr, len(items))
+	for i, item := range items {
+		itemPath := path + "[" + strconv.Itoa(i) + "]"
+		entry := decodeTableCitation(w, item, itemPath)
+		row, _ := entry.Fields["row"].(Int)
+		column, _ := entry.Fields["column"].(Int)
+		if int64(row) >= int64(len(rows)) {
+			fail(CodeWrongType, itemPath+".row", "expected a row index this table has at "+itemPath+".row")
+		}
+		cells, _ := rows[row].([]any)
+		if int64(column) >= int64(len(cells)) {
+			fail(CodeWrongType, itemPath+".column", "expected a column index the cited row has at "+itemPath+".column")
+		}
+		cell := [2]int64{int64(row), int64(column)}
+		if seen[cell] {
+			fail(CodeWrongType, itemPath, "expected a cell no other citation in this list names at "+itemPath)
+		}
+		seen[cell] = true
+		out[i] = entry
+	}
+	return out
 }
 
 // decodeStaticRowCells — StaticRows.rows: a list of rows of TextSource cells.
@@ -3501,8 +3560,57 @@ func (handArms) armHeading(w *walkState, obj map[string]any, path string) Obj {
 	return s.build("Heading")
 }
 
+// decodeCitationName — what a cite:<name> destination can say without escaping
+// (WIRE_FORMAT.md §3.6.32).
+func decodeCitationName(w *walkState, raw any, path string) Value {
+	s := expectString(raw, path)
+	valid := s != ""
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			valid = false
+		}
+	}
+	if !valid {
+		fail(CodeWrongType, path, "expected a citation name of letters, digits, '-' and '_' at "+path)
+	}
+	return Str(s)
+}
+
+func decodeMarkdownCitation(w *walkState, raw any, path string) Obj {
+	s := newRecordSpec(w, expectObject(raw, path), path, &idl.RecordMarkdownCitation)
+	s.field("label", decodeTextSource)
+	s.field("name", decodeCitationName)
+	s.field("reference", decodeString)
+	return s.buildStrict("")
+}
+
+// decodeMarkdownCitations — Phase 2591. Absent is the one spelling of none, so an
+// empty array is refused rather than dropped, and a name may be used once. The
+// reference stays opaque, as on Fact.
+func decodeMarkdownCitations(w *walkState, raw any, path string) Value {
+	items := expectArray(raw, path)
+	if len(items) == 0 {
+		fail(CodeWrongType, path, "expected a non-empty citation list, or no member at all, at "+path)
+	}
+	seen := make(map[string]bool, len(items))
+	out := make(Arr, len(items))
+	for i, item := range items {
+		itemPath := path + "[" + strconv.Itoa(i) + "]"
+		entry := decodeMarkdownCitation(w, item, itemPath)
+		name, _ := entry.Fields["name"].(Str)
+		if seen[string(name)] {
+			fail(CodeWrongType, itemPath+".name", "expected a citation name no other citation in this list uses at "+itemPath+".name")
+		}
+		seen[string(name)] = true
+		out[i] = entry
+	}
+	return out
+}
+
 func (handArms) armMarkdown(w *walkState, obj map[string]any, path string) Obj {
 	s := newKindSpec(w, obj, path, &idl.KindMarkdown)
+	s.field("citations", decodeMarkdownCitations)
 	s.field("text", decodeTextSource)
 	return s.build("Markdown")
 }
@@ -3852,7 +3960,70 @@ func (handArms) armSelect(w *walkState, obj map[string]any, path string) Obj {
 	s.field("multiple", decodeBool)
 	s.field("values", decodeBindingStringList)
 	s.sentinel("onChangeMulti")
-	return s.build("Select")
+	o := s.build("Select")
+	checkSelectGroups(o, path)
+	return o
+}
+
+// checkSelectGroups applies the Phase 2571 option-group refusals (WIRE_FORMAT.md
+// §3.6.30), both WRONG_TYPE at the offending `values` element: a value named more
+// than once (by two groups, or twice by one), and — over STATIC options only — a
+// value naming no option. A bound source resolves at render, where the decoder
+// cannot judge it. `groups` itself is read from its IDL row (omit-at-default).
+func checkSelectGroups(o Obj, path string) {
+	groups, ok := o.Fields["groups"].(Arr)
+	if !ok || len(groups) == 0 {
+		return
+	}
+	var known map[string]bool
+	if src, ok := o.Fields["source"].(Obj); ok && src.Tag == "Static" {
+		known = map[string]bool{}
+		if opts, ok := src.Fields["value"].(Arr); ok {
+			for _, opt := range opts {
+				if rec, ok := opt.(Obj); ok {
+					if v, ok := rec.Fields["value"].(Str); ok {
+						if string(v) == opaqueSentinel {
+							known = nil
+							break
+						}
+						known[string(v)] = true
+					}
+				}
+			}
+		}
+	}
+	type naming struct {
+		group int
+		label string
+	}
+	seen := map[string]naming{}
+	for gi, g := range groups {
+		rec, _ := g.(Obj)
+		label, _ := rec.Fields["label"].(Str)
+		values, _ := rec.Fields["values"].(Arr)
+		for vi, raw := range values {
+			v, _ := raw.(Str)
+			value := string(v)
+			at := fmt.Sprintf("%s.groups[%d].values[%d]", path, gi, vi)
+			if first, dup := seen[value]; dup {
+				failExpecting(CodeWrongType, at,
+					fmt.Sprintf("option value '%s' is already named by group %d ('%s'): an option belongs to at most one group",
+						value, first.group, first.label),
+					"a value no other group (and no earlier entry of this group) names")
+			}
+			if known != nil && !known[value] {
+				names := make([]string, 0, len(known))
+				for k := range known {
+					names = append(names, "'"+k+"'")
+				}
+				sort.Strings(names)
+				failExpecting(CodeWrongType, at,
+					fmt.Sprintf("option value '%s' names no option of this Select: a group can only gather the options its Select carries", value),
+					"the value of one of this Select's options: "+strings.Join(names, ", "))
+			}
+			seen[value] = naming{gi, string(label)}
+		}
+	}
 }
 
 // onDismiss is optional and — unlike the closure-sentinel handlers — a
@@ -4168,15 +4339,17 @@ func (handArms) armFragmentDecl(w *walkState, obj map[string]any, path string) O
 	return s.build("FragmentDecl")
 }
 
-// Isolation/embedding boundary (§4o). inputs passes through WITHOUT
-// null-strictness — it embeds whole node trees whose Binding.Static
-// values are §5 opaque seams.
+// Isolation/embedding boundary (§4o). `inputs` is read by its table row
+// (fuaran#2701), the `Map<string, FragmentArg>` a FragmentRef's `args` is read
+// by: a `SlotArg`'s `tree` decodes as a node, so the traversal and the merge
+// footprint visit the nodes a Mount's inputs hold, as the reference does. The
+// subtree decodes through the ordinary node decoder, so a Binding.Static value
+// inside it keeps the §5 opaque-seam handling it has anywhere else in a tree.
 func (handArms) armMount(w *walkState, obj map[string]any, path string) Obj {
 	s := newKindSpec(w, obj, path, &idl.KindMount)
 	s.field("scopeId", decodeString)
 	s.field("channel", decodeGuestChannel)
 	s.field("capabilities", decodeJSONValue)
-	s.field("inputs", decodeJSONPassthrough)
 	return s.build("Mount")
 }
 

@@ -17,11 +17,16 @@
 // through every verb and checks units, so the `-unit-` vectors are asserted like
 // every other evalPipeline vector.
 //
+// THE `columnOp` VECTORS RUN (Phase 2500 gave this host the surface): the op
+// decodes through DecodeColumnOpParsed, re-encodes byte for byte to expected.op,
+// and applies through ApplyColumnOp, compared as an evalPipeline vector is.
+//
 // NAMED EXCEPTIONS, each reported by name and counted, never silent:
 //
-//   - the case kinds `columnOp` and `delta`: this host carries no ColumnOp
-//     surface and no table-delta surface. The set of case kinds in the file must
-//     be exactly {evalPipeline, columnOp, delta}, so a new kind fails loudly.
+//   - the case kind `delta`: a vector carries two tables and asks for their diff,
+//     and this host's GridEditDelta derives a row delta from an op over the
+//     before table. The set of case kinds in the file must be exactly
+//     {evalPipeline, columnOp, delta}, so a new kind fails loudly.
 //
 // TOLERANCE (Phase 2400). A vector carrying `expected.tolerance` names the
 // columns the reference marks host-rounded, each with a bound in ulps. Those
@@ -95,18 +100,19 @@ type transformLawVector struct {
 	Input struct {
 		Source   string `json:"source"`
 		Pipeline string `json:"pipeline"`
+		Op       string `json:"op"`
 	} `json:"input"`
 	Expected struct {
 		Verdict   string         `json:"verdict"`
 		Table     string         `json:"table"`
+		Op        string         `json:"op"`
 		Tolerance map[string]int `json:"tolerance"`
 	} `json:"expected"`
 }
 
 // transformLawKindsNotRun names each case kind this host does not run, and why.
 var transformLawKindsNotRun = map[string]string{
-	"columnOp": "this host carries no ColumnOp surface",
-	"delta":    "this host carries no table-delta surface",
+	"delta": "this host derives a row delta from an op over the before table (GridEditDelta); it has no surface that diffs two tables",
 }
 
 func TestTransformLaws(t *testing.T) {
@@ -141,7 +147,7 @@ func TestTransformLaws(t *testing.T) {
 	for _, v := range doc.Vectors {
 		kinds[v.Case]++
 	}
-	want := map[string]bool{"evalPipeline": true}
+	want := map[string]bool{"evalPipeline": true, "columnOp": true}
 	for k := range transformLawKindsNotRun {
 		want[k] = true
 	}
@@ -160,10 +166,16 @@ func TestTransformLaws(t *testing.T) {
 			row.File, doc.Iterations, row.Iterations, kinds["evalPipeline"])
 	}
 
-	ran, units := 0, 0
+	ran, columnOps, units := 0, 0, 0
 	for _, v := range doc.Vectors {
 		if _, notRun := transformLawKindsNotRun[v.Case]; notRun {
 			continue // reported by name below
+		}
+		if v.Case == "columnOp" {
+			columnOps++
+			v := v
+			t.Run(v.ID, func(t *testing.T) { runColumnOpLawVector(t, v) })
+			continue
 		}
 		ran++
 		if strings.Contains(v.ID, "-unit-") {
@@ -184,10 +196,62 @@ func TestTransformLaws(t *testing.T) {
 	for _, k := range notRunKinds {
 		t.Logf("transformLaws: not run %d %s vector(s) — %s", kinds[k], k, transformLawKindsNotRun[k])
 	}
-	t.Logf("transformLaws (kitVersion %s): ran %d evalPipeline vectors (%d of them unit vectors); skipped %d columnOp, %d delta",
-		doc.KitVersion, ran, units, kinds["columnOp"], kinds["delta"])
+	t.Logf("transformLaws (kitVersion %s): ran %d evalPipeline vectors (%d of them unit vectors) and %d columnOp vectors; skipped %d delta",
+		doc.KitVersion, ran, units, columnOps, kinds["delta"])
 	if ran != kinds["evalPipeline"] {
 		t.Fatalf("ran %d != %d evalPipeline vectors", ran, kinds["evalPipeline"])
+	}
+	if columnOps != kinds["columnOp"] {
+		t.Fatalf("ran %d != %d columnOp vectors", columnOps, kinds["columnOp"])
+	}
+}
+
+func runColumnOpLawVector(t *testing.T, v transformLawVector) {
+	dec := json.NewDecoder(strings.NewReader(v.Input.Op))
+	dec.UseNumber()
+	var el any
+	if err := dec.Decode(&el); err != nil {
+		t.Fatalf("parse op: %v", err)
+	}
+	op, cerr := dataframe.DecodeColumnOpParsed(el)
+	if cerr != nil {
+		t.Fatalf("decode op: %s", cerr.Detail)
+	}
+	encoded, err := dataframe.EncodeColumnOp(op)
+	if err != nil {
+		t.Fatalf("encode op: %v", err)
+	}
+	if encoded != v.Expected.Op {
+		t.Fatalf("op mismatch\n got: %s\nwant: %s", encoded, v.Expected.Op)
+	}
+	src, cerr := dataframe.DecodeSource(v.Input.Source)
+	if cerr != nil {
+		t.Fatalf("decode source: %s", cerr.Detail)
+	}
+	embedded, ok := src.(dataframe.Embedded)
+	if !ok {
+		t.Fatalf("the vector's source is not embedded")
+	}
+	result, refusal := dataframe.ApplyColumnOp(op, embedded.Table)
+	switch v.Expected.Verdict {
+	case "error":
+		if refusal == nil {
+			t.Fatalf("the reference refused the op; this host applied it")
+		}
+		return
+	case "ok":
+	default:
+		t.Fatalf("unknown verdict %q", v.Expected.Verdict)
+	}
+	if refusal != nil {
+		t.Fatalf("apply: %v", refusal)
+	}
+	got, err := dataframe.EncodeSource(dataframe.Embedded{Table: result})
+	if err != nil {
+		t.Fatalf("encode result: %v", err)
+	}
+	if got != v.Expected.Table {
+		t.Fatalf("applied table mismatch\n got: %s\nwant: %s", got, v.Expected.Table)
 	}
 }
 

@@ -82,7 +82,8 @@ type MotionBudget struct {
 	Easing        *string
 }
 
-// InvariantKind is a declared invariant's payload (closed).
+// InvariantKind is a declared invariant's payload: closed for the kinds this
+// host enforces, with UnknownInvariant for a kind it does not know (Phase 2133).
 type InvariantKind interface{ isInvariantKind() }
 
 // ContrastFloor: a named role's resolved contrast must be at least MinRatio.
@@ -101,9 +102,22 @@ type UsageBudget struct {
 // MotionVoice: the theme's motion must stay within the declared MotionBudget.
 type MotionVoice struct{ Budget MotionBudget }
 
-func (ContrastFloor) isInvariantKind() {}
-func (UsageBudget) isInvariantKind()   {}
-func (MotionVoice) isInvariantKind()   {}
+// UnknownInvariant is an invariant whose kind this host does not know — a
+// newer constraint, or one another host enforces (Phase 2133). It is KEPT, so it
+// round-trips through Decode and Encode with its members intact, and Validate
+// reports it as INVARIANT_KIND_UNKNOWN: declared, and enforced by nothing here.
+// Kind is the wire discriminator as written; Members are the invariant's
+// members other than `kind` and `weight` (the weight is on the Invariant), as
+// parsed.
+type UnknownInvariant struct {
+	Kind    string
+	Members map[string]any
+}
+
+func (ContrastFloor) isInvariantKind()    {}
+func (UsageBudget) isInvariantKind()      {}
+func (MotionVoice) isInvariantKind()      {}
+func (UnknownInvariant) isInvariantKind() {}
 
 // DefaultWeight is the soft weight an invariant carries unless overridden.
 const DefaultWeight = 1.0
@@ -122,15 +136,18 @@ func WeightedInvariant(weight float64, kind InvariantKind) Invariant {
 	return Invariant{Kind: kind, Weight: weight}
 }
 
-// InvariantKindName is the stable discriminator string for an invariant.
+// InvariantKindName is the stable discriminator string for an invariant — the
+// wire kind, as written, for an UnknownInvariant.
 func InvariantKindName(inv Invariant) string {
-	switch inv.Kind.(type) {
+	switch k := inv.Kind.(type) {
 	case ContrastFloor:
 		return "ContrastFloor"
 	case UsageBudget:
 		return "UsageBudget"
 	case MotionVoice:
 		return "MotionVoice"
+	case UnknownInvariant:
+		return k.Kind
 	}
 	return ""
 }
@@ -184,6 +201,86 @@ func PaletteColours(m ThemeManifest) map[string]bool {
 	for _, t := range m.Tokens {
 		if t.Type == "color" {
 			out[t.Value] = true
+		}
+	}
+	return out
+}
+
+// ─── Validation — what the decoded values MEAN (Phase 2133) ──────────────────
+
+// The shared validation defect codes — the table in the corpus's WIRE_FORMAT
+// §13 (the style-observer family's manifest-validation tier), identical on
+// every manifest host.
+const (
+	// A ContrastFloor's minRatio lies outside [1, 21] (an omitted one is 0).
+	ContrastFloorOutOfRange = "CONTRAST_FLOOR_OUT_OF_RANGE"
+	// A ContrastFloor's role is empty.
+	ContrastFloorRoleEmpty = "CONTRAST_FLOOR_ROLE_EMPTY"
+	// No role binding binds the floor's non-empty role.
+	ContrastFloorRoleUnbound = "CONTRAST_FLOOR_ROLE_UNBOUND"
+	// A UsageBudget's token names no declared token.
+	UsageBudgetTokenUndeclared = "USAGE_BUDGET_TOKEN_UNDECLARED"
+	// The invariant's kind is outside this host's vocabulary — kept, and
+	// enforced by nothing.
+	InvariantKindUnknown = "INVARIANT_KIND_UNKNOWN"
+)
+
+// ManifestDefect is one validation finding: which rule, which invariant (its
+// position in the decoded Invariants), and the role, token or kind it names.
+type ManifestDefect struct {
+	Code    string
+	Index   int
+	Subject string
+}
+
+// The range WCAG's contrast formula produces: a floor below it passes every
+// pair, one above it no pair can pass.
+const (
+	minContrastRatio = 1.0
+	maxContrastRatio = 21.0
+)
+
+// binds reports whether any role binding binds role — a tone binding binds its
+// tone's wire name, a named binding its name.
+func binds(m ThemeManifest, role string) bool {
+	for _, b := range m.Roles {
+		switch r := b.Role.(type) {
+		case ToneRole:
+			if r.Tone == role {
+				return true
+			}
+		case NamedRole:
+			if r.Name == role {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Validate is the validation pass, run after the tolerant Decode (Phase 2133):
+// every declared invariant that cannot mean what it says, as one shared code.
+// Invariant by invariant in list order, and within one in the table's order.
+// It never refuses and never repairs; a host decides what a defect costs it.
+func Validate(m ThemeManifest) []ManifestDefect {
+	out := []ManifestDefect{}
+	for i, inv := range m.Invariants {
+		switch k := inv.Kind.(type) {
+		case ContrastFloor:
+			if !(k.MinRatio >= minContrastRatio && k.MinRatio <= maxContrastRatio) {
+				out = append(out, ManifestDefect{ContrastFloorOutOfRange, i, k.Role})
+			}
+			if k.Role == "" {
+				out = append(out, ManifestDefect{ContrastFloorRoleEmpty, i, ""})
+			} else if !binds(m, k.Role) {
+				out = append(out, ManifestDefect{ContrastFloorRoleUnbound, i, k.Role})
+			}
+		case UsageBudget:
+			if TryGetToken(k.Token, m) == nil {
+				out = append(out, ManifestDefect{UsageBudgetTokenUndeclared, i, k.Token})
+			}
+		case UnknownInvariant:
+			out = append(out, ManifestDefect{InvariantKindUnknown, i, k.Kind})
 		}
 	}
 	return out

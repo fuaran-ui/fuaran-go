@@ -137,8 +137,8 @@ func roleBindingJSON(b RoleBinding) wire.Value {
 }
 
 func invariantJSON(inv Invariant) wire.Value {
-	// `kind` is the discriminator — an unrecognised or absent one drops the
-	// invariant at decode, so it is never omitted.
+	// `kind` is the discriminator — an absent one drops the invariant at decode,
+	// so it is never omitted.
 	fields := map[string]wire.Value{"kind": wire.Str(InvariantKindName(inv))}
 	switch k := inv.Kind.(type) {
 	case ContrastFloor:
@@ -153,9 +153,37 @@ func invariantJSON(inv Invariant) wire.Value {
 		if k.Budget.Easing != nil {
 			fields["easing"] = wire.Str(*k.Budget.Easing)
 		}
+	case UnknownInvariant:
+		for key, v := range k.Members {
+			fields[key] = wire.ValueFromParsed(v)
+		}
 	}
 	putNum(fields, "weight", inv.Weight, DefaultWeight)
 	return wire.Obj{Fields: fields}
+}
+
+// EncodeManifestDefect is one validation defect's canonical JSON —
+// {"code":…,"index":…,"subject":…} — the bytes the corpus's
+// manifest-validation vectors pin on every host (Phase 2133).
+func EncodeManifestDefect(d ManifestDefect) string {
+	s, err := wire.EncodeValue(wire.Obj{Fields: map[string]wire.Value{
+		"code":    wire.Str(d.Code),
+		"index":   wire.Int(int64(d.Index)),
+		"subject": wire.Str(d.Subject),
+	}})
+	if err != nil {
+		panic("thememanifest: canonical encode refused a defect this package built: " + err.Error())
+	}
+	return s
+}
+
+// encodeInvariant is one invariant's canonical bytes.
+func encodeInvariant(inv Invariant) string {
+	s, err := wire.EncodeValue(invariantJSON(inv))
+	if err != nil {
+		panic("thememanifest: canonical encode refused an invariant this package built: " + err.Error())
+	}
+	return s
 }
 
 func metaJSON(meta ManifestMeta) (wire.Value, bool) {

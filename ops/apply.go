@@ -75,7 +75,7 @@ func Apply(op wire.Obj, tree wire.Node) (wire.Node, error) {
 	}
 	// The §8.1 id-uniqueness guard, AFTER the limits: an op breaching both
 	// reports LimitExceeded (the limitsApply corpus pins that order).
-	if dupErr := checkInstalledIDs(insertedNodes(op), result); dupErr != nil {
+	if dupErr := checkInstalledIDs(InsertedNodes(op), result); dupErr != nil {
 		return tree, dupErr
 	}
 	return result, nil
@@ -268,6 +268,43 @@ func applyOne(op wire.Obj, root wire.Node) (wire.Node, *ApplyError) {
 		}
 		tree, found := mapNode(target, func(n wire.Node) wire.Node {
 			return setExtra(n, "state", fields["state"])
+		}, root)
+		if !found {
+			return root, apErr(CodeNodeNotFound, fmt.Sprintf("Node '%s' not found in tree.", target))
+		}
+		return tree, nil
+
+	case "UpdateAccessibility":
+		// The whole record replaces the trait; a record setting no member is
+		// stored as the ABSENT slot, which is how the trait is removed (Phase 2527).
+		target, ok := asStr(fields["target"])
+		accessibility, accessibilityOK := fields["accessibility"].(wire.Obj)
+		if !ok || !accessibilityOK {
+			return root, errBadShape
+		}
+		tree, found := mapNode(target, func(n wire.Node) wire.Node {
+			if len(accessibility.Fields) == 0 {
+				return dropExtra(n, "accessibility")
+			}
+			return setExtra(n, "accessibility", accessibility)
+		}, root)
+		if !found {
+			return root, apErr(CodeNodeNotFound, fmt.Sprintf("Node '%s' not found in tree.", target))
+		}
+		return tree, nil
+
+	case "UpdateTooltip":
+		// An absent tooltip member clears the trait (Phase 2527).
+		target, ok := asStr(fields["target"])
+		if !ok {
+			return root, errBadShape
+		}
+		tooltip, hasTooltip := fields["tooltip"]
+		tree, found := mapNode(target, func(n wire.Node) wire.Node {
+			if !hasTooltip {
+				return dropExtra(n, "tooltip")
+			}
+			return setExtra(n, "tooltip", tooltip)
 		}, root)
 		if !found {
 			return root, apErr(CodeNodeNotFound, fmt.Sprintf("Node '%s' not found in tree.", target))

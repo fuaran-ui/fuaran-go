@@ -988,8 +988,24 @@ func (r *renderer) heading(fields map[string]wire.Value) string {
 // is no longer reachable from a node render — a decoded markdown body is the
 // easiest place in the whole tree to hide an exfiltrating image.
 func (r *renderer) markdown(fields map[string]wire.Value) string {
+	var cited []Citation
+	if citations, ok := fields["citations"].(wire.Arr); ok {
+		for _, item := range citations {
+			entry, ok := item.(wire.Obj)
+			if !ok {
+				continue
+			}
+			name, _ := entry.Fields["name"].(wire.Str)
+			reference, _ := entry.Fields["reference"].(wire.Str)
+			citation := Citation{Name: string(name), Reference: string(reference)}
+			if label, ok := entry.Fields["label"]; ok {
+				citation.Label = r.text(label)
+			}
+			cited = append(cited, citation)
+		}
+	}
 	return element("div", []attr{{"class", "fuaran-markdown"}},
-		MarkdownToHTMLWithEgress(r.egress, r.text(fields["text"])))
+		MarkdownToHTMLCited(r.egress, cited, r.text(fields["text"])))
 }
 
 // metricValueText is the TEXT a Metric's numeric value slot reads — the
@@ -1120,7 +1136,12 @@ func (r *renderer) fact(fields map[string]wire.Value) string {
 	if help, ok := fields["help"]; ok {
 		parts.WriteString(textElement("div", []attr{{"class", "fuaran-fact-help"}}, r.text(help)))
 	}
-	return element("div", []attr{{"class", "fuaran-fact fuaran-fact-" + tone + emphasis}}, parts.String())
+	attrs := []attr{{"class", "fuaran-fact fuaran-fact-" + tone + emphasis}}
+	if reference, ok := fields["reference"].(wire.Str); ok {
+		// WIRE_FORMAT 3.6.31 — the citation, through the ordinary attribute encoder.
+		attrs = append(attrs, attr{"data-fact", string(reference)})
+	}
+	return element("div", attrs, parts.String())
 }
 
 func lowerEnum(v wire.Value, def string) string {
@@ -1995,7 +2016,7 @@ func (r *renderer) button(fields map[string]wire.Value, semanticAttrs []attr) st
 
 func (r *renderer) selectControl(fields map[string]wire.Value) string {
 	label := element("span", []attr{{"class", "fuaran-select-label"}}, escapeText(r.text(fields["label"])))
-	options := r.renderOptions(fields["source"], fields["placeholder"])
+	options := r.renderGroupedOptions(fields["source"], fields["placeholder"], fields["groups"])
 	selectAttrs := []attr{{"class", "fuaran-select-control"}}
 	// A multi-select emits the multiple attribute; a controlled
 	// <select multiple> rejects a scalar value, so none is emitted here.
@@ -2007,6 +2028,54 @@ func (r *renderer) selectControl(fields map[string]wire.Value) string {
 	}
 	control := element("select", selectAttrs, options)
 	return element("label", []attr{{"class", "fuaran-select"}}, label+control)
+}
+
+// renderGroupedOptions draws a Select's options under its Phase 2571 `groups`
+// (WIRE_FORMAT.md §3.6.30): the placeholder first, then one <optgroup label> per
+// group in list order holding the options it names in `source` order, then the
+// options no group names. No groups: renderOptions exactly.
+func (r *renderer) renderGroupedOptions(source, placeholder, groups wire.Value) string {
+	gs, _ := groups.(wire.Arr)
+	if len(gs) == 0 {
+		return r.renderOptions(source, placeholder)
+	}
+	var items strings.Builder
+	if placeholder != nil {
+		items.WriteString(textElement("option", []attr{{"value", ""}}, r.text(placeholder)))
+	}
+	resolved, _ := r.resolve(source).(wire.Arr)
+	option := func(opt wire.Obj) string {
+		value := strValue(opt.Fields["value"])
+		labelText := value
+		if label, ok := opt.Fields["label"]; ok {
+			labelText = r.text(label)
+		}
+		return textElement("option", []attr{{"value", value}}, labelText)
+	}
+	named := map[string]bool{}
+	for _, g := range gs {
+		group, _ := g.(wire.Obj)
+		members := map[string]bool{}
+		if values, ok := group.Fields["values"].(wire.Arr); ok {
+			for _, v := range values {
+				members[strValue(v)] = true
+				named[strValue(v)] = true
+			}
+		}
+		var inner strings.Builder
+		for _, opt := range resolved {
+			if o, ok := opt.(wire.Obj); ok && members[strValue(o.Fields["value"])] {
+				inner.WriteString(option(o))
+			}
+		}
+		items.WriteString(element("optgroup", []attr{{"label", strValue(group.Fields["label"])}}, inner.String()))
+	}
+	for _, opt := range resolved {
+		if o, ok := opt.(wire.Obj); ok && !named[strValue(o.Fields["value"])] {
+			items.WriteString(option(o))
+		}
+	}
+	return items.String()
 }
 
 func (r *renderer) renderOptions(source, placeholder wire.Value) string {
@@ -2182,16 +2251,42 @@ func (r *renderer) staticTable(fields map[string]wire.Value) string {
 			headerCells.WriteString(textElement("th", []attr{{"class", "fuaran-table-header"}}, r.text(h)))
 		}
 	}
+	// Phase 2592 — the cited cells by coordinate (WIRE_FORMAT.md §3.6.33).
+	cited := map[[2]int64]wire.Obj{}
+	if citations, ok := fields["citations"].(wire.Arr); ok {
+		for _, c := range citations {
+			if citation, ok := c.(wire.Obj); ok {
+				row, _ := citation.Fields["row"].(wire.Int)
+				column, _ := citation.Fields["column"].(wire.Int)
+				cited[[2]int64{int64(row), int64(column)}] = citation
+			}
+		}
+	}
 	var bodyRows strings.Builder
 	if rows, ok := fields["rows"].(wire.Arr); ok {
-		for _, row := range rows {
+		for i, row := range rows {
 			rowArr, ok := row.(wire.Arr)
 			if !ok {
 				continue
 			}
 			var cells strings.Builder
-			for _, c := range rowArr {
-				cells.WriteString(textElement("td", []attr{{"class", "fuaran-table-cell"}}, r.text(c)))
+			for j, c := range rowArr {
+				citation, isCited := cited[[2]int64{int64(i), int64(j)}]
+				if !isCited {
+					cells.WriteString(textElement("td", []attr{{"class", "fuaran-table-cell"}}, r.text(c)))
+					continue
+				}
+				// The reference on the cell, a label as its first child.
+				reference, _ := citation.Fields["reference"].(wire.Str)
+				label := ""
+				if l, ok := citation.Fields["label"]; ok {
+					if text := r.text(l); text != "" {
+						label = textElement("span", []attr{{"class", "fuaran-cited-label"}}, text+" ")
+					}
+				}
+				cells.WriteString(element("td",
+					[]attr{{"class", "fuaran-table-cell"}, {"data-fact", string(reference)}},
+					label+escapeText(r.text(c))))
 			}
 			bodyRows.WriteString(element("tr", []attr{{"class", "fuaran-table-row"}}, cells.String()))
 		}
