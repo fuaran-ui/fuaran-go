@@ -90,8 +90,10 @@ func TestMergeFoldCorpus(t *testing.T) {
 	}
 
 	kinds := map[string]int{}
+	ids := map[string]string{}
 	for _, fx := range m.FoldFixtures {
 		kinds[fx.Kind]++
+		ids[fx.ID] = fx.Kind
 		t.Run(fx.ID, func(t *testing.T) {
 			base := decodeTree(t, fx.BaseFile)
 			a, b := decodeOps(t, fx.AOpsFile), decodeOps(t, fx.BOpsFile)
@@ -185,6 +187,67 @@ func TestMergeFoldCorpus(t *testing.T) {
 	for _, k := range []string{"merge-fold-derive", "merge-fold-refusal", "merge-fold-gated"} {
 		if kinds[k] == 0 {
 			t.Errorf("foldFixtures holds no %s fixture", k)
+		}
+	}
+	// The reorder pair (WIRE_FORMAT §34.3, Phase 2719): two reorders that each
+	// restate their own branch's order derive; an unchanged reorder beside a
+	// real one, and two real ones, stay refused. Pinned by id so the leg cannot
+	// go green over a corpus that dropped them.
+	for id, kind := range map[string]string{
+		"fold-two-restated-orders":       "merge-fold-derive",
+		"fold-refusal-two-reorders":      "merge-fold-refusal",
+		"fold-refusal-two-real-reorders": "merge-fold-refusal",
+	} {
+		if got, ok := ids[id]; !ok {
+			t.Errorf("foldFixtures holds no %s", id)
+		} else if got != kind {
+			t.Errorf("%s is a %s fixture, want %s", id, got, kind)
+		}
+	}
+}
+
+// An unchanged reorder writes neither child-list slot (Phase 2719), but it
+// still READS both, so a removal of a child it lists and an append to its
+// parent stay ordered against it: the reads are what keep the freed class sound.
+func TestUnchangedReorderStillConflictsWithRemovalOfAListedChild(t *testing.T) {
+	pane := func(id string) string {
+		return `{"id":"` + id + `","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"x"}}}`
+	}
+	base, err := wire.DecodeNode(`{"id":"root","kind":{"$type":"Box","children":[` + pane("x") + `,` + pane("y") +
+		`],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}`)
+	if err != nil {
+		t.Fatalf("decode base: %v", err)
+	}
+	op := func(s string) wire.Obj {
+		o, err := wire.DecodeOp(s)
+		if err != nil {
+			t.Fatalf("decode op: %v", err)
+		}
+		return o
+	}
+	unchanged := op(`{"$type":"ReorderChildren","newOrder":["x","y"],"parentId":"root"}`)
+	remove := op(`{"$type":"RemoveNode","target":"x"}`)
+	insert := op(`{"$type":"InsertChild","child":` + pane("z") + `,"parentId":"root"}`)
+
+	f := merge.FootprintIn(base, unchanged)
+	if len(f.SlotWrites) != 0 {
+		t.Errorf("an unchanged reorder declares slot writes %v, want none", f.SlotWrites)
+	}
+	if real := merge.FootprintIn(base, op(`{"$type":"ReorderChildren","newOrder":["y","x"],"parentId":"root"}`)); len(real.SlotWrites) == 0 {
+		t.Error("a real reorder declares no slot write")
+	}
+	for _, order := range []struct {
+		name   string
+		d1, d2 []wire.Obj
+	}{
+		{"reorder,remove", []wire.Obj{unchanged}, []wire.Obj{remove}},
+		{"remove,reorder", []wire.Obj{remove}, []wire.Obj{unchanged}},
+		// The child-list read itself: an append names no listed child.
+		{"reorder,insert", []wire.Obj{unchanged}, []wire.Obj{insert}},
+		{"insert,reorder", []wire.Obj{insert}, []wire.Obj{unchanged}},
+	} {
+		if cs := merge.ConflictsIn(base, order.d1, order.d2); len(cs) == 0 {
+			t.Errorf("%s: an unchanged reorder is independent of an op that changes the list it reads", order.name)
 		}
 	}
 }

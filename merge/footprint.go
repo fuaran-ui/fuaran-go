@@ -37,14 +37,16 @@
 //     (p, "#children"), so every arm that reads or rewrites a node's structural
 //     children by slot declares that slot: a resolved reorder and a resolved
 //     move's source parent (beside the `kind` slot the tier holds the list
-//     in), an EditNode, and any in-place edit whose held set moved.
+//     in; a reorder that leaves the order as it is only reads both), an EditNode, and any in-place edit whose held set moved.
 //   - A resolved MOVE (fuaran#2651, #2670, #2691) touches no parent whole: the
 //     target is read and written at its `parent` slot, the source parent at
 //     its `kind` and child-list slots, the destination and every ancestor above
 //     it are read at their `parent` slots (the cycle check reads the chain),
 //     and the destination keeps Core's named structure write and read. A
 //     resolved REORDER (fuaran#2670) reads and writes its parent at the `kind`
-//     and child-list slots and reads each listed child at its `parent` slot.
+//     and child-list slots and reads each listed child at its `parent` slot;
+//     an UNCHANGED one (fuaran#2696, its list the parent's child order where it
+//     applies) reads both slots and writes neither.
 //
 // Ids are counted over every position a node holds another in (keyedIDs, the
 // reference's keyed walk); the base-aware arms LOCATE through the ordered child
@@ -528,17 +530,27 @@ func resolvedAt(state wire.Node, after *wire.Node, op wire.Obj) Footprint {
 		// A resolved reorder permutes the parent's child list, held in its
 		// `kind`, and touches no child: the parent at its `kind` and child-list
 		// slots, each listed child read at its `parent` slot.
+		//
+		// An UNCHANGED reorder (fuaran#2696) — its list is the parent's child
+		// order in state: the same ids, in the same order, of the same length —
+		// changes nothing where it applies, so it reads both slots and writes
+		// neither. Every op that changes the child list writes one of them, so
+		// the reorder stays ordered against it, a real reorder of the same parent
+		// included (replayed second, the unchanged one would restore its order).
 		parent := opStr(op, "parentId")
-		if _, ok := findStructural(state, parent); !ok || after == nil {
+		node, ok := findStructural(state, parent)
+		if !ok || after == nil {
 			return FootprintOf(op)
 		}
-		f := childList(parent, slotEdit(parent, "kind"))
-		if order, ok := op.Fields["newOrder"].(wire.Arr); ok {
-			for _, v := range order {
-				if c, ok := v.(wire.Str); ok {
-					f = unionFootprint(f, readingSlot(string(c), "parent"))
-				}
-			}
+		order := orderOf(op)
+		var f Footprint
+		if sameOrder(structuralChildren(node), order) {
+			f = unionFootprint(readingSlot(parent, "kind"), readingSlot(parent, childListSlot))
+		} else {
+			f = childList(parent, slotEdit(parent, "kind"))
+		}
+		for _, c := range order {
+			f = unionFootprint(f, readingSlot(c, "parent"))
 		}
 		return f
 	case "EditNode":
@@ -582,6 +594,19 @@ func resolvedAt(state wire.Node, after *wire.Node, op wire.Obj) Footprint {
 	}
 	// InsertChild: the pure arm names everything it touches.
 	return FootprintOf(op)
+}
+
+// sameOrder reports whether order lists exactly kids' ids, in kids' order.
+func sameOrder(kids []wire.Node, order []string) bool {
+	if len(kids) != len(order) {
+		return false
+	}
+	for i, c := range kids {
+		if c.ID != order[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // applied is the tree op reaches from tree, or nil when it does not apply.

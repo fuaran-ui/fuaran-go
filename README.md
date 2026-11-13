@@ -608,3 +608,25 @@ runtime host uses the **standard library only** — no third-party dependencies.
 ## Licence
 
 Apache-2.0. See [`LICENSE`](LICENSE).
+
+## An unchanged reorder writes nothing — Phase 2719
+
+The merge footprint's reorder arm follows the reference host (WIRE_FORMAT.md §34.3): a
+`ReorderChildren` whose list is its parent's child order in the tree it applies to (the same
+ids, in the same order, of the same length) changes nothing where it applies, so it reads its
+parent's `kind` and child-list slots and writes neither. Every op that changes the child list
+writes one of those slots, so the reorder stays ordered against it: an append to the parent, a
+removal or move of a listed child, and a real reorder of the same parent (replayed second, the
+unchanged one would put its order back).
+
+**Conformance statement — additive.** Two reorders of one parent that each restate the order
+their own branch already holds used to be refused at the child-list slot; they now derive.
+Nothing that derived changes. Certified by `conformance/fold_test.go` over the corpus's
+`merge-conformance/` family (§34.6): it derives `fold-two-restated-orders` and refuses
+`fold-refusal-two-reorders` and `fold-refusal-two-real-reorders` with the committed envelopes,
+at corpus commit `5a9b4bb`. The same file pins that an unchanged reorder still conflicts with a
+removal of a listed child and with an append to its parent. This host bundles no corpus
+snapshot, so there is none to re-sync.
+
+This host declares no stability policy yet (pre-1.0), so the change is recorded here rather than
+in a `STABILITY.md` it does not have; it rides the current unreleased version.
