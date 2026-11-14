@@ -133,8 +133,9 @@ func TestFoldInterleaveRecordsTheScript(t *testing.T) {
 
 // A reorder beside an append to its parent is a REBASE (fuaran#2671): the
 // reorder applies to the children the parent holds when the fold reaches it,
-// the append follows the reordered run, and both orders agree. Two reorders of
-// one parent that differ still refuse.
+// the append follows the reordered run, and both orders agree. Two REAL
+// reorders of one parent that differ still refuse; an unchanged reorder beside
+// a real one yields to it (Phase 2724).
 func TestFoldReorderBesideAnAppendIsRebased(t *testing.T) {
 	base := boxOf(t, "a", "b")
 	reorder := foldOps(t, `{"$type":"ReorderChildren","newOrder":["b","a"],"parentId":"root"}`)
@@ -148,9 +149,17 @@ func TestFoldReorderBesideAnAppendIsRebased(t *testing.T) {
 			t.Errorf("rebased tree = %s (interleaves %d), want %s", got, r.Interleaves, want)
 		}
 	}
-	other := foldOps(t, `{"$type":"ReorderChildren","newOrder":["a","b"],"parentId":"root"}`)
-	if _, fault := ReconcileFold(base, reorder, other); fault == nil || fault.Kind != FaultRefused {
-		t.Errorf("two differing reorders must refuse, got %+v", fault)
+	unchanged := foldOps(t, `{"$type":"ReorderChildren","newOrder":["a","b"],"parentId":"root"}`)
+	if r, fault := ReconcileFold(base, reorder, unchanged); fault != nil {
+		t.Errorf("an unchanged reorder beside a real one must yield, got %+v", fault)
+	} else if got, want := encode(t, r.Tree), encode(t, boxOf(t, "b", "a")); got != want {
+		t.Errorf("yielded tree = %s, want %s", got, want)
+	}
+	base3 := boxOf(t, "a", "b", "c")
+	real1 := foldOps(t, `{"$type":"ReorderChildren","newOrder":["b","a","c"],"parentId":"root"}`)
+	real2 := foldOps(t, `{"$type":"ReorderChildren","newOrder":["c","b","a"],"parentId":"root"}`)
+	if _, fault := ReconcileFold(base3, real1, real2); fault == nil || fault.Kind != FaultRefused {
+		t.Errorf("two differing real reorders must refuse, got %+v", fault)
 	}
 }
 

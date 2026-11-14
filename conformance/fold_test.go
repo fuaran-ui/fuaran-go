@@ -54,8 +54,15 @@ func TestMergeFoldCorpus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("merge corpus not found: %v", err)
 	}
+	// precedenceFixtures is deliberately not decoded: this host offers no
+	// precedence merge, so it certifies nothing from that array (§34.6).
 	var m struct {
-		FoldFixtures []foldFixture `json:"foldFixtures"`
+		FoldFixtures        []foldFixture `json:"foldFixtures"`
+		RetiredFoldFixtures []struct {
+			ID         string   `json:"id"`
+			RetiredBy  string   `json:"retiredBy"`
+			Successors []string `json:"successors"`
+		} `json:"retiredFoldFixtures"`
 	}
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatalf("parsing merge manifest: %v", err)
@@ -189,19 +196,117 @@ func TestMergeFoldCorpus(t *testing.T) {
 			t.Errorf("foldFixtures holds no %s fixture", k)
 		}
 	}
-	// The reorder pair (WIRE_FORMAT §34.3, Phase 2719): two reorders that each
-	// restate their own branch's order derive; an unchanged reorder beside a
-	// real one, and two real ones, stay refused. Pinned by id so the leg cannot
-	// go green over a corpus that dropped them.
+	// The reorder fixtures (WIRE_FORMAT §34.3, Phases 2719 and 2724): two
+	// reorders that each restate their own branch's order derive; an unchanged
+	// reorder beside a real one yields to it and derives (the three yield
+	// fixtures); two real ones stay refused. Pinned by id so the leg cannot go
+	// green over a corpus that dropped them.
 	for id, kind := range map[string]string{
-		"fold-two-restated-orders":       "merge-fold-derive",
-		"fold-refusal-two-reorders":      "merge-fold-refusal",
-		"fold-refusal-two-real-reorders": "merge-fold-refusal",
+		"fold-two-restated-orders":            "merge-fold-derive",
+		"fold-reorder-beside-restated-order":  "merge-fold-derive",
+		"fold-restated-order-beside-reorder":  "merge-fold-derive",
+		"fold-append-restated-beside-reorder": "merge-fold-derive",
+		"fold-refusal-two-real-reorders":      "merge-fold-refusal",
 	} {
 		if got, ok := ids[id]; !ok {
 			t.Errorf("foldFixtures holds no %s", id)
 		} else if got != kind {
 			t.Errorf("%s is a %s fixture, want %s", id, got, kind)
+		}
+	}
+	// A retired id is never reused, and each successor it names is a live
+	// fixture (Phase 2724 retired fold-refusal-two-reorders).
+	retired := map[string]bool{}
+	for _, r := range m.RetiredFoldFixtures {
+		retired[r.ID] = true
+		if _, live := ids[r.ID]; live {
+			t.Errorf("foldFixtures carries the retired id %s (retired by %s)", r.ID, r.RetiredBy)
+		}
+		for _, s := range r.Successors {
+			if _, ok := ids[s]; !ok {
+				t.Errorf("retired %s names successor %s, which foldFixtures does not hold", r.ID, s)
+			}
+		}
+	}
+	if !retired["fold-refusal-two-reorders"] {
+		t.Error("retiredFoldFixtures does not record fold-refusal-two-reorders")
+	}
+}
+
+// The yield rule (Phase 2724) drops an unchanged reorder only beside the other
+// branch's REAL reorder of the same parent. Beside a removal of a child it lists
+// it keeps its reads, the pair still conflicts and is judged as before (a
+// rebase, fuaran#2671); two real reorders that differ
+// still refuse; and beside a real reorder it yields, the merge recording the
+// surviving order.
+func TestTheYieldRuleYieldsOnlyToARealReorder(t *testing.T) {
+	pane := func(id string) string {
+		return `{"id":"` + id + `","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"x"}}}`
+	}
+	base, err := wire.DecodeNode(`{"id":"root","kind":{"$type":"Box","children":[` + pane("x") + `,` + pane("y") +
+		`,` + pane("z") + `],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}`)
+	if err != nil {
+		t.Fatalf("decode base: %v", err)
+	}
+	op := func(s string) wire.Obj {
+		o, err := wire.DecodeOp(s)
+		if err != nil {
+			t.Fatalf("decode op: %v", err)
+		}
+		return o
+	}
+	unchanged := op(`{"$type":"ReorderChildren","newOrder":["x","y","z"],"parentId":"root"}`)
+	real1 := op(`{"$type":"ReorderChildren","newOrder":["z","y","x"],"parentId":"root"}`)
+	real2 := op(`{"$type":"ReorderChildren","newOrder":["y","x","z"],"parentId":"root"}`)
+	remove := op(`{"$type":"RemoveNode","target":"x"}`)
+
+	for _, order := range []struct {
+		name   string
+		d1, d2 []wire.Obj
+	}{
+		{"unchanged,remove", []wire.Obj{unchanged}, []wire.Obj{remove}},
+		{"remove,unchanged", []wire.Obj{remove}, []wire.Obj{unchanged}},
+	} {
+		// Still reported by Core (it keeps its reads), and judged as before: a
+		// rebase, which derives the removal with the order otherwise unchanged.
+		if cs := merge.ConflictsIn(base, order.d1, order.d2); len(cs) == 0 {
+			t.Errorf("%s: an unchanged reorder beside a removal of a listed child no longer conflicts", order.name)
+		}
+		r, fault := merge.ReconcileFold(base, order.d1, order.d2)
+		if fault != nil {
+			t.Errorf("%s: refused (%s), want the rebase it was admitted as before", order.name, fault.Kind)
+		} else if r.Interleaves != 1 {
+			t.Errorf("%s: interleaves = %d, want the one rebased parent", order.name, r.Interleaves)
+		}
+		if a, b, y := merge.YieldUnchangedReorders(base, order.d1, order.d2); len(a) != len(order.d1) || len(b) != len(order.d2) || len(y) != 0 {
+			t.Errorf("%s: the yield rule dropped an op beside a removal", order.name)
+		}
+	}
+	for _, order := range []struct {
+		name   string
+		d1, d2 []wire.Obj
+	}{{"real,real", []wire.Obj{real1}, []wire.Obj{real2}}, {"real,real swapped", []wire.Obj{real2}, []wire.Obj{real1}}} {
+		if _, fault := merge.ReconcileFold(base, order.d1, order.d2); fault == nil || fault.Kind != merge.FaultRefused {
+			t.Errorf("%s: two real reorders that differ derived, want a refusal: %+v", order.name, fault)
+		}
+	}
+	for _, order := range []struct {
+		name   string
+		d1, d2 []wire.Obj
+	}{{"unchanged,real", []wire.Obj{unchanged}, []wire.Obj{real1}}, {"real,unchanged", []wire.Obj{real1}, []wire.Obj{unchanged}}} {
+		r, fault := merge.ReconcileFold(base, order.d1, order.d2)
+		if fault != nil {
+			t.Fatalf("%s: refused (%s), want the unchanged reorder to yield", order.name, fault.Kind)
+		}
+		want, _ := wire.EncodeOp(real1)
+		if len(r.Script) != 1 {
+			t.Fatalf("%s: script holds %d ops, want the surviving order once", order.name, len(r.Script))
+		}
+		if got, _ := wire.EncodeOp(r.Script[0]); got != want {
+			t.Errorf("%s: script = %s, want %s", order.name, got, want)
+		}
+		if r.Interleaves != 0 {
+			t.Errorf("%s: interleaves = %d, want 0 (a yield is not an interleave)", order.name, r.Interleaves)
 		}
 	}
 }

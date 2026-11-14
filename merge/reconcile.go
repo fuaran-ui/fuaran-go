@@ -23,6 +23,13 @@
 //     removes (a RemoveNode, or a Batch holding one), Conflict otherwise. Two
 //     reorders of one parent that differ stay refused.
 //
+// THE YIELD RULE (§34.3, Phase 2724), before Core is asked: a reorder that
+// leaves its parent's order as it was on its own branch carries no intent, so
+// beside the other branch's REAL reorder of the same parent it is dropped from
+// its delta (YieldUnchangedReorders), the real order survives, and the script
+// records it for that parent. Without the rule the pair refuses: replayed after
+// the real reorder, the unchanged one would put the old order back.
+//
 // THE CHILD-ORDER RULE (§34.4). Under an interleaved or rebased parent the
 // children neither branch appended keep the fold's order (the rebased
 // reorder's, where a branch reordered the parent) and the appended ones
@@ -114,8 +121,8 @@ type FoldFault struct {
 }
 
 // FoldReconciled is a derived merge: the tree, the script the merge records
-// (one ReorderChildren per interleaved or rebased parent, parents in ordinal
-// order), how many distinct agreeing ops the fold applied as no change, and
+// (one ReorderChildren per interleaved or rebased parent and per parent whose
+// unchanged reorder yielded, parents in ordinal order), how many distinct agreeing ops the fold applied as no change, and
 // how many parents it interleaved or rebased.
 type FoldReconciled struct {
 	Tree        wire.Node
@@ -497,6 +504,86 @@ func appendsOf(parent string, delta []wire.Obj) []string {
 	return run
 }
 
+// reorderIn is the parent a top-level ReorderChildren reorders, with whether its
+// list is the parent's child order in tree — the same ids, in the same order, of
+// the same length: the equality the footprint's unchanged-reorder arm states
+// (fuaran#2696). ok is false for any other op, a Batch included, and for a
+// reorder of a parent tree does not hold.
+func reorderIn(tree wire.Node, op wire.Obj) (parent string, unchanged, ok bool) {
+	if op.Tag != "ReorderChildren" {
+		return "", false, false
+	}
+	parent = opStr(op, "parentId")
+	node, found := findStructural(tree, parent)
+	if !found {
+		return "", false, false
+	}
+	return parent, sameOrder(structuralChildren(node), orderOf(op)), true
+}
+
+// threadedOp is an op of a delta with the tree its own branch applies it to.
+type threadedOp struct {
+	op   wire.Obj
+	tree wire.Node
+}
+
+// ownTrees pairs each op of delta with the tree its own branch applies it to,
+// threaded from base. ReconcileFold refuses a delta that does not apply before
+// it reads this, so the fallback never decides a verdict.
+func ownTrees(base wire.Node, delta []wire.Obj) []threadedOp {
+	out := make([]threadedOp, 0, len(delta))
+	t := base
+	for _, op := range delta {
+		out = append(out, threadedOp{op, t})
+		if next, err := ops.Apply(op, t); err == nil {
+			t = next
+		}
+	}
+	return out
+}
+
+// YieldUnchangedReorders is THE YIELD RULE (Phase 2724, WIRE_FORMAT §34.3),
+// applied before anything is judged: a top-level ReorderChildren that leaves its
+// parent's order as it was in the tree its own branch applies it to is dropped
+// from its delta when the other delta holds a top-level ReorderChildren of the
+// same parent that changes the order on its own branch. The dropped op carries
+// no intent (on its own branch it is no change), so removing it leaves every
+// later tree of its branch as it was; replayed after the real reorder it would
+// restore the order it lists. Nothing else is dropped: an unchanged reorder
+// beside an append or a removal in its parent, beside another unchanged
+// reorder, or beside a reorder inside a Batch keeps its reads and is judged as
+// before. It returns the two deltas without the yielded reorders and the
+// parents they reordered (ordinal, distinct): the merge script records each
+// such parent's surviving order, because a merge node's replay still applies
+// the yielded op, in Core's drain order.
+func YieldUnchangedReorders(base wire.Node, deltaA, deltaB []wire.Obj) (keptA, keptB []wire.Obj, yielded []string) {
+	a, b := ownTrees(base, deltaA), ownTrees(base, deltaB)
+	realParents := func(ts []threadedOp) IDSet {
+		s := IDSet{}
+		for _, x := range ts {
+			if p, unchanged, ok := reorderIn(x.tree, x.op); ok && !unchanged {
+				s[p] = true
+			}
+		}
+		return s
+	}
+	parents := IDSet{}
+	split := func(ts []threadedOp, otherReal IDSet) []wire.Obj {
+		kept := make([]wire.Obj, 0, len(ts))
+		for _, x := range ts {
+			if p, unchanged, ok := reorderIn(x.tree, x.op); ok && unchanged && otherReal[p] {
+				parents[p] = true
+				continue
+			}
+			kept = append(kept, x.op)
+		}
+		return kept
+	}
+	keptA = split(a, realParents(b))
+	keptB = split(b, realParents(a))
+	return keptA, keptB, sortedIDs(parents)
+}
+
 // ReconcileFold reconciles two branch deltas from their common base under the
 // §34 policy: the derived tree and the script a merge records, or a typed
 // refusal. Both deltas apply from base, op by op, as recorded on their
@@ -508,6 +595,9 @@ func ReconcileFold(base wire.Node, deltaA, deltaB []wire.Obj) (FoldReconciled, *
 	if i, err := firstFailure(deltaB, base); i >= 0 {
 		return FoldReconciled{}, &FoldFault{Kind: FaultDeltaDoesNotApply, Side: FoldSideB, Index: i, Err: err}
 	}
+	// The yield rule runs first (Phase 2724): what follows judges and folds the
+	// deltas without the yielded reorders.
+	deltaA, deltaB, yielded := YieldUnchangedReorders(base, deltaA, deltaB)
 
 	texts := &opTexts{}
 	var refusals []FoldRefusal
@@ -541,6 +631,16 @@ func ReconcileFold(base wire.Node, deltaA, deltaB []wire.Obj) (FoldReconciled, *
 	}
 
 	parents := sortedIDs(interleaved)
+	// A parent whose reorder yielded is recorded too: its order in the fold is
+	// the surviving reorder's, which the script fixes for replay.
+	scripted := IDSet{}
+	for _, p := range parents {
+		scripted[p] = true
+	}
+	for _, p := range yielded {
+		scripted[p] = true
+	}
+	scriptParents := sortedIDs(scripted)
 	derive := func(first, second []wire.Obj) (wire.Node, []wire.Obj, error) {
 		script := append(append([]wire.Obj(nil), first...), second...)
 		folded, err := foldRebased(rebase, script, base)
@@ -548,7 +648,7 @@ func ReconcileFold(base wire.Node, deltaA, deltaB []wire.Obj) (FoldReconciled, *
 			return wire.Node{}, nil, err
 		}
 		var reorders []wire.Obj
-		for _, p := range parents {
+		for _, p := range scriptParents {
 			reorders = append(reorders, reorderFor(folded, p, appendsOf(p, deltaA), appendsOf(p, deltaB))...)
 		}
 		tree, err := foldHeld(reorders, folded)

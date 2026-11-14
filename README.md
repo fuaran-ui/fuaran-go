@@ -624,12 +624,35 @@ their own branch already holds used to be refused at the child-list slot; they n
 Nothing that derived changes. Certified by `conformance/fold_test.go` over the corpus's
 `merge-conformance/` family (§34.6): it derives `fold-two-restated-orders` and refuses
 `fold-refusal-two-reorders` and `fold-refusal-two-real-reorders` with the committed envelopes,
-at corpus commit `5a9b4bb`. The same file pins that an unchanged reorder still conflicts with a
+at corpus commit `5a9b4bb` (Phase 2732 since retired `fold-refusal-two-reorders`: that case now
+derives, below). The same file pins that an unchanged reorder still conflicts with a
 removal of a listed child and with an append to its parent. This host bundles no corpus
 snapshot, so there is none to re-sync.
 
 This host declares no stability policy yet (pre-1.0), so the change is recorded here rather than
 in a `STABILITY.md` it does not have; it rides the current unreleased version.
+
+## An unchanged reorder yields to a real one — Phase 2732
+
+`merge.ReconcileFold` applies the yield rule of WIRE_FORMAT.md §34.3 before Core's conflict
+report is read, as the reference host does: a top-level `ReorderChildren` that leaves its
+parent's order as it was in the tree its own branch applies it to (the same ids, in the same
+order, of the same length) is dropped from its delta when the other delta holds a top-level
+`ReorderChildren` of the same parent that really changes the order on its own branch. The real
+order survives, and the merge script records it for that parent, because a merge node's replay
+still applies the yielded op in Core's drain order. `merge.YieldUnchangedReorders` exposes the
+step. Nothing else yields: an unchanged reorder beside an append to its parent, a removal of a
+child it lists, another unchanged reorder, or a reorder inside a `Batch` is judged as before.
+
+**Conformance statement — additive.** An unchanged reorder beside a real reorder of the same
+parent used to be refused; it now derives. Nothing that derived changes. Certified by
+`conformance/fold_test.go` over the corpus's `merge-conformance/` family (§34.6), at corpus
+commit `ff3b637`: it derives `fold-reorder-beside-restated-order`,
+`fold-restated-order-beside-reorder` and `fold-append-restated-beside-reorder` to the fixtures'
+bytes in both branch orders, still refuses `fold-refusal-two-real-reorders`, and reads the
+manifest's `retiredFoldFixtures` (the retired `fold-refusal-two-reorders` is never a live id, and
+its successors are). This host offers no precedence merge, so it does not read
+`precedenceFixtures` and certifies nothing from that array.
 
 ## A theme manifest is read under §21.1's syntactic limits — Phase 2721
 
