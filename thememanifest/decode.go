@@ -240,7 +240,15 @@ func OfJSON(root any) ThemeManifest {
 // back as a *wire.DecodeError with code LIMIT_EXCEEDED rather than as a syntax
 // error, which is the classification §21.2 rule 2 requires for a well-formed
 // document that is merely too large.
+//
+// The five bounds are §21.1's syntactic ones — JSON depth, string length, array
+// length, object members and document bytes; the node bounds do not apply, as a
+// manifest has no nodes. Document bytes are checked first, before the parse
+// allocates, as §21.7 requires (Phase 2721).
 func Decode(jsonStr string) (ThemeManifest, error) {
+	if err := wire.CheckDocumentBytes(jsonStr); err != nil {
+		return EmptyManifest, err
+	}
 	root, err := wire.ParseBounded(jsonStr)
 	if err != nil {
 		return EmptyManifest, err

@@ -630,3 +630,30 @@ snapshot, so there is none to re-sync.
 
 This host declares no stability policy yet (pre-1.0), so the change is recorded here rather than
 in a `STABILITY.md` it does not have; it rides the current unreleased version.
+
+## A theme manifest is read under §21.1's syntactic limits — Phase 2721
+
+`thememanifest.Decode` reads a manifest under WIRE_FORMAT.md §21.1's syntactic limits — JSON
+depth 256, string length 1,048,576 code points, array length and object members 100,000, and
+document bytes 33,554,432 — the sentence the specification carries under the Phase 2133 byte law
+(the node bounds do not apply: a manifest has no nodes). A manifest at each bound decodes; one past
+it is refused as `LIMIT_EXCEEDED` at `$`, as a `*wire.DecodeError` naming the limit.
+
+Two changes, measured before they were made:
+
+- **Document bytes are now bounded.** A 33,554,433-byte manifest decoded. `Decode` now calls
+  `wire.CheckDocumentBytes` (new, exported) before the parse allocates, as §21.7 requires.
+  `wire.ParseBounded` bounds shape and not size, so a reader of untrusted text calls it first.
+- **One loosening, on every reader.** The shared shape guard in `wire/limits.go` tested the depth
+  bound on every value, scalars included, so a scalar at the bottom of a container 256 deep was
+  refused, where §21.1 counts only `{` and `[`. Only a container is tested now. That guard serves
+  `ParseBounded` (manifests, column pipelines, capability declarations, DAG records) and the node
+  and op decoders, so each now accepts that document at the bound; one past it is still refused.
+
+**Conformance statement — additive.** A manifest past the byte bound is refused where it was
+accepted; a document whose deepest container is exactly 256 deep with a scalar inside is accepted
+where it was refused. Nothing else moves. Pinned by `thememanifest/limits_test.go` (each bound,
+at it and one past it, plus the code-point and UTF-8-byte units) and
+`wire/limits_json_depth_test.go` (the depth edge on `ParseBounded` and the node decoder, and
+`CheckDocumentBytes`). Host-local vectors, as §21.7 prescribes; there is no corpus snapshot to
+re-sync. It rides the current unreleased version.

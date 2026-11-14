@@ -288,7 +288,14 @@ func checkShape(root any) {
 		f := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 
-		if f.depth > MaxJSONDepth {
+		// §21.1 counts every `{` and `[`, so only a CONTAINER can breach the
+		// depth bound: a scalar at the bottom of a container 256 deep is at
+		// depth 256, not 257. Checking every frame refused exactly that
+		// document — at the bound, which rule 1 requires every host to accept —
+		// on every reader this guard serves (Phase 2721, fuaran-py's twin fix).
+		_, isObject := f.value.(map[string]any)
+		_, isArray := f.value.([]any)
+		if f.depth > MaxJSONDepth && (isObject || isArray) {
 			failExpecting(
 				CodeLimitExceeded,
 				"$",
@@ -513,4 +520,14 @@ func checkDocumentBytes(canonicalJSON string) {
 		"document is "+itoa(len(canonicalJSON))+" UTF-8 bytes, over the wire limit MaxDocumentBytes = "+itoa(MaxDocumentBytes),
 		"a document of at most "+itoa(MaxDocumentBytes)+" UTF-8 bytes",
 	)
+}
+
+// CheckDocumentBytes applies §21.7 to text an entry point outside this package
+// is about to read, BEFORE it is parsed. ParseBounded bounds a document's shape
+// and not its size, so a reader of untrusted text calls this first; a breach is
+// a *DecodeError with code LIMIT_EXCEEDED at "$", nil otherwise (Phase 2721).
+func CheckDocumentBytes(text string) (err error) {
+	defer recoverDecode(&err)
+	checkDocumentBytes(text)
+	return nil
 }
