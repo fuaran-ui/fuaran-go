@@ -21,13 +21,30 @@ func ParseCanonical(text string) (raw any, err error) {
 	return parseJSON(text), nil
 }
 
-// ParseBounded parses exactly one JSON document under the FULL §21 limit set —
-// syntactic depth on the way down, then string length and array/object width
-// over the parsed result — and returns the raw value for a downstream decoder
-// to walk. A breach is a *DecodeError with code LIMIT_EXCEEDED; malformed input
-// is INVALID_JSON at "$".
+// ParseBounded parses exactly one JSON document under the FULL §21 limit set
+// and returns the raw value for a downstream decoder to walk. It applies, in
+// this order:
+//
+//  1. §21.7 document bytes (MaxDocumentBytes, UTF-8 bytes of the whole input),
+//     BEFORE the parse allocates, at "$";
+//  2. §21.2 syntactic JSON depth (MaxJSONDepth), on the way down;
+//  3. §21.6 string length, then array length and object member count, over the
+//     parsed result.
+//
+// A breach of any is a *DecodeError with code LIMIT_EXCEEDED; malformed input
+// is INVALID_JSON at "$". The node-count and tree-depth limits (§21.1) do not
+// apply: this document is not a node tree.
 //
 // USE THIS, not encoding/json, at every entry point that reads untrusted text.
+//
+// Where the document-bytes bound lives (Phase 2742): HERE, once. The readers
+// that call ParseBounded — the column pipeline, the theme manifest, the
+// capability declaration and the DAG record — each used to bound shape and
+// never size, because a size check was a separate call the reader had to
+// remember (CheckDocumentBytes, which only the theme manifest made). Putting
+// the check inside the parse means a new reader cannot forget it and no reader
+// carries its own copy. CheckDocumentBytes stays for a caller that must refuse
+// before it does other work with the text.
 //
 // ParseCanonical bounds syntactic depth only, because the node and op decoders
 // downstream of it apply the remaining §21 axes themselves as they walk. An
@@ -39,10 +56,12 @@ func ParseCanonical(text string) (raw any, err error) {
 // explicitly forbids for a document that is well-formed and merely too large:
 // it sends an author to repair the wrong thing.
 //
-// The cost is one extra iterative pass over an already-parsed document, paid at
-// a trust boundary. It is not paid on the node/op path, which is the hot one.
+// The cost is one length comparison and one extra iterative pass over an
+// already-parsed document, paid at a trust boundary. It is not paid on the
+// node/op path, which is the hot one.
 func ParseBounded(text string) (raw any, err error) {
 	defer recoverDecode(&err)
+	checkDocumentBytes(text)
 	parsed := parseJSON(text)
 	checkShape(parsed)
 	return parsed, nil

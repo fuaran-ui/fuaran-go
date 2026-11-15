@@ -246,9 +246,6 @@ func OfJSON(root any) ThemeManifest {
 // manifest has no nodes. Document bytes are checked first, before the parse
 // allocates, as §21.7 requires (Phase 2721).
 func Decode(jsonStr string) (ThemeManifest, error) {
-	if err := wire.CheckDocumentBytes(jsonStr); err != nil {
-		return EmptyManifest, err
-	}
 	root, err := wire.ParseBounded(jsonStr)
 	if err != nil {
 		return EmptyManifest, err

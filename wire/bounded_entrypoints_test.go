@@ -126,3 +126,60 @@ func TestDagRecordRefusesADeepDocument(t *testing.T) {
 		t.Fatalf("err = %v (%T), want a LIMIT_EXCEEDED *wire.DecodeError", err, err)
 	}
 }
+
+// ── §21.7: the document-bytes bound, at every bounded reader ───────────────
+//
+// ParseBounded bounded shape and never size, so a document of ordinary shape
+// and any length reached every reader that called it. One byte past the bound,
+// each reader must answer LIMIT_EXCEEDED at "$" and name MaxDocumentBytes.
+
+// oversizeDocument is a well-formed JSON object one byte past §21.7, padded
+// with whitespace so no other limit can be the one that fires.
+func oversizeDocument() string {
+	return "{}" + strings.Repeat(" ", wire.MaxDocumentBytes-1)
+}
+
+func requireDocumentBytesBreach(t *testing.T, err error) {
+	t.Helper()
+	de, ok := err.(*wire.DecodeError)
+	if !ok {
+		t.Fatalf("err = %v (%T), want a LIMIT_EXCEEDED *wire.DecodeError", err, err)
+	}
+	if de.Code != wire.CodeLimitExceeded || de.Path != "$" || !strings.Contains(de.Message, "MaxDocumentBytes") {
+		t.Fatalf("got %s at %q: %s; want LIMIT_EXCEEDED at $ naming MaxDocumentBytes", de.Code, de.Path, de.Message)
+	}
+}
+
+func TestParseBoundedRefusesADocumentOneBytePastTheBound(t *testing.T) {
+	doc := oversizeDocument()
+	if len(doc) != wire.MaxDocumentBytes+1 {
+		t.Fatalf("the fixture is %d bytes, not %d", len(doc), wire.MaxDocumentBytes+1)
+	}
+	_, err := wire.ParseBounded(doc)
+	requireDocumentBytesBreach(t, err)
+	if _, err := wire.ParseBounded(doc[:wire.MaxDocumentBytes]); err != nil {
+		t.Fatalf("a document of exactly the bound was refused: %v", err)
+	}
+}
+
+func TestDataframeQueryRefusesADocumentOneBytePastTheBound(t *testing.T) {
+	_, ce := dataframe.DecodeSource(oversizeDocument())
+	if ce == nil || ce.Code != dataframe.LimitExceeded || !strings.Contains(ce.Detail, "MaxDocumentBytes") {
+		t.Fatalf("got %+v, want LIMIT_EXCEEDED naming MaxDocumentBytes", ce)
+	}
+}
+
+func TestThemeManifestRefusesADocumentOneBytePastTheBound(t *testing.T) {
+	_, err := thememanifest.Decode(oversizeDocument())
+	requireDocumentBytesBreach(t, err)
+}
+
+func TestCapabilityDeclarationRefusesADocumentOneBytePastTheBound(t *testing.T) {
+	_, err := function.DecodeDeclaration(oversizeDocument())
+	requireDocumentBytesBreach(t, err)
+}
+
+func TestDagRecordRefusesADocumentOneBytePastTheBound(t *testing.T) {
+	_, err := dag.DecodeDagRecord(oversizeDocument())
+	requireDocumentBytesBreach(t, err)
+}
