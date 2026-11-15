@@ -21,6 +21,22 @@ package fuarango
 
 // Version is the pre-release version of the fuaran-go host.
 //
+// 0.0.6-alpha also carries the Phase 2740 COMPILE-BREAKING raise of the
+// capability twin to Core 0.43.0: a capability declares its result.
+// function.Capability gains Result (a function.Returns: ReturnsValue(space), or
+// ReturnsNothing() for a call made for its effect) and function.NewCapability
+// takes it as a fourth argument. The declaration's `result` member is REQUIRED
+// on the wire — `{"$type":"nothing"}` or a value space — so a pre-0.43.0
+// declaration is refused (a function.DeclarationError, MissingField at
+// result), and a result space that admits no value is refused at read
+// (OutOfRange at result) and at registration (illFormedCapability with
+// emptyResult or nonFiniteResult). The capability pipeline type check arrives
+// with it (function.TypeCheckPipeline): an invoke's declared output must admit
+// its capability's result, and a capability that answers nothing is no
+// pipeline node (pipelineOutputContradicts). Conformance is the corpus's
+// capabilityLaws family at its 0.43.0 stamp. It rides the untagged draft,
+// which already carries a compile-breaking class.
+//
 // 0.0.6-alpha also carries Phase 2207, WIRE-VISIBLE: an embedded source's schema
 // entry may state a `unit`, `label`, `description` and `ext` (WIRE_FORMAT
 // §3.6.26). dataframe.SchemaEntry gains the four members (a nil member is one

@@ -1,12 +1,16 @@
 // The capability semantics raised to Core 0.39.0 in Phase 2001: the
 // determinism factor set and its one label per set, an address bound once, the
 // invariant argument readers and the canonical spelling the replay key hashes,
-// the admission gate, and the reader that runs it. The shared law vectors cover
-// the first; these pin the rest, whose refusals the vectors do not draw.
+// the admission gate, and the reader that runs it. Raised to Core 0.43.0 in
+// Phase 2740: the declared result, its admission and its reader, and the
+// pipeline type check. The shared law vectors cover the first and the result's
+// two drawn refusals; these pin the rest, whose refusals the vectors do not
+// draw.
 package function
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 )
@@ -65,7 +69,7 @@ func intCap(holes ...SigEntry) Capability {
 		Name:   "cap",
 		Holes:  holes,
 		Effect: EffectClass{Host: HostPure, Determinism: (FactorClock | FactorRandom).Tag()},
-	}, Placement{Kind: PlacementServer})
+	}, Placement{Kind: PlacementServer}, ReturnsNothing())
 }
 
 func valueHole(addr string, space Space) SigEntry {
@@ -155,7 +159,7 @@ func TestTheAdmissionGate(t *testing.T) {
 
 func TestTheReaderRefusesWhatTheGateRefuses(t *testing.T) {
 	const ok = `{"$type":"capability","determinism":"clock+random","id":"c","placement":{"$type":"server"},` +
-		`"signature":{"effect":{"determinism":"clock+random","host":"pure"},"holes":[` +
+		`"result":{"$type":"nothing"},"signature":{"effect":{"determinism":"clock+random","host":"pure"},"holes":[` +
 		`{"addr":"a","kind":"value","name":"a","required":true,"space":{"$type":"intRange","max":9,"min":0}}],"name":"c"}}`
 	if _, err := decodeDoc(ok); err != nil {
 		t.Fatalf("a well-formed declaration was refused: %v", err)
@@ -172,5 +176,166 @@ func TestTheReaderRefusesWhatTheGateRefuses(t *testing.T) {
 		if _, err := decodeDoc(doc); err == nil {
 			t.Errorf("%s: the reader admitted it", name)
 		}
+	}
+}
+
+func TestTheDeclaredResultIsHeldToTheGate(t *testing.T) {
+	ok := intCap(valueHole("a", Space{Kind: "intRange", Min: 0, Max: 9}))
+	cases := []struct {
+		name   string
+		result Returns
+		fault  string
+	}{
+		{"an empty range", ReturnsValue(&Space{Kind: "intRange", Min: 3, Max: 2}), FaultEmptyResult},
+		{"an empty enum", ReturnsValue(&Space{Kind: "enum"}), FaultEmptyResult},
+		{"a negative string length", ReturnsValue(&Space{Kind: "stringLen", Min: 0, Max: -1}), FaultEmptyResult},
+		{"a non-finite bound", ReturnsValue(&Space{Kind: "floatRange", Min: 0, Max: math.Inf(1)}), FaultNonFiniteResult},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := ok
+			c.Result = tc.result
+			e := NewCapabilityRegistry().Register(c)
+			if e == nil || e.Kind != ErrIllFormedCapability || e.Fault != tc.fault || e.Addr != "" {
+				t.Fatalf("got %v, want %s %s naming no hole", e, ErrIllFormedCapability, tc.fault)
+			}
+		})
+	}
+	for _, r := range []Returns{ReturnsNothing(), ReturnsValue(&Space{Kind: "anyString"})} {
+		c := ok
+		c.Result = r
+		if e := NewCapabilityRegistry().Register(c); e != nil {
+			t.Fatalf("a well-formed result was refused: %v", e)
+		}
+	}
+}
+
+func TestTheResultReaderNamesItsCodeAndPath(t *testing.T) {
+	const doc = `{"$type":"capability","determinism":"deterministic","id":"c","placement":{"$type":"server"},` +
+		`RESULT"signature":{"effect":{"determinism":"deterministic","host":"pure"},"holes":[],"name":"c"}}`
+	read := func(result string) error {
+		_, err := decodeDoc(strings.Replace(doc, "RESULT", result, 1))
+		return err
+	}
+	typed := map[string]struct{ result, code string }{
+		"no result":          {"", "MissingField"},
+		"a null result":      {`"result":null,`, "WrongKind"},
+		"an empty result":    {`"result":{"$type":"enum","values":[]},`, "OutOfRange"},
+		"an inverted result": {`"result":{"$type":"intRange","max":0,"min":1},`, "OutOfRange"},
+	}
+	for name, tc := range typed {
+		de, isTyped := read(tc.result).(*DeclarationError)
+		if !isTyped || de.Code != tc.code || strings.Join(de.Path, ".") != "result" {
+			t.Errorf("%s: got %v, want %s at result", name, de, tc.code)
+		}
+	}
+	if read(`"result":{"$type":"widget"},`) == nil {
+		t.Error("an unknown result space was admitted")
+	}
+	// A declared result round-trips, nothing and value alike.
+	for _, result := range []string{`"result":{"$type":"nothing"},`, `"result":{"$type":"intRange","max":9,"min":0},`} {
+		want := strings.Replace(doc, "RESULT", result, 1)
+		c, err := decodeDoc(want)
+		if err != nil {
+			t.Fatalf("%s refused: %v", result, err)
+		}
+		if got, err := EncodeDeclaration(c); err != nil || got != want {
+			t.Errorf("round-trip:\n want %s\n  got %s (%v)", want, got, err)
+		}
+	}
+}
+
+func TestSpaceSubsumesIsTheReferenceLattice(t *testing.T) {
+	ir := func(lo, hi float64) *Space { return &Space{Kind: "intRange", Min: lo, Max: hi} }
+	fr := func(lo, hi float64) *Space { return &Space{Kind: "floatRange", Min: lo, Max: hi} }
+	sl := func(lo, hi float64) *Space { return &Space{Kind: "stringLen", Min: lo, Max: hi} }
+	en := func(xs ...string) *Space { return &Space{Kind: "enum", Choices: xs} }
+	anyStr := &Space{Kind: "anyString"}
+	tree := func(k string) *Space { return &Space{Kind: "slotTree", SlotKind: k} }
+	cases := []struct {
+		name                string
+		required, available *Space
+		want                bool
+	}{
+		{"int within int", ir(0, 10), ir(2, 3), true},
+		{"int past int", ir(0, 10), ir(2, 11), false},
+		{"int widens into float", fr(0, 10), ir(0, 10), true},
+		{"float never narrows to int", ir(0, 10), fr(0, 1), false},
+		{"enum within a string length", sl(1, 2), en("a", "bb"), true},
+		{"enum past a string length", sl(1, 2), en("a", "ccc"), false},
+		{"subset enum", en("a", "b"), en("b"), true},
+		{"anyString is the scalar top", anyStr, ir(0, 999), true},
+		{"anyString admits no tree", anyStr, tree(""), false},
+		{"an unconstrained tree", tree(""), tree("Doc"), true},
+		{"a constrained tree", tree("Doc"), tree("Para"), false},
+		{"no scalar admits a tree", sl(0, 9), tree(""), false},
+	}
+	for _, tc := range cases {
+		if got := SpaceSubsumes(tc.required, tc.available); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestThePipelineTypeCheckNamesEachRefusal(t *testing.T) {
+	ints := &Space{Kind: "intRange", Min: 0, Max: 9}
+	reg := NewCapabilityRegistry()
+	for id, result := range map[string]Returns{"score": ReturnsValue(ints), "notify": ReturnsNothing()} {
+		c := intCap(valueHole("x", *ints))
+		c.ID, c.Result = id, result
+		if e := reg.Register(c); e != nil {
+			t.Fatalf("register %s: %v", id, e)
+		}
+	}
+	lit := func(addr, v string) PipelineArg {
+		return PipelineArg{Addr: addr, Source: ArgSource{Kind: ArgFromLiteral, Value: v}}
+	}
+	from := func(addr, node string) PipelineArg {
+		return PipelineArg{Addr: addr, Source: ArgSource{Kind: ArgFromUpstream, Node: node}}
+	}
+	inv := func(id, capID string, out *Space, args ...PipelineArg) PipelineNode {
+		return PipelineNode{Kind: NodeInvoke, ID: id, CapabilityID: capID, OutputType: out, Args: args}
+	}
+	src := func(id string, out *Space) PipelineNode {
+		return PipelineNode{Kind: NodeSource, ID: id, DataRef: id, OutputType: out}
+	}
+	narrower := &Space{Kind: "intRange", Min: 0, Max: 5}
+	anyStr := &Space{Kind: "anyString"}
+	cases := []struct {
+		name  string
+		nodes []PipelineNode
+		kind  string
+	}{
+		{"a well-typed chain", []PipelineNode{src("s", ints), inv("a", "score", ints, from("x", "s")),
+			inv("b", "score", anyStr, from("x", "a"))}, ""},
+		{"a repeated node id", []PipelineNode{src("s", ints), src("s", ints)}, ErrDuplicateNode},
+		{"an unregistered capability", []PipelineNode{inv("a", "nope", ints)}, ErrPipelineNoSuchCapability},
+		{"an output narrower than the result", []PipelineNode{inv("a", "score", narrower, lit("x", "1"))}, ErrPipelineOutputContradicts},
+		{"a capability that answers nothing", []PipelineNode{inv("a", "notify", ints, lit("x", "1"))}, ErrPipelineOutputContradicts},
+		{"a literal out of space", []PipelineNode{inv("a", "score", ints, lit("x", "10"))}, ErrPipelineArgRefused},
+		{"an address bound twice", []PipelineNode{inv("a", "score", ints, lit("x", "1"), lit("x", "2"))}, ErrPipelineArgRefused},
+		{"an unbound hole", []PipelineNode{inv("a", "score", ints)}, ErrPipelineArgRefused},
+		{"an edge from nowhere", []PipelineNode{inv("a", "score", ints, from("x", "ghost"))}, ErrUnknownNode},
+		{"a self edge", []PipelineNode{inv("a", "score", ints, from("x", "a"))}, ErrPipelineCycle},
+		{"a closed cycle", []PipelineNode{inv("a", "score", ints, from("x", "b")), inv("b", "score", ints, from("x", "a"))}, ErrPipelineCycle},
+		{"a forward edge", []PipelineNode{inv("a", "score", ints, from("x", "s")), src("s", ints)}, ErrPipelineForwardEdge},
+		{"an ill-typed edge", []PipelineNode{src("s", anyStr), inv("a", "score", ints, from("x", "s"))}, ErrEdgeTypeMismatch},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := TypeCheckPipeline(reg, CapabilityPipeline{Nodes: tc.nodes})
+			switch {
+			case tc.kind == "" && e != nil:
+				t.Fatalf("refused: %v", e)
+			case tc.kind != "" && (e == nil || e.Kind != tc.kind):
+				t.Fatalf("got %v, want %s", e, tc.kind)
+			}
+		})
+	}
+	// A cycle is named around its members, from the node the check reached.
+	e := TypeCheckPipeline(reg, CapabilityPipeline{Nodes: []PipelineNode{
+		inv("a", "score", ints, from("x", "b")), inv("b", "score", ints, from("x", "a"))}})
+	if e == nil || strings.Join(e.Cycle, ",") != "a,b" {
+		t.Errorf("cycle named %v, want [a b]", e)
 	}
 }

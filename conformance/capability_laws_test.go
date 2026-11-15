@@ -9,12 +9,18 @@
 // falsify. Running the reference's own sample here makes it falsifiable: a
 // divergence names the vector id.
 //
-// Four cases, all four run:
+// Six cases, all six run:
 //   - validateArgs        — accept, or a named refusal at a named address.
 //   - invocationKey       — the replay key and the determinism tag (see the
 //     named partial below).
 //   - declarationRoundTrip— decode-then-encode returns the REFERENCE's bytes.
 //   - registryEnumerate   — id-sorted enumeration, whatever the insertion order.
+//   - declarationRefused  — the declaration reader refuses with the reference's
+//     decode code at the reference's path (Core 0.43.0: a declaration without
+//     its `result`, or with an empty result space).
+//   - pipelineTypeCheck   — a one-node pipeline over the capability, registered
+//     alone, type-checks or is refused pipelineOutputContradicts naming the
+//     node and the capability (Core 0.43.0).
 //
 // ONE named partial, deliberately not silent. An `invocationKey` vector also
 // carries `capturedValue`: the value a capture-replay seam must return
@@ -46,11 +52,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/fuaran-ui/fuaran-go/function"
 	twin "github.com/fuaran-ui/fuaran-go/internal/core/function"
 	"github.com/fuaran-ui/fuaran-go/internal/corpusroot"
+	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
 type lawFamily struct {
@@ -83,12 +91,19 @@ type capabilityVector struct {
 		Declaration string `json:"declaration"`
 		// registryEnumerate
 		IDs []string `json:"ids"`
+		// declarationRefused
+		Code string   `json:"code"`
+		Path []string `json:"path"`
+		// pipelineTypeCheck
+		Node       string `json:"node"`
+		Capability string `json:"capability"`
 	} `json:"expected"`
 	Input struct {
 		Capability   string               `json:"capability"`
 		Declaration  string               `json:"declaration"`
 		Declarations []string             `json:"declarations"`
 		Args         []function.InvokeArg `json:"args"`
+		Pipeline     string               `json:"pipeline"`
 	} `json:"input"`
 }
 
@@ -262,6 +277,53 @@ func TestCapabilityLawVectors(t *testing.T) {
 					}
 				}
 
+			case "declarationRefused":
+				_, err := function.DecodeDeclaration(v.Input.Declaration)
+				if v.Expected.Verdict != "reject" {
+					t.Fatalf("unrecognised verdict %q — this harness does not know what to assert", v.Expected.Verdict)
+				}
+				if err == nil {
+					t.Fatalf("expected reject %s at %v, this host admitted the declaration", v.Expected.Code, v.Expected.Path)
+				}
+				refusal, typed := err.(*function.DeclarationError)
+				if !typed {
+					t.Fatalf("expected reject %s at %v, this host refused with no code: %v", v.Expected.Code, v.Expected.Path, err)
+				}
+				if refusal.Code != v.Expected.Code || strings.Join(refusal.Path, "/") != strings.Join(v.Expected.Path, "/") {
+					t.Fatalf("expected %s at %v, this host gave %s at %v", v.Expected.Code, v.Expected.Path, refusal.Code, refusal.Path)
+				}
+
+			case "pipelineTypeCheck":
+				declared := mustDecodeDeclaration(t, v.ID, v.Input.Capability)
+				registry := function.NewCapabilityRegistry()
+				if refusal := registry.Register(declared); refusal != nil {
+					t.Fatalf("registering the capability refused: %s", refusal.Error())
+				}
+				raw, err := wire.ParseBounded(v.Input.Pipeline)
+				if err != nil {
+					t.Fatalf("the reference's pipeline is not JSON this host reads: %v", err)
+				}
+				pipeline, err := twin.DecodePipelineParsed(raw)
+				if err != nil {
+					t.Fatalf("this host could not decode the reference's pipeline: %v", err)
+				}
+				refusal := function.TypeCheckPipeline(registry, pipeline)
+				switch v.Expected.Verdict {
+				case "accept":
+					if refusal != nil {
+						t.Fatalf("expected accept, this host refused: %s", refusal.Error())
+					}
+				case "reject":
+					if refusal == nil {
+						t.Fatalf("expected reject %s, this host accepted", v.Expected.Error)
+					}
+					if refusal.Kind != v.Expected.Error || refusal.Node != v.Expected.Node || refusal.Capability != v.Expected.Capability {
+						t.Fatalf("expected %s(%s; %s), this host gave %s", v.Expected.Error, v.Expected.Node, v.Expected.Capability, refusal.Error())
+					}
+				default:
+					t.Fatalf("unrecognised verdict %q — this harness does not know what to assert", v.Expected.Verdict)
+				}
+
 			default:
 				// Never a skip. A case this harness does not know is a case
 				// this host is not certifying, and a green run must not be able
@@ -292,6 +354,8 @@ func TestCapabilityLawFamilyIsFullyRun(t *testing.T) {
 		"invocationKey":        true,
 		"declarationRoundTrip": true,
 		"registryEnumerate":    true,
+		"declarationRefused":   true,
+		"pipelineTypeCheck":    true,
 	}
 	seen := map[string]int{}
 	for _, v := range file.Vectors {

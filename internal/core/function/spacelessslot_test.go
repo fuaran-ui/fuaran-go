@@ -18,7 +18,7 @@ import (
 	"testing"
 )
 
-const spacelessSlotDecl = `{"$type":"capability","determinism":"deterministic","id":"tpl-cap","placement":{"$type":"server"},"signature":{"effect":{"determinism":"deterministic","host":"pure"},"holes":[{"addr":"tpl/t","kind":"value","name":"title","required":true,"space":{"$type":"stringLen","max":20,"min":1}},{"addr":"tpl/c","kind":"value","name":"count","required":true,"space":{"$type":"intRange","max":10,"min":0}},{"addr":"tpl/s","kind":"slot","name":"body","required":true,"slotKind":"para"}],"name":"tpl"}}`
+const spacelessSlotDecl = `{"$type":"capability","determinism":"deterministic","id":"tpl-cap","placement":{"$type":"server"},"result":{"$type":"nothing"},"signature":{"effect":{"determinism":"deterministic","host":"pure"},"holes":[{"addr":"tpl/t","kind":"value","name":"title","required":true,"space":{"$type":"stringLen","max":20,"min":1}},{"addr":"tpl/c","kind":"value","name":"count","required":true,"space":{"$type":"intRange","max":10,"min":0}},{"addr":"tpl/s","kind":"slot","name":"body","required":true,"slotKind":"para"}],"name":"tpl"}}`
 
 func decodeSpacelessSlotDecl(t *testing.T) Capability {
 	t.Helper()
@@ -98,7 +98,7 @@ func TestSpacelessUnconstrainedSlotTakesAnyTree(t *testing.T) {
 		Name:   "any",
 		Holes:  []SigEntry{{Addr: "s", Name: "s", Kind: "slot", Required: true}},
 		Effect: EffectClass{Host: "pure", Determinism: "deterministic"},
-	}, Placement{Kind: "server"})
+	}, Placement{Kind: "server"}, ReturnsNothing())
 	if err := ValidateArgs(c, []InvokeArg{{"s", `{"kind":"anything"}`}}); err != nil {
 		t.Errorf("a tree of any kind was refused: %s", err.Kind)
 	}
@@ -114,7 +114,7 @@ func TestSpacelessActionHoleStaysUninvocable(t *testing.T) {
 		Name:   "act",
 		Holes:  []SigEntry{{Addr: "on", Name: "on", Kind: "action", Required: false}},
 		Effect: EffectClass{Host: "pure", Determinism: "deterministic"},
-	}, Placement{Kind: "server"})
+	}, Placement{Kind: "server"}, ReturnsNothing())
 	for _, v := range []string{`{"kind":"para"}`, "13"} {
 		if err := ValidateArgs(c, []InvokeArg{{"on", v}}); err == nil || err.Kind != ErrUninvocableArg {
 			t.Errorf("an action hole bound to %s: got %v, want %s", v, err, ErrUninvocableArg)
