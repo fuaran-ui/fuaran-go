@@ -89,6 +89,25 @@ const (
 	FaultEmptySpace        = core.FaultEmptySpace
 	FaultNonFiniteBound    = core.FaultNonFiniteBound
 	FaultDuplicateHoleAddr = core.FaultDuplicateHoleAddr
+	FaultEmptyResult       = core.FaultEmptyResult
+	FaultNonFiniteResult   = core.FaultNonFiniteResult
+)
+
+// Pipeline node and argument-source kinds, and the pipeline refusals.
+const (
+	NodeSource      = core.NodeSource
+	NodeInvoke      = core.NodeInvoke
+	ArgFromLiteral  = core.ArgFromLiteral
+	ArgFromUpstream = core.ArgFromUpstream
+
+	ErrDuplicateNode             = core.ErrDuplicateNode
+	ErrUnknownNode               = core.ErrUnknownNode
+	ErrPipelineNoSuchCapability  = core.ErrPipelineNoSuchCapability
+	ErrPipelineArgRefused        = core.ErrPipelineArgRefused
+	ErrPipelineCycle             = core.ErrPipelineCycle
+	ErrEdgeTypeMismatch          = core.ErrEdgeTypeMismatch
+	ErrPipelineForwardEdge       = core.ErrPipelineForwardEdge
+	ErrPipelineOutputContradicts = core.ErrPipelineOutputContradicts
 )
 
 // The registry, signature and capability types.
@@ -109,15 +128,38 @@ type (
 	InvokeArg          = core.InvokeArg
 	InvokeError        = core.InvokeError
 	CapabilityRegistry = core.CapabilityRegistry
+	Returns            = core.Returns
+	DeclarationError   = core.DeclarationError
+	ArgSource          = core.ArgSource
+	PipelineArg        = core.PipelineArg
+	PipelineNode       = core.PipelineNode
+	CapabilityPipeline = core.CapabilityPipeline
+	PipelineError      = core.PipelineError
 )
 
 // NewRegistry returns an empty function registry.
 func NewRegistry() *Registry { return core.NewRegistry() }
 
 // NewCapability constructs a capability, deriving its determinism tag from the
-// signature's effect.
-func NewCapability(id string, sg Signature, placement Placement) Capability {
-	return core.NewCapability(id, sg, placement)
+// signature's effect. The result is what it answers: ReturnsValue(space), or
+// ReturnsNothing() for a call made for its effect.
+func NewCapability(id string, sg Signature, placement Placement, result Returns) Capability {
+	return core.NewCapability(id, sg, placement, result)
+}
+
+// ReturnsNothing is the result of a capability that answers no value.
+func ReturnsNothing() Returns { return core.ReturnsNothing() }
+
+// ReturnsValue is the result of a capability that answers a value in space.
+func ReturnsValue(space *Space) Returns { return core.ReturnsValue(space) }
+
+// SpaceSubsumes reports whether required admits every value available admits.
+func SpaceSubsumes(required, available *Space) bool { return core.SpaceSubsumes(required, available) }
+
+// TypeCheckPipeline checks a capability pipeline against a registry before
+// anything runs. Nil accepts.
+func TypeCheckPipeline(registry *CapabilityRegistry, p CapabilityPipeline) *PipelineError {
+	return core.TypeCheckPipeline(registry, p)
 }
 
 // DeterminismTag is the capability's wire determinism tag.
@@ -126,8 +168,9 @@ func DeterminismTag(c Capability) string { return core.DeterminismTag(c) }
 // ParseDeterminismTag reads a determinism set from its canonical label only.
 func ParseDeterminismTag(tag string) (DeterminismSet, bool) { return core.ParseDeterminismTag(tag) }
 
-// Admission is the gate a declaration passes to be registered or read:
-// totality, then well-formedness. Nil admits.
+// Admission is the gate a declaration's signature passes to be registered or
+// read: totality, then well-formedness. Nil admits. Registration and reading
+// also hold the declared result to it.
 func Admission(id string, sg Signature) *InvokeError { return core.Admission(id, sg) }
 
 // FNV1a is the 32-bit FNV-1a hash of s, rendered as eight lower-case hex digits.

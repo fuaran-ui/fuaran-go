@@ -1,7 +1,8 @@
 // capabilitycodec.go — the canonical wire codec for a capability DECLARATION.
 //
 // The declaration is what travels: a capability's id, its signature (holes,
-// value spaces, effect class), its determinism tag and its placement. The BODY
+// value spaces, effect class), its declared result, its determinism tag and its
+// placement. The BODY
 // never travels — a host resolves it locally by id, which is what keeps the
 // wire form portable and a registry a trust boundary rather than a code channel.
 //
@@ -197,9 +198,23 @@ func encodePlacement(p Placement) (string, error) {
 	}
 }
 
+// encodeResult writes a declared result (Core 0.43.0, Phase 642): a value's
+// space as the space document itself, and "returns nothing" as the one document
+// `{"$type":"nothing"}`, whose tag no value space uses.
+func encodeResult(r Returns) (string, error) {
+	if r.IsNothing() {
+		return jobj(jmember{"$type", jstr("nothing")}), nil
+	}
+	return encodeSpaceDecl(r.Value)
+}
+
 // EncodeDeclaration renders a capability declaration in canonical form.
 func EncodeDeclaration(c Capability) (string, error) {
 	signature, err := encodeSignature(c.Signature)
+	if err != nil {
+		return "", err
+	}
+	result, err := encodeResult(c.Result)
 	if err != nil {
 		return "", err
 	}
@@ -211,6 +226,7 @@ func EncodeDeclaration(c Capability) (string, error) {
 		jmember{"$type", jstr("capability")},
 		jmember{"id", jstr(c.ID)},
 		jmember{"signature", signature},
+		jmember{"result", result},
 		jmember{"determinism", jstr(c.Determinism)},
 		jmember{"placement", placement},
 	), nil
@@ -472,6 +488,52 @@ func decodePlacement(el map[string]any) (Placement, error) {
 	}
 }
 
+// DeclarationError is a declaration refusal that names its decode code and the
+// path to the value at fault, as the reference's typed reader does. It is
+// answered for the declared result (Core 0.43.0, Phase 642) — `MissingField` at
+// `result` for a declaration without one, `WrongKind` for one that is no
+// object, `OutOfRange` for a result space the admission gate refuses — where
+// the shared law vectors pin the code and the path. The codec's other refusals
+// are sentences.
+type DeclarationError struct {
+	Code   string   // the reference's decode code: MissingField, WrongKind, OutOfRange
+	Path   []string // the member keys from the declaration root to the fault
+	Reason string
+}
+
+func (e *DeclarationError) Error() string {
+	return e.Code + " at " + strings.Join(e.Path, ".") + ": " + e.Reason
+}
+
+// decodeResult reads the declared result as encodeResult writes it: the
+// `nothing` document, or a value space. The space is held to the admission gate
+// (resultFault), so a result that decodes is one Register admits.
+func decodeResult(id string, el map[string]any) (Returns, error) {
+	raw, ok := el["result"]
+	if !ok {
+		return Returns{}, &DeclarationError{Code: "MissingField", Path: []string{"result"},
+			Reason: "a capability declares its result"}
+	}
+	o, ok := raw.(map[string]any)
+	if !ok {
+		return Returns{}, &DeclarationError{Code: "WrongKind", Path: []string{"result"},
+			Reason: "a result is an object"}
+	}
+	if tag, err := strField(o, "$type"); err == nil && tag == "nothing" {
+		return ReturnsNothing(), nil
+	}
+	space, err := decodeSpaceDecl(o)
+	if err != nil {
+		return Returns{}, errors.New("result: " + err.Error())
+	}
+	result := ReturnsValue(space)
+	if fault := resultFault(result); fault != "" {
+		refusal := &InvokeError{Kind: ErrIllFormedCapability, ID: id, Fault: fault}
+		return Returns{}, &DeclarationError{Code: "OutOfRange", Path: []string{"result"}, Reason: refusal.Error()}
+	}
+	return result, nil
+}
+
 // DecodeDeclarationParsed decodes a capability declaration from an
 // already-parsed JSON value. Total: every malformed input yields a named error.
 // Parsing the text under the host's wire limits happens before the boundary
@@ -508,6 +570,12 @@ func DecodeDeclarationParsed(raw any) (Capability, error) {
 	if refusal := Admission(id, signature); refusal != nil {
 		return Capability{}, errors.New("signature.holes: " + refusal.Error())
 	}
+	// The declared result is REQUIRED (Core 0.43.0, Phase 642), read after the
+	// signature so a signature fault is answered before a result's.
+	result, err := decodeResult(id, el)
+	if err != nil {
+		return Capability{}, err
+	}
 
 	// The wire tag is derivable from the signature, so a disagreement is a
 	// tampered or divergent payload rather than a spelling difference — refuse
@@ -535,6 +603,7 @@ func DecodeDeclarationParsed(raw any) (Capability, error) {
 	return Capability{
 		ID:          id,
 		Signature:   signature,
+		Result:      result,
 		Determinism: expected,
 		Placement:   placement,
 	}, nil

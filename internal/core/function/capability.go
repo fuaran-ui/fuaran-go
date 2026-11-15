@@ -67,9 +67,13 @@ import (
 // invariant readers and canonical argument spelling the replay key hashes
 // (0.34.0, Phase 295), the admission gate, duplicateArg and the reader's
 // `$type` check (0.35.1, Phase 307), and the entry read as its hole kind
-// (0.37.0, Phase 409). The policy gate on the registry (0.35.1, Phase 318) is
-// not mirrored: this host's registry carries no policy.
-const MirroredCoreVersion = "0.39.0"
+// (0.37.0, Phase 409). Raised to 0.43.0 by Phase 2740: a capability declares
+// its result (Core 0.43.0, fuaran-core Phase 642) — the declaration's required
+// `result` member, the admission gate over it, and a pipeline invoke's declared
+// output checked against it (pipeline.go). The policy gate on the registry
+// (0.35.1, Phase 318) and its decision context and grants (0.43.0, Phase 638)
+// are not mirrored: this host's registry carries no policy.
+const MirroredCoreVersion = "0.43.0"
 
 // EffectClass is the total two-axis effect declaration: what host state a body
 // touches, and what makes it non-reproducible. The wire spellings are the
@@ -205,11 +209,31 @@ type Signature struct {
 	Effect EffectClass `json:"effect"`
 }
 
+// Returns is what a capability answers (Core 0.43.0, fuaran-core Phase 642): a
+// value in a space, or nothing — a call made for its effect. Value is the
+// space; a nil Value is "returns nothing", whose one wire spelling is
+// `{"$type":"nothing"}`. Build one with ReturnsValue or ReturnsNothing.
+type Returns struct {
+	Value *Space `json:"value,omitempty"`
+}
+
+// ReturnsNothing is the result of a capability that answers no value.
+func ReturnsNothing() Returns { return Returns{} }
+
+// ReturnsValue is the result of a capability that answers a value in space.
+func ReturnsValue(space *Space) Returns { return Returns{Value: space} }
+
+// IsNothing reports whether the capability answers no value.
+func (r Returns) IsNothing() bool { return r.Value == nil }
+
 // Capability is a registrable, invocable runtime capability. Build one with
 // NewCapability so Determinism cannot disagree with the signature's effect.
+// Result is what it answers; a pipeline invoke's declared output is checked
+// against it.
 type Capability struct {
 	ID          string    `json:"id"`
 	Signature   Signature `json:"signature"`
+	Result      Returns   `json:"result"`
 	Determinism string    `json:"determinism"`
 	Placement   Placement `json:"placement"`
 }
@@ -243,6 +267,10 @@ const (
 	FaultEmptySpace        = "emptySpace"
 	FaultNonFiniteBound    = "nonFiniteBound"
 	FaultDuplicateHoleAddr = "duplicateHoleAddr"
+	// The declared result's space admits no value, or carries a bound no JSON
+	// number spells (Core 0.43.0, Phase 642). The fault names no hole.
+	FaultEmptyResult     = "emptyResult"
+	FaultNonFiniteResult = "nonFiniteResult"
 )
 
 // InvokeError names why a typed invocation (or a registration) was refused and,
@@ -279,6 +307,9 @@ func (e *InvokeError) Error() string {
 	case ErrNonTotalCapability:
 		return fmt.Sprintf("nonTotalCapability(%s; [%s])", e.ID, strings.Join(e.Addrs, ", "))
 	case ErrIllFormedCapability:
+		if e.Addr == "" {
+			return fmt.Sprintf("illFormedCapability(%s; %s)", e.ID, e.Fault)
+		}
 		return fmt.Sprintf("illFormedCapability(%s; %s at %s)", e.ID, e.Fault, e.Addr)
 	case ErrDuplicateArg:
 		return fmt.Sprintf("duplicateArg(%s)", e.Addr)
@@ -289,11 +320,14 @@ func (e *InvokeError) Error() string {
 
 // NewCapability builds a capability, deriving Determinism from the signature's
 // effect class. The two are never allowed to disagree, which is why this is the
-// constructor rather than a struct literal.
-func NewCapability(id string, sg Signature, placement Placement) Capability {
+// constructor rather than a struct literal. The result is declared, as the
+// reference's `Capability.create` takes it (Core 0.43.0): ReturnsNothing is how
+// a capability that answers no value says so.
+func NewCapability(id string, sg Signature, placement Placement, result Returns) Capability {
 	return Capability{
 		ID:          id,
 		Signature:   sg,
+		Result:      result,
 		Determinism: sg.Effect.Determinism,
 		Placement:   placement,
 	}
@@ -562,31 +596,8 @@ func ValidateArgs(c Capability, args []InvokeArg) *InvokeError {
 	}
 
 	for _, a := range args {
-		var hole *SigEntry
-		for i := range holes {
-			if holes[i].Addr == a.Addr {
-				hole = &holes[i]
-				break
-			}
-		}
-		if hole == nil {
-			return &InvokeError{Kind: ErrUnknownArg, Addr: a.Addr, Declared: declared}
-		}
-		space := invocationSpace(*hole)
-		if space == nil {
-			// An action hole: no value space, so nothing an argument can lie in.
-			return &InvokeError{Kind: ErrUninvocableArg, Addr: a.Addr}
-		}
-		if space.Kind == "slotTree" {
-			// A tree space: an argument that is no tree at all (a scalar, a
-			// malformed document) is uninvocable; a tree of the wrong kind is out
-			// of the space. The reference's order (fuaran-core#229).
-			if _, isTree := slotKindOf(a.Value); !isTree {
-				return &InvokeError{Kind: ErrUninvocableArg, Addr: a.Addr}
-			}
-		}
-		if !SpaceValidate(space, a.Value) {
-			return &InvokeError{Kind: ErrArgOutOfSpace, Addr: a.Addr, Got: a.Value}
+		if e := argFault(holes, declared, a); e != nil {
+			return e
 		}
 	}
 
@@ -598,6 +609,41 @@ func ValidateArgs(c Capability, args []InvokeArg) *InvokeError {
 	}
 	if len(unbound) > 0 {
 		return &InvokeError{Kind: ErrRequiredArgsUnbound, Addrs: unbound}
+	}
+	return nil
+}
+
+// argFault is why one bound argument is refused, or nil: it must address a
+// declared hole (unknownArg, enumerating the declared addresses), the hole must
+// take a value (uninvocableArg), and the value must lie in the hole's space
+// (argOutOfSpace). Twin of the reference's `Capability.argFault`, which
+// ValidateArgs and a pipeline's literal arguments both ask.
+func argFault(holes []SigEntry, declared []string, a InvokeArg) *InvokeError {
+	var hole *SigEntry
+	for i := range holes {
+		if holes[i].Addr == a.Addr {
+			hole = &holes[i]
+			break
+		}
+	}
+	if hole == nil {
+		return &InvokeError{Kind: ErrUnknownArg, Addr: a.Addr, Declared: declared}
+	}
+	space := invocationSpace(*hole)
+	if space == nil {
+		// An action hole: no value space, so nothing an argument can lie in.
+		return &InvokeError{Kind: ErrUninvocableArg, Addr: a.Addr}
+	}
+	if space.Kind == "slotTree" {
+		// A tree space: an argument that is no tree at all (a scalar, a
+		// malformed document) is uninvocable; a tree of the wrong kind is out
+		// of the space. The reference's order (fuaran-core#229).
+		if _, isTree := slotKindOf(a.Value); !isTree {
+			return &InvokeError{Kind: ErrUninvocableArg, Addr: a.Addr}
+		}
+	}
+	if !SpaceValidate(space, a.Value) {
+		return &InvokeError{Kind: ErrArgOutOfSpace, Addr: a.Addr, Got: a.Value}
 	}
 	return nil
 }
@@ -650,7 +696,9 @@ func spaceFault(s *Space) string {
 // nonTotalCapability naming each one that does not — then well-formedness, the
 // first entry in declaration order whose address an earlier entry holds
 // (duplicateHoleAddr) or whose space admits no value or has a non-finite bound
-// (emptySpace / nonFiniteBound), refused illFormedCapability. Nil admits.
+// (emptySpace / nonFiniteBound), refused illFormedCapability. Nil admits. It is
+// the gate over the SIGNATURE (the reference's `signatureAdmissionOf`); the
+// declared result is held to it after, by admissionOf (Core 0.43.0).
 func Admission(id string, sg Signature) *InvokeError {
 	var nonTotal []string
 	for _, e := range sg.Holes {
@@ -674,6 +722,34 @@ func Admission(id string, sg Signature) *InvokeError {
 	return nil
 }
 
+// resultFault names why a declared result is not well-formed — its space
+// admits no value (FaultEmptyResult) or has a non-finite bound
+// (FaultNonFiniteResult) — or is "" for a well-formed one. Returning nothing is
+// always well-formed. Twin of the reference's `Capability.resultFault`.
+func resultFault(r Returns) string {
+	switch spaceFault(r.Value) {
+	case FaultEmptySpace:
+		return FaultEmptyResult
+	case FaultNonFiniteBound:
+		return FaultNonFiniteResult
+	default:
+		return ""
+	}
+}
+
+// admissionOf is the whole gate over a declaration (the reference's
+// `Capability.admissionOf`): Admission over the signature, then the declared
+// result's well-formedness, refused illFormedCapability naming no hole.
+func admissionOf(id string, sg Signature, result Returns) *InvokeError {
+	if e := Admission(id, sg); e != nil {
+		return e
+	}
+	if fault := resultFault(result); fault != "" {
+		return &InvokeError{Kind: ErrIllFormedCapability, ID: id, Fault: fault}
+	}
+	return nil
+}
+
 // CapabilityRegistry is the typed discovery surface an agent enumerates: "what
 // compute may I invoke, with what typed args". Default-deny by shape on
 // dispatch — only a registered id resolves. Distinct from this package's
@@ -690,12 +766,12 @@ func NewCapabilityRegistry() *CapabilityRegistry {
 
 // Register adds a capability — additive, with no silent overwrite: a duplicate
 // id is a named refusal, and so is a declaration the admission gate refuses
-// (Admission).
+// (Admission over the signature, then the declared result).
 func (r *CapabilityRegistry) Register(c Capability) *InvokeError {
 	if _, exists := r.capabilities[c.ID]; exists {
 		return &InvokeError{Kind: ErrDuplicateCapability, ID: c.ID}
 	}
-	if e := Admission(c.ID, c.Signature); e != nil {
+	if e := admissionOf(c.ID, c.Signature, c.Result); e != nil {
 		return e
 	}
 	r.capabilities[c.ID] = c

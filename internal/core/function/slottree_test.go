@@ -17,12 +17,12 @@ import (
 	"testing"
 )
 
-const slotTreeDecl = `{"$type":"capability","determinism":"random","id":"cap-tree","placement":{"$type":"server"},"signature":{"effect":{"determinism":"random","host":"readsHost"},"holes":[{"addr":"body","kind":"slot","name":"body","required":true,"slotKind":"Layout"},{"addr":"chart","kind":"value","name":"chart","required":false,"space":{"$type":"slotTree","slotKind":"Chart"}}],"name":"tree"}}`
+const slotTreeDecl = `{"$type":"capability","determinism":"random","id":"cap-tree","placement":{"$type":"server"},"result":{"$type":"slotTree","slotKind":"Layout"},"signature":{"effect":{"determinism":"random","host":"readsHost"},"holes":[{"addr":"body","kind":"slot","name":"body","required":true,"slotKind":"Layout"},{"addr":"chart","kind":"value","name":"chart","required":false,"space":{"$type":"slotTree","slotKind":"Chart"}}],"name":"tree"}}`
 
 // slotTreeDeclBefore037 is the same declaration as it was pinned before Core
 // 0.37.0: the slot entry also wrote a slotTree space, which a slot hole no
 // longer holds.
-const slotTreeDeclBefore037 = `{"$type":"capability","determinism":"random","id":"cap-tree","placement":{"$type":"server"},"signature":{"effect":{"determinism":"random","host":"readsHost"},"holes":[{"addr":"body","kind":"slot","name":"body","required":true,"slotKind":"Layout","space":{"$type":"slotTree"}},{"addr":"chart","kind":"value","name":"chart","required":false,"space":{"$type":"slotTree","slotKind":"Chart"}}],"name":"tree"}}`
+const slotTreeDeclBefore037 = `{"$type":"capability","determinism":"random","id":"cap-tree","placement":{"$type":"server"},"result":{"$type":"slotTree","slotKind":"Layout"},"signature":{"effect":{"determinism":"random","host":"readsHost"},"holes":[{"addr":"body","kind":"slot","name":"body","required":true,"slotKind":"Layout","space":{"$type":"slotTree"}},{"addr":"chart","kind":"value","name":"chart","required":false,"space":{"$type":"slotTree","slotKind":"Chart"}}],"name":"tree"}}`
 
 func decodeDecl(t *testing.T, text string) Capability {
 	t.Helper()
