@@ -16,6 +16,7 @@ package aitools
 import (
 	"sort"
 
+	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -148,29 +149,13 @@ func BindingSlots(node wire.Node) []BindingSlot {
 	return slots
 }
 
-// ChildNodes returns the immediate structural child nodes — every Node
-// reachable within the kind without passing through another Node.
+// ChildNodes returns the immediate child nodes the node's own kind holds
+// (ops.ReachKindHeld, the reference's introspection reach): every ordered
+// child list, an ErrorBoundary's child and fallback, every Switch case child
+// and its default, a FragmentDecl's body. The envelope alternatives and slot
+// arguments are not the node's children — FindNode reaches them.
 func ChildNodes(node wire.Node) []wire.Node {
-	var children []wire.Node
-	var walk func(value wire.Value)
-	walk = func(value wire.Value) {
-		switch v := value.(type) {
-		case wire.Node:
-			children = append(children, v)
-		case wire.Obj:
-			for _, name := range sortedKeys(v.Fields) {
-				walk(v.Fields[name])
-			}
-		case wire.Arr:
-			for _, item := range v {
-				walk(item)
-			}
-		}
-	}
-	for _, name := range sortedKeys(node.Kind.Fields) {
-		walk(node.Kind.Fields[name])
-	}
-	return children
+	return ops.Children(node, ops.ReachKindHeld)
 }
 
 // ChildIDs returns the immediate child node ids.
@@ -197,14 +182,11 @@ func WalkNodes(tree wire.Node) []wire.Node {
 	return acc
 }
 
-// FindNode returns the first node with nodeID (depth-first), or ok=false.
+// FindNode returns the first node with nodeID (depth-first, root first),
+// searching every position a node holds another in (ops.FindNode, the keyed
+// reach the apply engine resolves an op's target through), or ok=false.
 func FindNode(tree wire.Node, nodeID string) (wire.Node, bool) {
-	for _, node := range WalkNodes(tree) {
-		if node.ID == nodeID {
-			return node, true
-		}
-	}
-	return wire.Node{}, false
+	return ops.FindNode(tree, nodeID)
 }
 
 func introspect(node wire.Node) NodeIntrospection {

@@ -260,7 +260,7 @@ func TestRestyleRoundTripProperty(t *testing.T) {
 		var walk func(n wire.Node)
 		walk = func(n wire.Node) {
 			ids = append(ids, n.ID)
-			kids, _ := structuralChildren(n)
+			kids, _ := ops.OrderedChildren(n)
 			for _, k := range kids {
 				walk(k)
 			}

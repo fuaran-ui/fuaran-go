@@ -199,7 +199,7 @@ func SequentialIDs(prefix string) FreshIDs {
 // containerChildren returns the destination's current child ids, or the
 // mirrored apply-side refusal (absent parent / childless kind).
 func containerChildren(root wire.Node, parentID string) ([]string, *PlaceError) {
-	parent, found := findNode(parentID, root)
+	parent, found := FindNode(root, parentID)
 	if !found {
 		return nil, &PlaceError{
 			Code:     CodePlaceParentNotFound,
@@ -207,7 +207,7 @@ func containerChildren(root wire.Node, parentID string) ([]string, *PlaceError) 
 			ParentID: parentID,
 		}
 	}
-	children, isLayout := layoutChildren(parent)
+	children, isLayout := OrderedChildren(parent)
 	if !isLayout {
 		return nil, &PlaceError{
 			Code: CodePlaceChildlessKind,
@@ -509,7 +509,7 @@ func nudgeOp(root wire.Node, nodeID string, delta int) (wire.Obj, *PlaceError) {
 			NodeID:  nodeID,
 		}
 	}
-	children, _ := layoutChildren(parent)
+	children, _ := OrderedChildren(parent)
 	ids := make([]string, 0, len(children))
 	index := -1
 	for i, c := range children {
@@ -577,28 +577,20 @@ func firstSharedID(root, incoming wire.Node) (string, bool) {
 }
 
 // remapNodeIDs rewrites every id named by rename, rebuilding the spine through
-// the same childSlots seam the apply engine traverses — so the rewrite reaches
+// the keyed reach the apply engine's id checks run on — so the rewrite reaches
 // every node the tree-wide duplicate-id contract covers, not just the
-// structural child lists. A clone that kept an old id inside a Switch case or an
-// ErrorBoundary slot would smuggle a duplicate past that contract.
-//
-// The slot list is recomputed each iteration on purpose: a childSlot's rebuild
-// closure is relative to the node its slots were taken from, so accumulating
-// several slot rewrites means re-deriving the slots from the node as rebuilt so
-// far. Slot count and order are stable under child replacement, so the loop
-// terminates.
+// structural child lists. A clone that kept an old id inside a Switch case, an
+// ErrorBoundary slot or an envelope fallback would smuggle a duplicate past
+// that contract.
 func remapNodeIDs(n wire.Node, rename map[string]string) wire.Node {
 	cur := n
 	if fresh, ok := rename[cur.ID]; ok {
 		cur = wire.Node{ID: fresh, Kind: cur.Kind, Extras: cur.Extras}
 	}
-	for i := 0; ; i++ {
-		slots := childSlots(cur)
-		if i >= len(slots) {
-			return cur
-		}
-		cur = slots[i].rebuild(remapNodeIDs(slots[i].child, rename))
-	}
+	out, _ := MapChildren(cur, ReachKeyed, func(c wire.Node) (wire.Node, bool) {
+		return remapNodeIDs(c, rename), true
+	})
+	return out
 }
 
 // remapForInsert rewrites every id in incoming that collides with an id in
@@ -654,7 +646,7 @@ func DuplicateOp(root wire.Node, source string, target Target) (wire.Obj, error)
 //
 // The returned error, when non-nil, is a *PlaceError.
 func DuplicateOpWith(fresh FreshIDs, root wire.Node, source string, target Target) (wire.Obj, error) {
-	sub, found := findNode(source, root)
+	sub, found := FindNode(root, source)
 	if !found {
 		return wire.Obj{}, &PlaceError{
 			Code:    CodePlaceNodeNotFound,

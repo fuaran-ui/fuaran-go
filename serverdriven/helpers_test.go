@@ -5,6 +5,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -56,7 +57,7 @@ func clickInc(connID string, lastSeq int) Event {
 // metricValue reads the counter metric's current Static source value.
 func metricValue(t *testing.T, s *Session) int64 {
 	t.Helper()
-	metric, ok := findNode(s.Tree(), "count")
+	metric, ok := ops.FindNode(s.Tree(), "count")
 	if !ok {
 		t.Fatal("count node missing")
 	}

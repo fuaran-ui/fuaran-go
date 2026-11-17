@@ -162,7 +162,7 @@ func held(op wire.Obj, tree wire.Node) bool {
 		if err != nil {
 			return false
 		}
-		for _, c := range structuralChildren(p) {
+		for _, c := range ops.Children(p, ops.ReachStructural) {
 			if c.ID == child.ID {
 				if got, err := wire.EncodeNode(c); err == nil && got == want {
 					return true
@@ -238,7 +238,7 @@ func rebased(tree wire.Node, parent string, op wire.Obj) wire.Obj {
 	}
 	present := IDSet{}
 	var kids []string
-	for _, c := range structuralChildren(p) {
+	for _, c := range ops.Children(p, ops.ReachStructural) {
 		kids = append(kids, c.ID)
 		present[c.ID] = true
 	}
@@ -448,7 +448,7 @@ func reorderFor(tree wire.Node, parent string, runA, runB []string) []wire.Obj {
 	}
 	kids := make([]string, 0)
 	present := IDSet{}
-	for _, c := range structuralChildren(p) {
+	for _, c := range ops.Children(p, ops.ReachStructural) {
 		kids = append(kids, c.ID)
 		present[c.ID] = true
 	}
@@ -518,7 +518,7 @@ func reorderIn(tree wire.Node, op wire.Obj) (parent string, unchanged, ok bool) 
 	if !found {
 		return "", false, false
 	}
-	return parent, sameOrder(structuralChildren(node), orderOf(op)), true
+	return parent, sameOrder(ops.Children(node, ops.ReachStructural), orderOf(op)), true
 }
 
 // threadedOp is an op of a delta with the tree its own branch applies it to.

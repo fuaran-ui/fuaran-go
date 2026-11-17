@@ -119,35 +119,113 @@ func (k *Kind) RequiredFields() []string {
 // IsNodeList reports whether t is a list of nodes — an ordered child slot.
 func (t Type) IsNodeList() bool { return t.Kind == TList && t.Elem != nil && t.Elem.Kind == TNode }
 
-// OrderedChildren returns the field holding the kind's ordered child list (the
-// one list-of-nodes slot, which the structural ops InsertChild / RemoveNode /
-// MoveNode / ReorderChildren address), or false for a kind with none. The set
-// of kinds answering true is the one layout set every package shares.
-func OrderedChildren(tag string) (string, bool) {
-	k, ok := kindByTag[tag]
-	if !ok {
-		return "", false
+// SlotShape is how one kind field holds nodes.
+type SlotShape uint8
+
+const (
+	// SlotList is a list of nodes: the kind's ordered child list, the one slot
+	// the structural ops InsertChild / RemoveNode / MoveNode / ReorderChildren
+	// address.
+	SlotList SlotShape = iota + 1
+	// SlotNode is one node in a named arm (ErrorBoundary's child and fallback,
+	// a FragmentDecl's body, a Switch's default).
+	SlotNode
+	// SlotRecords is a list of records, each holding one node in its Inner
+	// field (a Switch's cases).
+	SlotRecords
+	// SlotArgs is a map of union values whose Case holds one node in its Inner
+	// field (a FragmentRef's args, a Mount's inputs).
+	SlotArgs
+)
+
+// NodeSlot is one field of a kind that holds nodes.
+type NodeSlot struct {
+	Field string
+	Shape SlotShape
+	// Case is the union case that carries a node (SlotArgs only).
+	Case string
+	// Inner is the record or case field holding the node (SlotRecords and
+	// SlotArgs only).
+	Inner string
+}
+
+// nodeSlotsByTag is every kind's slot list, derived once from the field
+// tables.
+var nodeSlotsByTag = func() map[string][]NodeSlot {
+	out := make(map[string][]NodeSlot, len(Kinds))
+	for _, k := range Kinds {
+		var slots []NodeSlot
+		for _, f := range k.Fields {
+			if f.Optionality == HostOnly {
+				continue
+			}
+			if s, ok := nodeSlotOf(f); ok {
+				slots = append(slots, s)
+			}
+		}
+		out[k.Tag] = slots
 	}
-	for _, f := range k.Fields {
-		if f.Optionality != HostOnly && f.Type.IsNodeList() {
+	return out
+}()
+
+// nodeSlotOf classifies one field: a list of nodes, a node, a list of records
+// holding a node, or a map of union values one case of which holds a node. It
+// reads the record and union tables directly rather than through the lookup
+// maps, which init() fills only after variable initialisation.
+func nodeSlotOf(f Field) (NodeSlot, bool) {
+	t := f.Type
+	switch {
+	case t.IsNodeList():
+		return NodeSlot{Field: f.Name, Shape: SlotList}, true
+	case t.Kind == TNode:
+		return NodeSlot{Field: f.Name, Shape: SlotNode}, true
+	case t.Kind == TList && t.Elem != nil && t.Elem.Kind == TRecord:
+		for _, r := range Records {
+			if r.Name != t.Elem.Name {
+				continue
+			}
+			if inner, ok := nodeFieldOf(r.Fields); ok {
+				return NodeSlot{Field: f.Name, Shape: SlotRecords, Inner: inner}, true
+			}
+		}
+	case t.Kind == TMap && t.Elem != nil && t.Elem.Kind == TUnion:
+		for _, u := range Unions {
+			if u.Name != t.Elem.Name {
+				continue
+			}
+			for _, c := range u.Cases {
+				if inner, ok := nodeFieldOf(c.Fields); ok {
+					return NodeSlot{Field: f.Name, Shape: SlotArgs, Case: c.Tag, Inner: inner}, true
+				}
+			}
+		}
+	}
+	return NodeSlot{}, false
+}
+
+func nodeFieldOf(fields []Field) (string, bool) {
+	for _, f := range fields {
+		if f.Optionality != HostOnly && f.Type.Kind == TNode {
 			return f.Name, true
 		}
 	}
 	return "", false
 }
 
-// NodeArms returns the kind's single-node slots (ErrorBoundary's child and
-// fallback, FragmentDecl's body, Switch's default), in table order.
-func NodeArms(tag string) []string {
-	k, ok := kindByTag[tag]
-	if !ok {
-		return nil
-	}
-	var out []string
-	for _, f := range k.Fields {
-		if f.Optionality != HostOnly && f.Type.Kind == TNode {
-			out = append(out, f.Name)
+// NodeSlots returns the kind's node-holding fields, in table order: the ONE
+// slot list the host's child enumeration (ops.Children) reads. Nil for an
+// unknown or childless kind.
+func NodeSlots(tag string) []NodeSlot { return nodeSlotsByTag[tag] }
+
+// OrderedChildren returns the field holding the kind's ordered child list (its
+// SlotList slot, which the structural ops address), or false for a kind with
+// none. The set of kinds answering true is the one layout set every package
+// shares.
+func OrderedChildren(tag string) (string, bool) {
+	for _, s := range nodeSlotsByTag[tag] {
+		if s.Shape == SlotList {
+			return s.Field, true
 		}
 	}
-	return out
+	return "", false
 }

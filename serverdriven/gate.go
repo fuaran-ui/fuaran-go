@@ -3,6 +3,7 @@ package serverdriven
 import (
 	"sort"
 
+	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -174,10 +175,12 @@ func (g CapabilityGate) opMissingCapabilities(op wire.Obj) []string {
 	return missing
 }
 
-// walkNodes visits a node and every sub-node, in document order.
+// walkNodes visits a node and every node it holds, through every position
+// (ops.ReachKeyed): a Mount carried in another's slot input, a fragment's slot
+// argument or an envelope fallback is introduced as surely as a child is.
 func walkNodes(node wire.Node, visit func(wire.Node)) {
 	visit(node)
-	for _, child := range subNodes(node) {
+	for _, child := range ops.Children(node, ops.ReachKeyed) {
 		walkNodes(child, visit)
 	}
 }

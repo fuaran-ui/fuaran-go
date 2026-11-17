@@ -43,8 +43,8 @@ const CodeLimitExceeded ApplyErrorCode = "LimitExceeded"
 func treeMetrics(n wire.Node) (depth, count int) {
 	count = 1
 	depth = 1
-	for _, slot := range childSlots(n) {
-		d, c := treeMetrics(slot.child)
+	for _, child := range Children(n, ReachKeyed) {
+		d, c := treeMetrics(child)
 		count += c
 		if d+1 > depth {
 			depth = d + 1
@@ -93,11 +93,7 @@ func InsertedNodes(op wire.Obj) []wire.Node {
 		if kind, ok := op.Fields["newKind"].(wire.Obj); ok {
 			// An envelope-free carrier, so only the kind's own positions are
 			// enumerated: the edited node keeps its existing state block.
-			var held []wire.Node
-			for _, slot := range childSlots(wire.Node{Kind: kind}) {
-				held = append(held, slot.child)
-			}
-			return held
+			return Children(wire.Node{Kind: kind}, ReachKeyed)
 		}
 	case "UpdateState":
 		if state, ok := op.Fields["state"].(wire.Obj); ok {

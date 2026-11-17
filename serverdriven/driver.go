@@ -131,7 +131,7 @@ func (s *Session) Tree() wire.Node { return s.tree }
 // boundary that knows which event caused it, and reported as a
 // HandlerPanicked reject: the connection survives, the tree is untouched.
 func (s *Session) Step(ev Event) ([]wire.Obj, *Reject) {
-	node, found := findNode(s.tree, ev.NodeID)
+	node, found := ops.FindNode(s.tree, ev.NodeID)
 	if !found {
 		return nil, &Reject{Reason: ReasonUnknownNode, NodeID: ev.NodeID,
 			Message: "unknown node '" + ev.NodeID + "' (stale or forged id)"}
@@ -180,56 +180,6 @@ func (s *Session) Step(ev Event) ([]wire.Obj, *Reject) {
 	}
 	s.tree = next
 	return opsList, nil
-}
-
-// findNode locates a node by id anywhere in the tree, walking the same
-// sub-node positions the apply engine addresses (children, boundary/switch
-// children, fragment bodies, state surfaces).
-func findNode(node wire.Node, target string) (wire.Node, bool) {
-	if node.ID == target {
-		return node, true
-	}
-	for _, child := range subNodes(node) {
-		if found, ok := findNode(child, target); ok {
-			return found, true
-		}
-	}
-	return wire.Node{}, false
-}
-
-// subNodes enumerates a node's immediate sub-node positions.
-func subNodes(node wire.Node) []wire.Node {
-	var out []wire.Node
-	fields := node.Kind.Fields
-	if arr, ok := fields["children"].(wire.Arr); ok {
-		for _, item := range arr {
-			if c, ok := asNode(item); ok {
-				out = append(out, c)
-			}
-		}
-	}
-	for _, key := range []string{"child", "fallback", "default", "body"} {
-		if c, ok := asNode(fields[key]); ok {
-			out = append(out, c)
-		}
-	}
-	if cases, ok := fields["cases"].(wire.Arr); ok {
-		for _, item := range cases {
-			if caseObj, ok := item.(wire.Obj); ok {
-				if c, ok := asNode(caseObj.Fields["child"]); ok {
-					out = append(out, c)
-				}
-			}
-		}
-	}
-	if state, ok := node.Extras["state"].(wire.Obj); ok {
-		for _, key := range []string{"onLoading", "onEmpty"} {
-			if c, ok := asNode(state.Fields[key]); ok {
-				out = append(out, c)
-			}
-		}
-	}
-	return out
 }
 
 // asNode coerces a child value to a node envelope (typed-decoded children are

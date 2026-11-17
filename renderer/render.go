@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -71,7 +72,12 @@ func childNodesOf(fields map[string]wire.Value) []wire.Node {
 	return out
 }
 
-// collectFragments walks the tree registering FragmentDecl bodies by name.
+// collectFragments walks the tree registering FragmentDecl bodies by name,
+// through the fragment scope (ops.ReachFragmentScope, the reference's registry
+// walk): every ordered child list, every arm (an ErrorBoundary's child AND its
+// fallback, every Switch case and the default, a fragment's own body) and the
+// two state alternatives. Slot arguments and the envelope fallback are outside
+// it: an argument belongs to the scope it is passed into.
 func collectFragments(node wire.Node, acc map[string]wire.Node) {
 	kind := node.Kind
 	if kind.Tag == "FragmentDecl" {
@@ -81,25 +87,8 @@ func collectFragments(node wire.Node, acc map[string]wire.Node) {
 			}
 		}
 	}
-	for _, child := range childNodesOf(kind.Fields) {
+	for _, child := range ops.Children(node, ops.ReachFragmentScope) {
 		collectFragments(child, acc)
-	}
-	if boundaryChild, ok := asNode(kind.Fields["child"]); ok {
-		collectFragments(boundaryChild, acc)
-	}
-	if kind.Tag == "Switch" {
-		if cases, ok := kind.Fields["cases"].(wire.Arr); ok {
-			for _, item := range cases {
-				if caseObj, ok := item.(wire.Obj); ok {
-					if caseChild, ok := asNode(caseObj.Fields["child"]); ok {
-						collectFragments(caseChild, acc)
-					}
-				}
-			}
-		}
-		if def, ok := asNode(kind.Fields["default"]); ok {
-			collectFragments(def, acc)
-		}
 	}
 }
 

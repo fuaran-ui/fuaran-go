@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -47,10 +48,10 @@ func TestGateDeniesAnUngrantedMount(t *testing.T) {
 	session := gateSession(t, mountOp(t, "net.fetch", "storage.write")).
 		WithCapabilityGate(NewCapabilityGate("storage.write"))
 
-	ops, reject := session.Step(Event{NodeID: "inc", Event: "click"})
+	emitted, reject := session.Step(Event{NodeID: "inc", Event: "click"})
 
 	if reject == nil {
-		t.Fatalf("ungranted mount was applied: %d ops", len(ops))
+		t.Fatalf("ungranted mount was applied: %d ops", len(emitted))
 	}
 	if reject.Reason != ReasonCapabilityDenied {
 		t.Errorf("reason = %q, want %q", reject.Reason, ReasonCapabilityDenied)
@@ -60,7 +61,7 @@ func TestGateDeniesAnUngrantedMount(t *testing.T) {
 			reject.MissingCapabilities)
 	}
 	// The tree is untouched: a refused step mutates nothing.
-	if _, found := findNode(session.Tree(), "guest"); found {
+	if _, found := ops.FindNode(session.Tree(), "guest"); found {
 		t.Error("the refused mount reached the tree")
 	}
 }
@@ -71,14 +72,14 @@ func TestGateAllowsAFullyGrantedMount(t *testing.T) {
 	session := gateSession(t, mountOp(t, "net.fetch")).
 		WithCapabilityGate(NewCapabilityGate("net.fetch"))
 
-	ops, reject := session.Step(Event{NodeID: "inc", Event: "click"})
+	emitted, reject := session.Step(Event{NodeID: "inc", Event: "click"})
 	if reject != nil {
 		t.Fatalf("granted mount refused: %+v", reject)
 	}
-	if len(ops) != 1 {
-		t.Fatalf("ops = %d, want 1", len(ops))
+	if len(emitted) != 1 {
+		t.Fatalf("ops = %d, want 1", len(emitted))
 	}
-	if _, found := findNode(session.Tree(), "guest"); !found {
+	if _, found := ops.FindNode(session.Tree(), "guest"); !found {
 		t.Error("the granted mount did not reach the tree")
 	}
 }
@@ -144,10 +145,10 @@ func TestPanickingHandlerIsRefusedNotPropagated(t *testing.T) {
 		recoveredNode, recoveredValue = nodeID, r
 	})
 
-	ops, reject := session.Step(Event{NodeID: "inc", Event: "click"})
+	emitted, reject := session.Step(Event{NodeID: "inc", Event: "click"})
 
 	if reject == nil {
-		t.Fatalf("a panicking handler produced %d ops and no reject", len(ops))
+		t.Fatalf("a panicking handler produced %d ops and no reject", len(emitted))
 	}
 	if reject.Reason != ReasonHandlerPanicked {
 		t.Errorf("reason = %q, want %q", reject.Reason, ReasonHandlerPanicked)
@@ -162,7 +163,7 @@ func TestPanickingHandlerIsRefusedNotPropagated(t *testing.T) {
 			recoveredNode, recoveredValue)
 	}
 	// The connection survives and the tree is untouched.
-	if _, found := findNode(session.Tree(), "guest"); found {
+	if _, found := ops.FindNode(session.Tree(), "guest"); found {
 		t.Error("the tree advanced through a panicking handler")
 	}
 }

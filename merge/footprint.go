@@ -50,7 +50,7 @@
 //
 // Ids are counted over every position a node holds another in (keyedIDs, the
 // reference's keyed walk); the base-aware arms LOCATE through the ordered child
-// lists alone (structuralChildren), as Core's resolution does, so a node held
+// lists alone (ops.ReachStructural), as Core's resolution does, so a node held
 // only in a keyed position takes the pure arm.
 //
 // Sets enumerate in ordinal (UTF-16) order wherever order is observable (the
@@ -63,7 +63,6 @@ import (
 	"github.com/fuaran-ui/fuaran-go/canonical"
 	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
-	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
 
 // ordinalCmp is the ordinal comparison over UTF-16 code units — F#'s
@@ -158,73 +157,10 @@ func unionFootprint(a, b Footprint) Footprint {
 
 // ── walks ───────────────────────────────────────────────────────────────────
 
-// structuralChildren is a node's ordered child list — the surface the
-// structural ops edit (idl.OrderedChildren, the apply engine's layout set).
-func structuralChildren(n wire.Node) []wire.Node {
-	slot, ok := idl.OrderedChildren(n.Kind.Tag)
-	if !ok {
-		return nil
-	}
-	arr, _ := n.Kind.Fields[slot].(wire.Arr)
-	out := make([]wire.Node, 0, len(arr))
-	for _, item := range arr {
-		if c, ok := item.(wire.Node); ok {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-// heldNodes is every node n holds another in: its ordered child list, the
-// kind's single-node arms and Switch case children, the envelope's state
-// alternatives and its `fallback`, and the subtree of every slot argument (a
-// FragmentRef's `args`, a Mount's `inputs`, typed since fuaran#2701). The
-// reference's `Reach.keyed`.
-func heldNodes(n wire.Node) []wire.Node {
-	out := structuralChildren(n)
-	fields := n.Kind.Fields
-	for _, arm := range idl.NodeArms(n.Kind.Tag) {
-		if c, ok := fields[arm].(wire.Node); ok {
-			out = append(out, c)
-		}
-	}
-	if cases, ok := fields["cases"].(wire.Arr); ok {
-		for _, item := range cases {
-			if rec, ok := item.(wire.Obj); ok {
-				if c, ok := rec.Fields["child"].(wire.Node); ok {
-					out = append(out, c)
-				}
-			}
-		}
-	}
-	for _, bag := range []string{"args", "inputs"} {
-		if args, ok := fields[bag].(wire.Obj); ok {
-			for _, a := range args.Fields {
-				if arg, ok := a.(wire.Obj); ok && arg.Tag == "SlotArg" {
-					if c, ok := arg.Fields["tree"].(wire.Node); ok {
-						out = append(out, c)
-					}
-				}
-			}
-		}
-	}
-	if state, ok := n.Extras["state"].(wire.Obj); ok {
-		for _, key := range []string{"onLoading", "onEmpty"} {
-			if c, ok := state.Fields[key].(wire.Node); ok {
-				out = append(out, c)
-			}
-		}
-	}
-	if c, ok := n.Extras["fallback"].(wire.Node); ok {
-		out = append(out, c)
-	}
-	return out
-}
-
 // keyedIDs adds every id in n's subtree, n included, through every position.
 func keyedIDs(n wire.Node, into IDSet) IDSet {
 	into[n.ID] = true
-	for _, c := range heldNodes(n) {
+	for _, c := range ops.Children(n, ops.ReachKeyed) {
 		keyedIDs(c, into)
 	}
 	return into
@@ -251,7 +187,7 @@ func structuralPath(root wire.Node, id string) []wire.Node {
 	if root.ID == id {
 		return []wire.Node{root}
 	}
-	for _, c := range structuralChildren(root) {
+	for _, c := range ops.Children(root, ops.ReachStructural) {
 		if p := structuralPath(c, id); p != nil {
 			return append([]wire.Node{root}, p...)
 		}
@@ -270,7 +206,7 @@ func findStructural(root wire.Node, id string) (wire.Node, bool) {
 // structuralParentOf is the node whose ordered child list holds id, preorder
 // first.
 func structuralParentOf(root wire.Node, id string) (wire.Node, bool) {
-	kids := structuralChildren(root)
+	kids := ops.Children(root, ops.ReachStructural)
 	for _, c := range kids {
 		if c.ID == id {
 			return root, true
@@ -438,18 +374,6 @@ func styleFields(op wire.Obj) []string {
 	return out
 }
 
-func stateAlternatives(n wire.Node) []wire.Node {
-	var out []wire.Node
-	if state, ok := n.Extras["state"].(wire.Obj); ok {
-		for _, key := range []string{"onLoading", "onEmpty"} {
-			if c, ok := state.Fields[key].(wire.Node); ok {
-				out = append(out, c)
-			}
-		}
-	}
-	return out
-}
-
 // resolvedAt is the base-aware arm of one non-batch op at state, given the tree
 // it reaches (nil when it does not apply).
 func resolvedAt(state wire.Node, after *wire.Node, op wire.Obj) Footprint {
@@ -544,7 +468,7 @@ func resolvedAt(state wire.Node, after *wire.Node, op wire.Obj) Footprint {
 		}
 		order := orderOf(op)
 		var f Footprint
-		if sameOrder(structuralChildren(node), order) {
+		if sameOrder(ops.Children(node, ops.ReachStructural), order) {
 			f = unionFootprint(readingSlot(parent, "kind"), readingSlot(parent, childListSlot))
 		} else {
 			f = childList(parent, slotEdit(parent, "kind"))
@@ -566,7 +490,7 @@ func resolvedAt(state wire.Node, after *wire.Node, op wire.Obj) Footprint {
 		})
 	case "UpdateState":
 		return verticalAt(func(node wire.Node) Footprint {
-			return slotted([]string{"state"}, nil, id, unionIDs(idsOf(stateAlternatives(node)), idsOf(ops.InsertedNodes(op))))
+			return slotted([]string{"state"}, nil, id, unionIDs(idsOf(ops.Children(node, ops.ReachOf(ops.StateArm))), idsOf(ops.InsertedNodes(op))))
 		})
 	case "UpdateStyle":
 		return verticalAt(func(node wire.Node) Footprint {

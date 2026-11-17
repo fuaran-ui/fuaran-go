@@ -32,43 +32,24 @@
 //
 // The recursion descends through the kinds the apply engine addresses
 // structurally — the kinds whose generated idl.json table carries an ordered
-// list-of-nodes slot (idl.OrderedChildren, the one set ops reads too, so a
-// script emitted against a parent always applies), Modal and ScrollArea
+// list-of-nodes slot (ops.OrderedChildren, the structural reach the apply
+// engine edits, so a script emitted against a parent always applies), Modal and ScrollArea
 // included. A granular kind-field refinement pass (matching the
 // Python producer's UpdateProp/UpdateState op choices) is a possible
 // follow-up.
 package diff
 
 import (
+	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 	"github.com/fuaran-ui/fuaran-go/wire/idl"
 )
-
-// structuralChildren returns a layout node's ordered child list, or
-// (nil, false) for a kind this diff does not recurse through.
-func structuralChildren(n wire.Node) ([]wire.Node, bool) {
-	slot, ok := idl.OrderedChildren(n.Kind.Tag)
-	if !ok {
-		return nil, false
-	}
-	arr, ok := n.Kind.Fields[slot].(wire.Arr)
-	if !ok {
-		return nil, false
-	}
-	children := make([]wire.Node, 0, len(arr))
-	for _, item := range arr {
-		if child, ok := item.(wire.Node); ok {
-			children = append(children, child)
-		}
-	}
-	return children, true
-}
 
 // stripStructuralChildren returns a clone of n with its structural child list
 // emptied — for comparing a node's own content (kind-minus-children, plus the
 // style/state/accessibility extras) independently of what its children became.
 func stripStructuralChildren(n wire.Node) wire.Node {
-	if _, ok := structuralChildren(n); !ok {
+	if _, ok := ops.OrderedChildren(n); !ok {
 		return n
 	}
 	fields := make(map[string]wire.Value, len(n.Kind.Fields))
@@ -266,8 +247,8 @@ func diffNode(a, b wire.Node, parent *seat, script *[]wire.Obj) {
 		*script = append(*script, facetEdits(a, b)...) // the facets are the only difference
 		return
 	}
-	ak, aOK := structuralChildren(a)
-	bk, bOK := structuralChildren(b)
+	ak, aOK := ops.OrderedChildren(a)
+	bk, bOK := ops.OrderedChildren(b)
 	// Recurse only when both sides are layout kinds, their own content is
 	// unchanged but for the facets, and their children line up id-for-id in
 	// order — every other difference (kind change, state drift, insert / remove

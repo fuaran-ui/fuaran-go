@@ -680,3 +680,37 @@ at it and one past it, plus the code-point and UTF-8-byte units) and
 `wire/limits_json_depth_test.go` (the depth edge on `ParseBounded` and the node decoder, and
 `CheckDocumentBytes`). Host-local vectors, as §21.7 prescribes; there is no corpus snapshot to
 re-sync. It rides the current unreleased version.
+
+## One child enumeration, with the reach stated — Phase 2661
+
+What a node's children are is answered in one place: `ops.Children(n, reach)`,
+`ops.MapChildren(n, reach, f)` and the labelled `ops.Slots(n, reach)`, over the one slot list
+`wire/idl` derives from the generated tables (`idl.NodeSlots`: each kind's list, arm, case-record
+and argument-bag fields). A walk names the positions it descends through — `ops.ReachStructural`
+(the ordered child lists), `ops.ReachKindHeld` (plus the kind's arms), `ops.ReachFragmentScope`
+(plus `state.onLoading` / `state.onEmpty`) or `ops.ReachKeyed` (plus the envelope `fallback` and
+slot arguments) — the reference host's reaches, in its canonical order. The eleven private walks
+the host carried are gone; each reads one of these.
+
+**Conformance statement — additive, with five reaches widened and one narrowed.** The copies
+disagreed with the reference about reach, and each disagreement is now pinned by a test that failed
+before:
+
+- The apply engine (`ops`): node lookup, the structural ops' parent search and the §21 depth and
+  count bounds now reach the envelope `fallback`, so an op addressed to a node held there applies,
+  and a subtree nested past `MaxNodeDepth` there is refused `LimitExceeded`. `ops.FindNode` is the
+  one exported lookup, tree first.
+- `elicitation`: a contract may name a node held in a slot argument or a `fallback`.
+- `serverdriven`: an event on a node held in a slot argument or a `fallback` reaches the handler,
+  and the capability gate vets a `Mount` carried in another's slot input or a `fallback`.
+- `validator`: the envelope `fallback` is validated, so a duplicate id there is reported.
+- `renderer`: a fragment declared in an `ErrorBoundary`'s fallback, a state alternative or another
+  fragment's body resolves.
+- `aitools` — the one narrowing: `ChildNodes` / `ChildIDs` / `WalkNodes` and the searches over them
+  read what the node's own kind holds (`ReachKindHeld`), as the reference's introspection does, so a
+  `FragmentRef`'s or `Mount`'s slot argument is no longer listed as its child. `aitools.FindNode`
+  now resolves through every position (`ops.FindNode`), so it also finds a node held in a state
+  alternative or a `fallback`.
+
+The island walk, the diff and the merge footprint already read the reference's reaches and are
+unchanged. It rides the current unreleased version.

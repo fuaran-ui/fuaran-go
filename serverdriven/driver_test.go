@@ -3,6 +3,7 @@ package serverdriven
 import (
 	"testing"
 
+	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -16,7 +17,7 @@ func TestStepAppliesOpsAndAdvancesTree(t *testing.T) {
 		t.Fatalf("expected one UpdateProp op, got %+v", opsList)
 	}
 	// The server tree advanced: the metric value is now Static 1.
-	metric, ok := findNode(s.Tree(), "count")
+	metric, ok := ops.FindNode(s.Tree(), "count")
 	if !ok {
 		t.Fatal("count node missing after step")
 	}
@@ -32,7 +33,7 @@ func TestStepAppliesOpsAndAdvancesTree(t *testing.T) {
 	if _, reject := s.Step(clickInc("c1", 1)); reject != nil {
 		t.Fatalf("second click rejected: %+v", reject)
 	}
-	metric, _ = findNode(s.Tree(), "count")
+	metric, _ = ops.FindNode(s.Tree(), "count")
 	src, _ = metric.Kind.Fields["value"].(wire.Obj)
 	if v, _ := src.Fields["value"].(wire.Int); v != 2 {
 		t.Errorf("after two clicks value = %v, want 2", src.Fields["value"])
@@ -60,7 +61,7 @@ func TestStepRejects(t *testing.T) {
 				t.Errorf("reason = %s, want %s", reject.Reason, c.want)
 			}
 			// A rejected step leaves the tree untouched.
-			metric, _ := findNode(s.Tree(), "count")
+			metric, _ := ops.FindNode(s.Tree(), "count")
 			src, _ := metric.Kind.Fields["source"].(wire.Obj)
 			if v, _ := src.Fields["value"].(wire.Int); v != 0 {
 				t.Errorf("rejected step mutated the tree (source=%v)", src.Fields["value"])

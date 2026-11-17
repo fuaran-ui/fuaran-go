@@ -60,11 +60,11 @@ func sweepPlacements() []Placement {
 
 func childIDs(t *testing.T, tree wire.Node, parentID string) ([]string, bool) {
 	t.Helper()
-	parent, found := findNode(parentID, tree)
+	parent, found := FindNode(tree, parentID)
 	if !found {
 		return nil, false
 	}
-	children, isLayout := layoutChildren(parent)
+	children, isLayout := OrderedChildren(parent)
 	if !isLayout {
 		return nil, false
 	}
@@ -621,14 +621,14 @@ func TestDuplicateOpNeverCollides(t *testing.T) {
 			}
 			assertNoDuplicateIDs(t, after)
 
-			sourceNode, _ := findNode(source, root)
+			sourceNode, _ := FindNode(root, source)
 			if want, got := len(allIDs(root))+len(allIDs(sourceNode)), len(allIDs(after)); want != got {
 				t.Errorf("%s: tree holds %d ids, want %d", label, got, want)
 			}
 
 			// Structurally equal to the source modulo ids.
 			cloneID := source + "-copy"
-			clone, found := findNode(cloneID, after)
+			clone, found := FindNode(after, cloneID)
 			if !found {
 				t.Fatalf("%s: expected the clone at %q; ids are %v", label, cloneID, allIDs(after))
 			}
@@ -660,7 +660,7 @@ func TestDuplicateOpRemapsNonStructuralSlots(t *testing.T) {
 	}
 	assertNoDuplicateIDs(t, after)
 	for _, want := range []string{"sw-copy", "swd-copy", "swc-copy"} {
-		if _, found := findNode(want, after); !found {
+		if _, found := FindNode(after, want); !found {
 			t.Errorf("expected a remapped %q; ids are %v", want, allIDs(after))
 		}
 	}
@@ -711,14 +711,14 @@ func TestPasteOpRemapsCollidingIDsAndPreservesTheRest(t *testing.T) {
 	assertNoDuplicateIDs(t, after)
 
 	for _, want := range []string{"lifted", "outsider", "m1-copy"} {
-		if _, found := findNode(want, after); !found {
+		if _, found := FindNode(after, want); !found {
 			t.Errorf("expected %q after paste; ids are %v", want, allIDs(after))
 		}
 	}
 	if got, _ := childIDs(t, after, "mid"); !equalIDs(got, []string{"lifted", "m1", "m2"}) {
 		t.Errorf("mid children = %v, want [lifted m1 m2]", got)
 	}
-	pasted, _ := findNode("lifted", after)
+	pasted, _ := FindNode(after, "lifted")
 	if canonicalShape(t, pasted) != canonicalShape(t, incoming) {
 		t.Error("the pasted subtree is not structurally equal to the lifted one modulo ids")
 	}
@@ -728,7 +728,7 @@ func TestPasteOpWholeSubtreeColliding(t *testing.T) {
 	// Every incoming id already present — the intra-tree duplicate case, reached
 	// through the cross-tree verb.
 	root := mustDecode(t, placementFixtureJSON())
-	incoming, _ := findNode("mid", root)
+	incoming, _ := FindNode(root, "mid")
 
 	op, err := PasteOp(root, incoming, Target{ParentID: "root", Placement: After("a")})
 	if err != nil {
@@ -788,7 +788,7 @@ func TestFreshIDsDodgesTheIncomingSubtreesOwnIDs(t *testing.T) {
 	// node must be steered off it by the `taken` predicate — otherwise the remap
 	// re-introduces the very duplicate it exists to remove.
 	root := mustDecode(t, placementFixtureJSON())
-	incoming, _ := findNode("mid", root)
+	incoming, _ := FindNode(root, "mid")
 
 	op, err := PasteOpWith(SequentialIDs("m"), root, incoming, Target{ParentID: "root", Placement: Last()})
 	if err != nil {
@@ -804,7 +804,7 @@ func TestFreshIDsDodgesTheIncomingSubtreesOwnIDs(t *testing.T) {
 	// none of which is m1/m2 — the assertion that matters is the absence of any
 	// duplicate above, plus that the pre-existing ids survived untouched.
 	for _, want := range []string{"m1", "m2", "mid"} {
-		if _, found := findNode(want, after); !found {
+		if _, found := FindNode(after, want); !found {
 			t.Errorf("paste disturbed the target tree: %q is gone", want)
 		}
 	}

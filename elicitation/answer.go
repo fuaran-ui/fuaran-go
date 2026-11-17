@@ -3,6 +3,7 @@ package elicitation
 import (
 	"sort"
 
+	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -182,44 +183,11 @@ func DecodeAnswerDoc(text string) error {
 }
 
 // collectNodeIDs returns every node id in a decoded tree (for the contract's
-// CONTRACT_UNKNOWN_NODE membership check).
+// CONTRACT_UNKNOWN_NODE membership check), through every position a node holds
+// another in (the keyed reach node lookup runs on).
 func collectNodeIDs(node wire.Node, into map[string]bool) {
 	into[node.ID] = true
-	for _, child := range treeChildren(node) {
+	for _, child := range ops.Children(node, ops.ReachKeyed) {
 		collectNodeIDs(child, into)
 	}
-}
-
-func treeChildren(node wire.Node) []wire.Node {
-	var out []wire.Node
-	fields := node.Kind.Fields
-	if arr, ok := fields["children"].(wire.Arr); ok {
-		for _, item := range arr {
-			if c, ok := item.(wire.Node); ok {
-				out = append(out, c)
-			}
-		}
-	}
-	for _, key := range []string{"child", "fallback", "default", "body"} {
-		if c, ok := fields[key].(wire.Node); ok {
-			out = append(out, c)
-		}
-	}
-	if cases, ok := fields["cases"].(wire.Arr); ok {
-		for _, item := range cases {
-			if caseObj, ok := item.(wire.Obj); ok {
-				if c, ok := caseObj.Fields["child"].(wire.Node); ok {
-					out = append(out, c)
-				}
-			}
-		}
-	}
-	if state, ok := node.Extras["state"].(wire.Obj); ok {
-		for _, key := range []string{"onLoading", "onEmpty"} {
-			if c, ok := state.Fields[key].(wire.Node); ok {
-				out = append(out, c)
-			}
-		}
-	}
-	return out
 }

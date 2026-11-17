@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
+	"github.com/fuaran-ui/fuaran-go/ops"
 	"github.com/fuaran-ui/fuaran-go/wire"
 )
 
@@ -117,13 +119,8 @@ func walk(node wire.Node, path string, findings *[]Finding, seen map[string]bool
 	checkInertControl(node, node.Kind, kindPath, findings)
 	checkFieldRules(node, node.Kind, kindPath, findings)
 
-	for _, entry := range childNodes(node.Kind, kindPath) {
-		walk(entry.node, entry.path, findings, seen)
-	}
-	if state, ok := node.Extras["state"].(wire.Obj); ok {
-		for _, entry := range childNodes(state, path+".state") {
-			walk(entry.node, entry.path, findings, seen)
-		}
+	for _, slot := range childSlots(node) {
+		walk(slot.Node, path+"."+strings.Join(slot.Path(), "."), findings, seen)
 	}
 }
 
@@ -237,38 +234,22 @@ func checkProgressFraction(kind wire.Obj, path string, findings *[]Finding) {
 	}
 }
 
-type childEntry struct {
-	node wire.Node
-	path string
-}
-
-// childNodes finds directly-nested Node values (layout children, an
-// ErrorBoundary's child/fallback, Switch cases, state surfaces, …) with their
-// $-rooted paths, walking arrays by index and objects by sorted key so the
-// reported order is deterministic.
-func childNodes(value wire.Value, path string) []childEntry {
-	switch t := value.(type) {
-	case wire.Node:
-		return []childEntry{{t, path}}
-	case wire.Arr:
-		var out []childEntry
-		for i, item := range t {
-			out = append(out, childNodes(item, path+"."+strconv.Itoa(i))...)
+// childSlots is every position node holds another node in (ops.ReachKeyed,
+// the surface id uniqueness quantifies over), in wire-document order: the
+// kind's positions first, then the envelope's by member name (fallback,
+// state.onEmpty, state.onLoading), so the reported order is deterministic and
+// a finding's $-rooted path names where the node sits.
+func childSlots(node wire.Node) []ops.Slot {
+	slots := ops.Slots(node, ops.ReachKeyed)
+	sort.SliceStable(slots, func(i, j int) bool {
+		pi, pj := slots[i].Path(), slots[j].Path()
+		ki, kj := pi[0] == "kind", pj[0] == "kind"
+		if ki || kj {
+			return ki && !kj
 		}
-		return out
-	case wire.Obj:
-		keys := make([]string, 0, len(t.Fields))
-		for k := range t.Fields {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		var out []childEntry
-		for _, k := range keys {
-			out = append(out, childNodes(t.Fields[k], path+"."+k)...)
-		}
-		return out
-	}
-	return nil
+		return strings.Join(pi, ".") < strings.Join(pj, ".")
+	})
+	return slots
 }
 
 // ── FUARAN069 — the inert-control rule (Phase 426 write-back doctrine) ───────

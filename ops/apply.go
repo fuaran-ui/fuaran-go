@@ -218,7 +218,7 @@ func applyOne(op wire.Obj, root wire.Node) (wire.Node, *ApplyError) {
 		if !targetOK || !slotOK || fields["binding"] == nil {
 			return root, errBadShape
 		}
-		node, found := findNode(target, root)
+		node, found := FindNode(root, target)
 		if !found {
 			return root, apErr(CodeNodeNotFound, fmt.Sprintf("Node '%s' not found in tree.", target))
 		}
@@ -317,11 +317,11 @@ func applyOne(op wire.Obj, root wire.Node) (wire.Node, *ApplyError) {
 		if !parentOK || !childOK {
 			return root, errBadShape
 		}
-		parent, found := findNode(parentID, root)
+		parent, found := FindNode(root, parentID)
 		if !found {
 			return root, apErr(CodeParentNotFound, fmt.Sprintf("Parent node '%s' not found in tree.", parentID))
 		}
-		children, isLayout := layoutChildren(parent)
+		children, isLayout := OrderedChildren(parent)
 		if !isLayout {
 			return root, apErr(CodeChildlessKind, fmt.Sprintf(
 				"Node '%s' (kind=%s) has no children field — only layout kinds accept structural child ops.",
@@ -359,7 +359,7 @@ func applyOne(op wire.Obj, root wire.Node) (wire.Node, *ApplyError) {
 		if !found {
 			return root, apErr(CodeNodeNotFound, fmt.Sprintf("Node '%s' not found in tree.", target))
 		}
-		children, _ := layoutChildren(parent)
+		children, _ := OrderedChildren(parent)
 		kept := make([]wire.Node, 0, len(children))
 		for _, c := range children {
 			if c.ID != target {
@@ -383,15 +383,15 @@ func applyOne(op wire.Obj, root wire.Node) (wire.Node, *ApplyError) {
 		if isAncestor(target, newParentID, root) {
 			return root, apErr(CodeKindMismatch, "Cannot move a node into its own descendant (would create a cycle).")
 		}
-		moving, found := findNode(target, root)
+		moving, found := FindNode(root, target)
 		if !found {
 			return root, apErr(CodeNodeNotFound, fmt.Sprintf("Node '%s' not found in tree.", target))
 		}
-		newParent, found := findNode(newParentID, root)
+		newParent, found := FindNode(root, newParentID)
 		if !found {
 			return root, apErr(CodeParentNotFound, fmt.Sprintf("Parent node '%s' not found in tree.", newParentID))
 		}
-		if _, isLayout := layoutChildren(newParent); !isLayout {
+		if _, isLayout := OrderedChildren(newParent); !isLayout {
 			return root, apErr(CodeChildlessKind, fmt.Sprintf(
 				"Node '%s' (kind=%s) has no children field.", newParentID, newParent.Kind.Tag))
 		}
@@ -420,11 +420,11 @@ func applyOne(op wire.Obj, root wire.Node) (wire.Node, *ApplyError) {
 			}
 			newOrder[i] = id
 		}
-		parent, found := findNode(parentID, root)
+		parent, found := FindNode(root, parentID)
 		if !found {
 			return root, apErr(CodeParentNotFound, fmt.Sprintf("Parent node '%s' not found in tree.", parentID))
 		}
-		children, isLayout := layoutChildren(parent)
+		children, isLayout := OrderedChildren(parent)
 		if !isLayout {
 			return root, apErr(CodeChildlessKind, fmt.Sprintf(
 				"Node '%s' (kind=%s) has no children field.", parentID, parent.Kind.Tag))
@@ -510,7 +510,7 @@ func applyUpdateProp(fields map[string]wire.Value, root wire.Node) (wire.Node, *
 	if reason != "" {
 		return root, apErr(CodePathInvalid, fmt.Sprintf("Path '%s' is structurally invalid: %s.", path, reason))
 	}
-	node, found := findNode(target, root)
+	node, found := FindNode(root, target)
 	if !found {
 		return root, apErr(CodeNodeNotFound, fmt.Sprintf("Node '%s' not found in tree.", target))
 	}
