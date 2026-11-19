@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "c694bd27beacf7d3f6a9c794ec15f03e02b78ca98bbbe56333b648410d14ef19"
+const SourceSHA256 = "243a7fc91cf5a737aea3ca3b6c6e6b6a7eb4cb46aa96eaa771ba1b62d44f3cef"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
