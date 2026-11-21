@@ -49,18 +49,21 @@ func TestMultiSelectMalformedValueStillRefuses(t *testing.T) {
 	}
 }
 
-// Phase 1962 amendment — `multiple` is emitted AS AUTHORED, never
-// omit-at-default: an absent `multiple` stays absent, and an explicit false or
-// true re-encodes as written (nodes/select-multiple-false.json in the corpus).
-func TestSelectMultipleRoundTripsAsAuthored(t *testing.T) {
+// Phase 2413 — `multiple` is omit-at-default (Phase 2300's one rule): an
+// absent `multiple` stays absent, an explicit false re-encodes WITHOUT the
+// member (lenient/lenient-2413-select-multiple-false.json in the corpus), and
+// true re-encodes as written.
+func TestSelectMultipleOmitsAtDefault(t *testing.T) {
 	const src = `"source":{"$type":"Static","value":[{"label":"Red","value":"red"}]},`
-	for _, tc := range []struct{ name, wire string }{
-		{"absent", `{"id":"s","kind":{"$type":"Select","label":"Tags",` + src +
-			`"value":{"$type":"Static","value":"red"}}}`},
+	single := `{"id":"s","kind":{"$type":"Select","label":"Tags",` + src +
+		`"value":{"$type":"Static","value":"red"}}}`
+	multi := `{"id":"s","kind":{"$type":"Select","label":"Tags","multiple":true,` + src +
+		`"values":{"$type":"State","key":"tags"}}}`
+	for _, tc := range []struct{ name, wire, want string }{
+		{"absent", single, single},
 		{"false", `{"id":"s","kind":{"$type":"Select","label":"Tags","multiple":false,` + src +
-			`"value":{"$type":"Static","value":"red"}}}`},
-		{"true", `{"id":"s","kind":{"$type":"Select","label":"Tags","multiple":true,` + src +
-			`"values":{"$type":"State","key":"tags"}}}`},
+			`"value":{"$type":"Static","value":"red"}}}`, single},
+		{"true", multi, multi},
 	} {
 		node, err := DecodeNode(tc.wire)
 		if err != nil {
@@ -70,8 +73,8 @@ func TestSelectMultipleRoundTripsAsAuthored(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: EncodeNode: %v", tc.name, err)
 		}
-		if got != tc.wire {
-			t.Errorf("%s: not re-encoded as authored:\n got %s\nwant %s", tc.name, got, tc.wire)
+		if got != tc.want {
+			t.Errorf("%s: not the canonical bytes:\n got %s\nwant %s", tc.name, got, tc.want)
 		}
 	}
 }

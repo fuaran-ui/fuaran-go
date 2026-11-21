@@ -3982,9 +3982,10 @@ func decodeSelectValue(s *spec) {
 // control is declarative; present as the "<closure>" sentinel when
 // closure-authored. `options` / `data` alias `source`. Phase 291 —
 // values omitted when absent. Phase 1962 — `value` follows the single/multi
-// rule (decodeSelectValue), and `multiple` is an ordinary optional field kept
-// AS AUTHORED: an explicit false survives the round trip (it is not
-// omit-at-default; nodes/select-multiple-false.json).
+// rule (decodeSelectValue). Phase 2413 — `multiple` is omit-at-default
+// (its IDL row declares `false`), so an explicit false decodes as a
+// single-select and re-encodes without the member, a §16 lenient accept
+// (lenient/lenient-2413-select-multiple-false.json).
 func (handArms) armSelect(w *walkState, obj map[string]any, path string) Obj {
 	s := newKindSpec(w, obj, path, &idl.KindSelect)
 	s.field("label", decodeTextSource)

@@ -21,6 +21,14 @@ package fuarango
 
 // Version is the pre-release version of the fuaran-go host.
 //
+// 0.0.6-alpha also carries Phase 2413, WIRE-VISIBLE and rides the announced
+// breaking cut: `Select.multiple` joins the omit-at-default rule. Its regenerated
+// wire/idl row declares the default `false`, so an explicit `"multiple":false`
+// decodes as a single-select (a §16 lenient accept,
+// lenient/lenient-2413-select-multiple-false.json) and re-encodes WITHOUT the
+// member, reversing Phase 1962's emitted-as-authored ruling below. No exported
+// signature moves.
+//
 // 0.0.6-alpha also carries the Phase 2740 COMPILE-BREAKING raise of the
 // capability twin to Core 0.43.0: a capability declares its result.
 // function.Capability gains Result (a function.Returns: ReturnsValue(space), or

@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "a8dd5c77f261a21c83e87122c4f3c3aa76939d858d358df60db940e6173d4057"
+const SourceSHA256 = "b49eb7256c1f9ade11f0c4c26b117dc2979b71cae0c0c665f4dae312715c3ad1"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -272,7 +272,7 @@ var (
 		{Name: "value", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
 		{Name: "placeholder", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "disabled", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TBool}}}},
-		{Name: "multiple", Optionality: Optional, Type: Type{Kind: TBool}},
+		{Name: "multiple", Optionality: OmitDefault, Default: "false", Type: Type{Kind: TBool}},
 		{Name: "values", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TList, Elem: &Type{Kind: TStr}}}}},
 		{Name: "affordance", Optionality: Optional, Type: Type{Kind: TRecord, Name: "Affordance"}},
 		{Name: "groups", Optionality: OmitDefault, Default: "[]", Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "SelectOptionGroup"}}},
