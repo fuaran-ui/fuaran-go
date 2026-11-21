@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "243a7fc91cf5a737aea3ca3b6c6e6b6a7eb4cb46aa96eaa771ba1b62d44f3cef"
+const SourceSHA256 = "a8dd5c77f261a21c83e87122c4f3c3aa76939d858d358df60db940e6173d4057"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -433,6 +433,15 @@ var (
 		}},
 		{Tag: "Focus", Fields: []Field{
 			{Name: "nodeId", Optionality: Required, Type: Type{Kind: TStr}},
+		}},
+		{Tag: "Choose", Fields: []Field{
+			{Name: "condition", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TJSON}}}},
+			{Name: "whenTrue", Optionality: Required, Type: Type{Kind: TUnion, Name: "Action"}},
+			{Name: "whenFalse", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Action"}},
+			{Name: "exit", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TJSON}}}},
+		}},
+		{Tag: "Require", Fields: []Field{
+			{Name: "condition", Optionality: Required, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TJSON}}}},
 		}},
 	}}
 	UnionBinding = Union{Name: "Binding", Params: []string{"T"}, Cases: []Case{

@@ -1783,6 +1783,35 @@ func decodeAction(w *walkState, raw any, path string) Value {
 				s.set(key, continuation)
 			}
 		}
+	case "Choose":
+		// Phase 2107 — the bounded core's SELECTION (WIRE_FORMAT.md §3.6.34).
+		// `condition` and `exit` are Bindings evaluated at dispatch (the
+		// `SetState.valueFrom` decoder); `whenTrue` is required and an absent
+		// `whenFalse` means nothing runs. This host decodes and gates only, so
+		// there is no second evaluator here.
+		if raw, ok := s.has("condition"); ok {
+			s.set("condition", decodeBinding(w, raw, path+".condition"))
+		} else {
+			fail(CodeMissingField, path+".condition", "missing required field 'condition'")
+		}
+		if raw, ok := s.has("whenTrue"); ok {
+			s.set("whenTrue", decodeAction(w, raw, path+".whenTrue"))
+		} else {
+			fail(CodeMissingField, path+".whenTrue", "missing required field 'whenTrue'")
+		}
+		if raw, ok := s.has("whenFalse"); ok {
+			s.set("whenFalse", decodeAction(w, raw, path+".whenFalse"))
+		}
+		if raw, ok := s.has("exit"); ok {
+			s.set("exit", decodeBinding(w, raw, path+".exit"))
+		}
+	case "Require":
+		// Phase 2107 — the bounded core's halting GUARD: one Binding, never defaulted.
+		if raw, ok := s.has("condition"); ok {
+			s.set("condition", decodeBinding(w, raw, path+".condition"))
+		} else {
+			fail(CodeMissingField, path+".condition", "missing required field 'condition'")
+		}
 	case "Focus":
 		// Phase 1537 — a bare node id, the `CommitLocal` shape above. It
 		// addresses a node in THIS document, so there is nothing for a binding
@@ -1836,6 +1865,13 @@ func refuseNestedConfirm(action Value, path string) {
 		}
 		for i, inner := range ops {
 			refuseNestedConfirm(inner, path+".ops["+strconv.Itoa(i)+"]")
+		}
+	case "Choose":
+		// Phase 2107 — a selection's arms are as reachable as a chain's members.
+		for _, arm := range [...]string{"whenTrue", "whenFalse"} {
+			if inner, ok := obj.Fields[arm]; ok {
+				refuseNestedConfirm(inner, path+"."+arm)
+			}
 		}
 	}
 }
