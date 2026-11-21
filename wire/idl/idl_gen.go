@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "b49eb7256c1f9ade11f0c4c26b117dc2979b71cae0c0c665f4dae312715c3ad1"
+const SourceSHA256 = "710cf74d1f084d3f0854c8d58f6cebbbbac629b97e9bfeeb379d40628b28197e"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -1030,7 +1030,7 @@ var (
 		{Name: "value", Optionality: Required, Type: Type{Kind: TStr}},
 	}}
 	RecordMapMarker = Record{Name: "MapMarker", Fields: []Field{
-		{Name: "label", Optionality: Required, Type: Type{Kind: TStr}},
+		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "latitude", Optionality: Required, Type: Type{Kind: TFloat}},
 		{Name: "longitude", Optionality: Required, Type: Type{Kind: TFloat}},
 	}}
@@ -1050,7 +1050,7 @@ var (
 		{Name: "min", Optionality: Required, Type: Type{Kind: TFloat}},
 	}}
 	RecordSelectOption = Record{Name: "SelectOption", Fields: []Field{
-		{Name: "label", Optionality: Required, Type: Type{Kind: TStr}},
+		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "value", Optionality: Required, Type: Type{Kind: TStr}},
 	}}
 	RecordSelectOptionGroup = Record{Name: "SelectOptionGroup", Fields: []Field{
