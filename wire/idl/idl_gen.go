@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "710cf74d1f084d3f0854c8d58f6cebbbbac629b97e9bfeeb379d40628b28197e"
+const SourceSHA256 = "b63cc2baad57c2036ad56bb91071b6594f35d80d47af10ff99d82a6acedfc17d"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -53,6 +53,7 @@ var (
 		{Name: "dataLabels", Optionality: Optional, Type: Type{Kind: TEnum, Name: "ChartDataLabels"}},
 		{Name: "xScale", Optionality: Optional, Type: Type{Kind: TEnum, Name: "ChartXScale"}},
 		{Name: "annotations", Optionality: Optional, Type: Type{Kind: TList, Elem: &Type{Kind: TUnion, Name: "ChartAnnotation"}}},
+		{Name: "scale", Optionality: Optional, Type: Type{Kind: TUnion, Name: "ChartScale"}},
 		{Name: "onPointClick", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 	}}
 	KindCodeBlock = Kind{Tag: "CodeBlock", Category: "Display", Fields: []Field{
@@ -634,6 +635,17 @@ var (
 			{Name: "iso", Optionality: Required, Type: Type{Kind: TStr}},
 		}},
 	}}
+	UnionChartScale = Union{Name: "ChartScale", Cases: []Case{
+		{Tag: "Sequential", Fields: []Field{
+			{Name: "min", Optionality: Optional, Type: Type{Kind: TFloat}},
+			{Name: "max", Optionality: Optional, Type: Type{Kind: TFloat}},
+		}},
+		{Tag: "Diverging", Fields: []Field{
+			{Name: "midpoint", Optionality: Optional, Type: Type{Kind: TFloat}},
+			{Name: "min", Optionality: Optional, Type: Type{Kind: TFloat}},
+			{Name: "max", Optionality: Optional, Type: Type{Kind: TFloat}},
+		}},
+	}}
 	UnionColumnWidth = Union{Name: "ColumnWidth", Cases: []Case{
 		{Tag: "Auto", Fields: []Field{}},
 		{Tag: "Fixed", Fields: []Field{
@@ -1208,7 +1220,7 @@ var Kinds = []*Kind{&KindBadge, &KindBox, &KindButton, &KindCallout, &KindChart,
 var Enums = []*Enum{&EnumBadgeVariant, &EnumBoxRole, &EnumButtonVariant, &EnumCaptureSource, &EnumChannelDirection, &EnumChartDataLabels, &EnumChartKind, &EnumChartLegendPosition, &EnumChartXScale, &EnumCompareOp, &EnumDateStyle, &EnumDateTimeVariant, &EnumDeterminismSource, &EnumDurationStyle, &EnumDurationUnit, &EnumEmbedPermission, &EnumEmphasis, &EnumFileReadEncoding, &EnumFontVoice, &EnumHashStrictness, &EnumHeadingVariant, &EnumHostEffect, &EnumIconSize, &EnumImageAspect, &EnumImageFit, &EnumImageLoading, &EnumImageVariant, &EnumLinkProtection, &EnumLiveRegionKind, &EnumMathDisplay, &EnumModalityKind, &EnumMotion, &EnumNavigateTarget, &EnumOrientation, &EnumRelativeTimeUnit, &EnumScrollOrientation, &EnumSortDirection, &EnumStyleRole, &EnumStyleWeight, &EnumTextAnchor, &EnumTextDirection, &EnumTextFormat, &EnumTimeGrain, &EnumTimeStyle, &EnumToneVariant, &EnumTrackKind, &EnumTrendPolarity}
 
 // Unions is every union row, in idl.json order.
-var Unions = []*Union{&UnionAction, &UnionBinding, &UnionBoxLayout, &UnionCallResultTarget, &UnionCellFormat, &UnionCellKindErased, &UnionChartAnnotation, &UnionChartAnnotationRange, &UnionChartAnnotationX, &UnionColumnWidth, &UnionCurveCommand, &UnionFormFieldKind, &UnionFormat, &UnionFragmentArg, &UnionHoleDecl, &UnionHoleValueSpace, &UnionLocalFlushTrigger, &UnionLocaleSource, &UnionMediaKind, &UnionScalar, &UnionShape, &UnionTextSource}
+var Unions = []*Union{&UnionAction, &UnionBinding, &UnionBoxLayout, &UnionCallResultTarget, &UnionCellFormat, &UnionCellKindErased, &UnionChartAnnotation, &UnionChartAnnotationRange, &UnionChartAnnotationX, &UnionChartScale, &UnionColumnWidth, &UnionCurveCommand, &UnionFormFieldKind, &UnionFormat, &UnionFragmentArg, &UnionHoleDecl, &UnionHoleValueSpace, &UnionLocalFlushTrigger, &UnionLocaleSource, &UnionMediaKind, &UnionScalar, &UnionShape, &UnionTextSource}
 
 // Records is every record row, in idl.json order.
 var Records = []*Record{&RecordAccessibility, &RecordAffordance, &RecordAffordanceAlias, &RecordButtonGroupItem, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordMarkdownCitation, &RecordMetricComparison, &RecordRangePair, &RecordSelectOption, &RecordSelectOptionGroup, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTableCitation, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
