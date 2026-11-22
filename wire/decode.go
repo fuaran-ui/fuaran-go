@@ -2351,7 +2351,9 @@ func decodeChartAnnotation(w *walkState, raw any, path string) Value {
 	// Every label rides the Phase 1143 text contract — carried, never resolved.
 	s.field("label", decodeTextSource)
 	switch tag {
-	case "ReferenceLine":
+	// Phase 2654 — ReferenceLineX is the same line on the continuous x axis,
+	// so the two cases share the finite-value narrowing.
+	case "ReferenceLine", "ReferenceLineX":
 		if raw, ok := s.has("value"); ok {
 			chartAnnotationFinite(w, raw, path+".value")
 			s.set("value", expectNumber(w, raw, path+".value"))
