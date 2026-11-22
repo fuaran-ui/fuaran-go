@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "b63cc2baad57c2036ad56bb91071b6594f35d80d47af10ff99d82a6acedfc17d"
+const SourceSHA256 = "e5e867dc804adc9788f1f80c00f9b3ad29403370d28dc28ee87bda98991132fa"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -54,6 +54,11 @@ var (
 		{Name: "xScale", Optionality: Optional, Type: Type{Kind: TEnum, Name: "ChartXScale"}},
 		{Name: "annotations", Optionality: Optional, Type: Type{Kind: TList, Elem: &Type{Kind: TUnion, Name: "ChartAnnotation"}}},
 		{Name: "scale", Optionality: Optional, Type: Type{Kind: TUnion, Name: "ChartScale"}},
+		{Name: "withheldField", Optionality: Optional, Type: Type{Kind: TStr}},
+		{Name: "interval", Optionality: Optional, Type: Type{Kind: TRecord, Name: "ChartInterval"}},
+		{Name: "sizeField", Optionality: Optional, Type: Type{Kind: TStr}},
+		{Name: "sortBy", Optionality: Optional, Type: Type{Kind: TRecord, Name: "ChartSort"}},
+		{Name: "pathField", Optionality: Optional, Type: Type{Kind: TStr}},
 		{Name: "onPointClick", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 	}}
 	KindCodeBlock = Kind{Tag: "CodeBlock", Category: "Display", Fields: []Field{
@@ -616,6 +621,10 @@ var (
 			{Name: "range", Optionality: Required, Type: Type{Kind: TUnion, Name: "ChartAnnotationRange"}},
 			{Name: "label", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		}},
+		{Tag: "ReferenceLineX", Fields: []Field{
+			{Name: "value", Optionality: Required, Type: Type{Kind: TFloat}},
+			{Name: "label", Optionality: Optional, Type: Type{Kind: TUnion, Name: "TextSource"}},
+		}},
 	}}
 	UnionChartAnnotationRange = Union{Name: "ChartAnnotationRange", Cases: []Case{
 		{Tag: "ValueRange", Fields: []Field{
@@ -963,6 +972,14 @@ var (
 		{Name: "label", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 		{Name: "onClick", Optionality: Optional, Type: Type{Kind: TFn, Wire: "<closure>"}},
 	}}
+	RecordChartInterval = Record{Name: "ChartInterval", Fields: []Field{
+		{Name: "low", Optionality: Required, Type: Type{Kind: TStr}},
+		{Name: "high", Optionality: Required, Type: Type{Kind: TStr}},
+	}}
+	RecordChartSort = Record{Name: "ChartSort", Fields: []Field{
+		{Name: "field", Optionality: Required, Type: Type{Kind: TStr}},
+		{Name: "direction", Optionality: Required, Type: Type{Kind: TEnum, Name: "SortDirection"}},
+	}}
 	RecordColumnErased = Record{Name: "ColumnErased", Fields: []Field{
 		{Name: "field", Optionality: Optional, Type: Type{Kind: TStr}},
 		{Name: "sortable", Optionality: Optional, Type: Type{Kind: TBool}},
@@ -1223,7 +1240,7 @@ var Enums = []*Enum{&EnumBadgeVariant, &EnumBoxRole, &EnumButtonVariant, &EnumCa
 var Unions = []*Union{&UnionAction, &UnionBinding, &UnionBoxLayout, &UnionCallResultTarget, &UnionCellFormat, &UnionCellKindErased, &UnionChartAnnotation, &UnionChartAnnotationRange, &UnionChartAnnotationX, &UnionChartScale, &UnionColumnWidth, &UnionCurveCommand, &UnionFormFieldKind, &UnionFormat, &UnionFragmentArg, &UnionHoleDecl, &UnionHoleValueSpace, &UnionLocalFlushTrigger, &UnionLocaleSource, &UnionMediaKind, &UnionScalar, &UnionShape, &UnionTextSource}
 
 // Records is every record row, in idl.json order.
-var Records = []*Record{&RecordAccessibility, &RecordAffordance, &RecordAffordanceAlias, &RecordButtonGroupItem, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordMarkdownCitation, &RecordMetricComparison, &RecordRangePair, &RecordSelectOption, &RecordSelectOptionGroup, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTableCitation, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
+var Records = []*Record{&RecordAccessibility, &RecordAffordance, &RecordAffordanceAlias, &RecordButtonGroupItem, &RecordChartInterval, &RecordChartSort, &RecordColumnErased, &RecordCompareRule, &RecordContentHash, &RecordDateTimeRangePair, &RecordDefaultSort, &RecordDrawPoint, &RecordDrawStyle, &RecordEffectClass, &RecordFieldRule, &RecordFilterSpec, &RecordFormField, &RecordGuestChannel, &RecordInvokeArg, &RecordMapMarker, &RecordMarkdownCitation, &RecordMetricComparison, &RecordRangePair, &RecordSelectOption, &RecordSelectOptionGroup, &RecordSemanticStyle, &RecordSrcSetEntry, &RecordStateBehaviour, &RecordStaticRows, &RecordStyleDelta, &RecordSwitchCase, &RecordTabHeader, &RecordTableCitation, &RecordTrackEntry, &RecordTransformParam, &RecordTreeItem, &RecordViewBox}
 
 // Ops is every TreeOp row, in idl.json order.
 var Ops = []*Op{&OpBatch, &OpEditNode, &OpInsertChild, &OpMoveNode, &OpPatchStyle, &OpRemoveNode, &OpReorderChildren, &OpReplaceBinding, &OpReplaceRoot, &OpUpdateAccessibility, &OpUpdateProp, &OpUpdateState, &OpUpdateStyle, &OpUpdateTooltip}
