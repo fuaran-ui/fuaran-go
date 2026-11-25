@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "e5e867dc804adc9788f1f80c00f9b3ad29403370d28dc28ee87bda98991132fa"
+const SourceSHA256 = "eaad6e14392daebcec074a5d63b312977a484f2711eb88c6bf3340d26d8dbc6f"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -318,6 +318,9 @@ var (
 		{Name: "tabHeaders", Optionality: Optional, Type: Type{Kind: TList, Elem: &Type{Kind: TRecord, Name: "TabHeader"}}},
 		{Name: "tabTags", Optionality: Optional, Type: Type{Kind: TList, Elem: &Type{Kind: TStr}}},
 		{Name: "activeTag", Optionality: Optional, Type: Type{Kind: TUnion, Name: "Binding", Args: []Type{{Kind: TStr}}}},
+	}}
+	KindText = Kind{Tag: "Text", Category: "Display", Fields: []Field{
+		{Name: "text", Optionality: Required, Type: Type{Kind: TUnion, Name: "TextSource"}},
 	}}
 	KindToast = Kind{Tag: "Toast", Category: "Display", Fields: []Field{
 		{Name: "dismissable", Optionality: OmitDefault, Default: "true", Type: Type{Kind: TBool}},
@@ -1231,7 +1234,7 @@ var NodeFields = []Field{
 }
 
 // Kinds is every NodeKind row, in idl.json order.
-var Kinds = []*Kind{&KindBadge, &KindBox, &KindButton, &KindCallout, &KindChart, &KindCodeBlock, &KindCustom, &KindDataGrid, &KindDisclosure, &KindDrawing, &KindEmbed, &KindErrorBoundary, &KindFact, &KindFileUpload, &KindFilters, &KindForm, &KindFragmentDecl, &KindFragmentRef, &KindHeading, &KindIcon, &KindImage, &KindLabelValueRow, &KindLink, &KindList, &KindMap, &KindMarkdown, &KindMath, &KindMedia, &KindMetric, &KindModal, &KindMount, &KindProgress, &KindScrollArea, &KindSelect, &KindSkeleton, &KindSparkline, &KindSplitPanel, &KindStepper, &KindSummaryList, &KindSwitch, &KindTabs, &KindToast, &KindTree}
+var Kinds = []*Kind{&KindBadge, &KindBox, &KindButton, &KindCallout, &KindChart, &KindCodeBlock, &KindCustom, &KindDataGrid, &KindDisclosure, &KindDrawing, &KindEmbed, &KindErrorBoundary, &KindFact, &KindFileUpload, &KindFilters, &KindForm, &KindFragmentDecl, &KindFragmentRef, &KindHeading, &KindIcon, &KindImage, &KindLabelValueRow, &KindLink, &KindList, &KindMap, &KindMarkdown, &KindMath, &KindMedia, &KindMetric, &KindModal, &KindMount, &KindProgress, &KindScrollArea, &KindSelect, &KindSkeleton, &KindSparkline, &KindSplitPanel, &KindStepper, &KindSummaryList, &KindSwitch, &KindTabs, &KindText, &KindToast, &KindTree}
 
 // Enums is every enum row, in idl.json order.
 var Enums = []*Enum{&EnumBadgeVariant, &EnumBoxRole, &EnumButtonVariant, &EnumCaptureSource, &EnumChannelDirection, &EnumChartDataLabels, &EnumChartKind, &EnumChartLegendPosition, &EnumChartXScale, &EnumCompareOp, &EnumDateStyle, &EnumDateTimeVariant, &EnumDeterminismSource, &EnumDurationStyle, &EnumDurationUnit, &EnumEmbedPermission, &EnumEmphasis, &EnumFileReadEncoding, &EnumFontVoice, &EnumHashStrictness, &EnumHeadingVariant, &EnumHostEffect, &EnumIconSize, &EnumImageAspect, &EnumImageFit, &EnumImageLoading, &EnumImageVariant, &EnumLinkProtection, &EnumLiveRegionKind, &EnumMathDisplay, &EnumModalityKind, &EnumMotion, &EnumNavigateTarget, &EnumOrientation, &EnumRelativeTimeUnit, &EnumScrollOrientation, &EnumSortDirection, &EnumStyleRole, &EnumStyleWeight, &EnumTextAnchor, &EnumTextDirection, &EnumTextFormat, &EnumTimeGrain, &EnumTimeStyle, &EnumToneVariant, &EnumTrackKind, &EnumTrendPolarity}

@@ -522,6 +522,8 @@ func (r *renderer) renderKind(node wire.Node, semanticAttrs []attr) string {
 		return r.heading(fields)
 	case "Markdown":
 		return r.markdown(fields)
+	case "Text":
+		return r.plainText(fields)
 	case "Metric":
 		return r.metric(node, fields)
 	case "Fact":
@@ -1138,6 +1140,13 @@ func lowerEnum(v wire.Value, def string) string {
 		return strings.ToLower(string(s))
 	}
 	return strings.ToLower(def)
+}
+
+// plainText renders the Text kind (Phase 2536, WIRE_FORMAT §3.6.38): running
+// text with no parse, the resolved words escaped into one inline <span>. The
+// node wrapper carries fuaran-kind-text, so the span carries no class.
+func (r *renderer) plainText(fields map[string]wire.Value) string {
+	return textElement("span", nil, r.text(fields["text"]))
 }
 
 func (r *renderer) badge(fields map[string]wire.Value) string {

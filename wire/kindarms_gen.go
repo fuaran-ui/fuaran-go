@@ -47,6 +47,7 @@ type kindArms interface {
 	armSummaryList(w *walkState, obj map[string]any, path string) Obj
 	armSwitch(w *walkState, obj map[string]any, path string) Obj
 	armTabs(w *walkState, obj map[string]any, path string) Obj
+	armText(w *walkState, obj map[string]any, path string) Obj
 	armToast(w *walkState, obj map[string]any, path string) Obj
 	armTree(w *walkState, obj map[string]any, path string) Obj
 }
@@ -219,6 +220,10 @@ func (tableArms) armTabs(w *walkState, obj map[string]any, path string) Obj {
 	return decodeKindByTable(w, obj, path, &idl.KindTabs)
 }
 
+func (tableArms) armText(w *walkState, obj map[string]any, path string) Obj {
+	return decodeKindByTable(w, obj, path, &idl.KindText)
+}
+
 func (tableArms) armToast(w *walkState, obj map[string]any, path string) Obj {
 	return decodeKindByTable(w, obj, path, &idl.KindToast)
 }
@@ -312,6 +317,8 @@ func dispatchKindArm(a kindArms, w *walkState, tag string, obj map[string]any, p
 		return a.armSwitch(w, obj, path)
 	case "Tabs":
 		return a.armTabs(w, obj, path)
+	case "Text":
+		return a.armText(w, obj, path)
 	case "Toast":
 		return a.armToast(w, obj, path)
 	case "Tree":
