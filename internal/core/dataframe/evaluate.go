@@ -1502,12 +1502,21 @@ func cellKey(c Cell) string {
 	return "n"
 }
 
+// rowKey is the row's identity for groupBy, distinct, the set operations,
+// window partitions and pivot: each cell's key LENGTH-PREFIXED (its byte
+// length, a colon, the key), as the reference does. A bare separator is not
+// injective, because a string cell's key carries its text and that text may
+// spell the separator and another cell's tag, so two different rows would
+// share one key. Which cells are equal is cellKey's business alone.
 func rowKey(cells []Cell) string {
-	out := ""
+	var b strings.Builder
 	for _, c := range cells {
-		out += cellKey(c) + "\x01"
+		k := cellKey(c)
+		b.WriteString(strconv.Itoa(len(k)))
+		b.WriteByte(':')
+		b.WriteString(k)
 	}
-	return out
+	return b.String()
 }
 
 // ── the unit check (Phase 2208, the reference's Phase 429 / D29) ─────────────
