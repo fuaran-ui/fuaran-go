@@ -236,16 +236,21 @@ func checkProgressFraction(kind wire.Obj, path string, findings *[]Finding) {
 
 // childSlots is every position node holds another node in (ops.ReachKeyed,
 // the surface id uniqueness quantifies over), in wire-document order: the
-// kind's positions first, then the envelope's by member name (fallback,
-// state.onEmpty, state.onLoading), so the reported order is deterministic and
-// a finding's $-rooted path names where the node sits.
+// node object's members in their canonical (Ordinal) order, so the envelope
+// `fallback` comes before the kind's positions and `state.onEmpty`,
+// `state.onLoading` after them, with the kind's positions in ops.Slots' order.
+// The walk is pre-order over this, so "the first occurrence" of a repeated id
+// is the first in the document (WIRE_FORMAT 27.8.2), and a finding's $-rooted
+// path names where the node sits.
 func childSlots(node wire.Node) []ops.Slot {
 	slots := ops.Slots(node, ops.ReachKeyed)
 	sort.SliceStable(slots, func(i, j int) bool {
 		pi, pj := slots[i].Path(), slots[j].Path()
-		ki, kj := pi[0] == "kind", pj[0] == "kind"
-		if ki || kj {
-			return ki && !kj
+		if pi[0] != pj[0] {
+			return pi[0] < pj[0]
+		}
+		if pi[0] == "kind" {
+			return false
 		}
 		return strings.Join(pi, ".") < strings.Join(pj, ".")
 	})
