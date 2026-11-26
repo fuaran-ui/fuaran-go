@@ -35,6 +35,7 @@ const (
 	teleportUnrun     = "the teleport package is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures"
 	lawUnrun          = "this host's suite does not yet run this law family's vectors"
 	noDesignSeamCodec = "this host has no codec for the design-provider seam's records for the design/ fixtures to run against yet"
+	uiVocabularyOnly  = "this host's codec is generated for the UI vocabulary alone and reads no other, so its suite does not run these vectors over the fixture vocabulary they carry; the UI vocabulary declares no presence condition or alias list until Phase 2340 (WIRE_FORMAT 3.6)"
 	hostedOpaque      = "this host's generated type model carries each hosted slot opaquely, so it holds no enumeration of the discriminators inside one (§27.5) and this host makes no claim in this family"
 )
 
@@ -78,6 +79,7 @@ var hostCorpusFamilies = map[string]any{
 	"sanitization":              "covered",
 	"row-encode":                "covered",
 	"laws/dataframeParity":      "covered",
+	"laws/canonicalFormLaws":    familyPending(uiVocabularyOnly),
 	"laws/capabilityLaws":       "covered",
 	"laws/decimal":              "covered",
 	"laws/fieldLaws":            "covered",
@@ -91,6 +93,7 @@ var hostCorpusFamilies = map[string]any{
 	"lowers-to":                 familyNotApplicable("this host carries no bounded program core for actions to lower onto (§30)"),
 	"repair":                    familyPending("this host has no §28 repair function yet"),
 	"stored-emissions":          familyPending("this host's suite does not yet run the stored-emission fixtures"),
+	"validate":                  "covered", // conformance/validate_test.go
 }
 
 // corpusFamilies derives the corpus family set from the corpus tree (§27.7):
