@@ -1457,8 +1457,9 @@ func decodeTransformParams(w *walkState, raw any, path string) Arr {
 		s := newRecordSpec(w, expectObject(item, p), p, &idl.RecordTransformParam)
 		s.field("name", decodeString)
 		if raw, ok := s.has("from", "value"); ok {
-			name, _ := s.fields["name"].(Str)
-			s.set("from", decodeBinding(w, raw, path+"."+string(name)+".from"))
+			// The entry's own index, never its name (WIRE_FORMAT 29.3): a defect
+			// inside the binding is at `params[i].from`.
+			s.set("from", decodeBinding(w, raw, p+".from"))
 		}
 		out[i] = s.buildStrict("")
 	}

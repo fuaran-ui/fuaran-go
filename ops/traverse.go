@@ -138,6 +138,29 @@ func (s Slot) Path() []string {
 	return []string{"kind", l.field}
 }
 
+// JSONPath is the slot's location under its node in the WIRE_FORMAT section
+// 29.3 path grammar, as a suffix to the holding node's path: a member is
+// `.name` and an element is `[i]` — `.kind.children[0]`, `.state.onLoading`,
+// `.fallback`, `.kind.cases[0].child`, `.kind.args.header.tree`.
+func (s Slot) JSONPath() string {
+	l := s.loc
+	switch {
+	case l.envelope && l.inner != "":
+		return "." + l.field + "." + l.inner
+	case l.envelope:
+		return "." + l.field
+	}
+	switch l.shape {
+	case idl.SlotList:
+		return ".kind." + l.field + "[" + strconv.Itoa(l.index) + "]"
+	case idl.SlotRecords:
+		return ".kind." + l.field + "[" + strconv.Itoa(l.index) + "]." + l.inner
+	case idl.SlotArgs:
+		return ".kind." + l.field + "." + l.key + "." + l.inner
+	}
+	return ".kind." + l.field
+}
+
 // each visits every position n holds a node in within reach, in the canonical
 // order: the ordered list, then the envelope (state.onLoading, state.onEmpty,
 // fallback), then the kind's other slots in table order (Switch cases in case

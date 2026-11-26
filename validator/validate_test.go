@@ -425,9 +425,9 @@ func TestFilterEdgeCorpusPairs(t *testing.T) {
 		arm, control, negative, reader, path string
 	}{
 		{"dependsOn", "filters-dependson-declared.json", "filters-dependson-undeclared.json",
-			"scoped-metric", "$.kind.children.1.kind.value.dependsOn.1"},
+			"scoped-metric", "$.kind.children[1].kind.value.dependsOn[1]"},
 		{"param source", "filters-param-source-declared.json", "filters-param-source-undeclared.json",
-			"scoped-grid", "$.kind.children.1.kind.source.params.1.from"},
+			"scoped-grid", "$.kind.children[1].kind.source.params[1].from"},
 	} {
 		t.Run(pair.arm, func(t *testing.T) {
 			// The control is decided exactly as the reference decides it: nothing
@@ -483,8 +483,8 @@ func TestFilterEdgeExemptsTheGridsOwnPageAndWindowKey(t *testing.T) {
 		t.Fatalf("dangling %v; want [orders-grid→region] (findings %v)", got, findings)
 	}
 	for _, f := range findings {
-		if f.Code == "FUARAN075" && f.Path != "$.kind.source.dependsOn.2" {
-			t.Errorf("path = %q; want $.kind.source.dependsOn.2", f.Path)
+		if f.Code == "FUARAN075" && f.Path != "$.kind.source.dependsOn[2]" {
+			t.Errorf("path = %q; want $.kind.source.dependsOn[2]", f.Path)
 		}
 	}
 }
@@ -517,15 +517,15 @@ func TestFilterEdgeFiresOnlyWhereTheReferenceFamilyDoes(t *testing.T) {
 		}
 	}
 	want := []string{
-		"expr-params-state-selection.json $.kind.children.3.kind.text.binding.params.1.from",
-		"filters-dependson-undeclared.json $.kind.children.1.kind.value.dependsOn.1",
-		"filters-param-source-undeclared.json $.kind.children.1.kind.source.params.1.from",
-		"form-combobox-query.json $.kind.fields.0.kind.options.dependsOn.0",
-		"form-tokens-query.json $.kind.fields.0.kind.suggestions.dependsOn.0",
-		"grid-transform-param.json $.kind.source.params.0.from",
-		"multiselect-chip-list-param.json $.kind.children.1.kind.source.params.0.from",
-		"query-dependson.json $.kind.value.dependsOn.0",
-		"query-dependson.json $.kind.value.dependsOn.1",
+		"expr-params-state-selection.json $.kind.children[3].kind.text.binding.params[1].from",
+		"filters-dependson-undeclared.json $.kind.children[1].kind.value.dependsOn[1]",
+		"filters-param-source-undeclared.json $.kind.children[1].kind.source.params[1].from",
+		"form-combobox-query.json $.kind.fields[0].kind.options.dependsOn[0]",
+		"form-tokens-query.json $.kind.fields[0].kind.suggestions.dependsOn[0]",
+		"grid-transform-param.json $.kind.source.params[0].from",
+		"multiselect-chip-list-param.json $.kind.children[1].kind.source.params[0].from",
+		"query-dependson.json $.kind.value.dependsOn[0]",
+		"query-dependson.json $.kind.value.dependsOn[1]",
 	}
 	if strings.Join(fired, "\n") != strings.Join(want, "\n") {
 		t.Errorf("FUARAN075 fired on:\n  %s\nwant exactly:\n  %s",

@@ -12,9 +12,9 @@ func TestDuplicateIDInTheEnvelopeFallbackIsFlagged(t *testing.T) {
 		`{"fallback":{"id":"dup","kind":{"$type":"Markdown","text":"f"}},"id":"y","kind":{"$type":"Markdown","text":"y"}}`+
 		`],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}`)
 	for _, f := range ValidateNode(root) {
-		if f.Code == "FUARAN-DUP-ID" && f.Path == "$.kind.children.1.fallback.id" {
+		if f.Code == "FUARAN-DUP-ID" && f.Path == "$.kind.children[1].fallback.id" {
 			return
 		}
 	}
-	t.Errorf("expected FUARAN-DUP-ID at $.kind.children.1.fallback.id; findings %+v", ValidateNode(root))
+	t.Errorf("expected FUARAN-DUP-ID at $.kind.children[1].fallback.id; findings %+v", ValidateNode(root))
 }

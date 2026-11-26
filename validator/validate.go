@@ -120,7 +120,7 @@ func walk(node wire.Node, path string, findings *[]Finding, seen map[string]bool
 	checkFieldRules(node, node.Kind, kindPath, findings)
 
 	for _, slot := range childSlots(node) {
-		walk(slot.Node, path+"."+strings.Join(slot.Path(), "."), findings, seen)
+		walk(slot.Node, path+slot.JSONPath(), findings, seen)
 	}
 }
 
@@ -582,14 +582,14 @@ func filterEdgeUses(value wire.Value, reader, path string, out *[]filterEdge) {
 		}
 	case wire.Arr:
 		for i, item := range t {
-			filterEdgeUses(item, reader, path+"."+strconv.Itoa(i), out)
+			filterEdgeUses(item, reader, path+"["+strconv.Itoa(i)+"]", out)
 		}
 	case wire.Obj:
 		if t.Tag == "Query" {
 			if dependsOn, ok := t.Fields["dependsOn"].(wire.Arr); ok {
 				for i, entry := range dependsOn {
 					if name, ok := entry.(wire.Str); ok {
-						*out = append(*out, filterEdge{reader, string(name), path + ".dependsOn." + strconv.Itoa(i), true})
+						*out = append(*out, filterEdge{reader, string(name), path + ".dependsOn[" + strconv.Itoa(i) + "]", true})
 					}
 				}
 			}
@@ -605,7 +605,7 @@ func filterEdgeUses(value wire.Value, reader, path string, out *[]filterEdge) {
 					// `Filter` binding elsewhere is an ordinary value read.
 					if source, ok := p.Fields["from"].(wire.Obj); ok && source.Tag == "Filter" {
 						if name, ok := source.Fields["name"].(wire.Str); ok {
-							*out = append(*out, filterEdge{reader, string(name), path + ".params." + strconv.Itoa(i) + ".from", false})
+							*out = append(*out, filterEdge{reader, string(name), path + ".params[" + strconv.Itoa(i) + "].from", false})
 						}
 					}
 				}
