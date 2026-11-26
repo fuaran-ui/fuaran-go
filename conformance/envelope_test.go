@@ -46,7 +46,7 @@ func TestEnvelopeCorpus(t *testing.T) {
 				if wantPath == "" {
 					wantPath = "$"
 				}
-				if len(derr.Path) < len(wantPath) || derr.Path[:len(wantPath)] != wantPath {
+				if !pathExtends(derr.Path, wantPath) {
 					t.Errorf("path = %q, want prefix %q", derr.Path, wantPath)
 				}
 			})

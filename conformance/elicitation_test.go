@@ -2,7 +2,6 @@ package conformance
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/fuaran-ui/fuaran-go/elicitation"
@@ -58,7 +57,7 @@ func assertRejectCode(t *testing.T, err error, wantCode, wantPath string) {
 	if wantPath == "" {
 		wantPath = "$"
 	}
-	if !strings.HasPrefix(derr.Path, wantPath) {
+	if !pathExtends(derr.Path, wantPath) {
 		t.Errorf("path = %q, want prefix %q", derr.Path, wantPath)
 	}
 }

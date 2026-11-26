@@ -171,8 +171,38 @@ func TestLenientAccept(t *testing.T) {
 	}
 }
 
+// pathExtends reports whether path extends expected at a SEGMENT boundary (WIRE_FORMAT §6):
+// the whole path, or the path followed by `.` or `[`, so `$.kind.map.40` never accepts
+// `$.kind.map.404` and `$.kind.items` never accepts `$.kind.itemsX`.
+func pathExtends(path, expected string) bool {
+	if path == expected {
+		return true
+	}
+	rest, ok := strings.CutPrefix(path, expected)
+	return ok && (strings.HasPrefix(rest, ".") || strings.HasPrefix(rest, "["))
+}
+
+func TestPathExtendsMatchesOnlyWholeSegments(t *testing.T) {
+	for _, c := range []struct {
+		path, expected string
+		want           bool
+	}{
+		{"$.kind.map.404", "$.kind.map.404", true},
+		{"$.kind.map.404.tone", "$.kind.map.404", true},
+		{"$.kind.items[0]", "$.kind.items", true},
+		{"$.kind", "$", true},
+		{"$.kind.map.404", "$.kind.map.40", false},
+		{"$.kind.itemsX", "$.kind.items", false},
+		{"$.kind", "$.kind.map", false},
+	} {
+		if got := pathExtends(c.path, c.expected); got != c.want {
+			t.Errorf("pathExtends(%q, %q) = %v, want %v", c.path, c.expected, got, c.want)
+		}
+	}
+}
+
 // TestReject runs every reject fixture: decode must fail with the manifest's
-// expectedErrorCode and a path starting with expectedPath.
+// expectedErrorCode and a path extending expectedPath at a segment boundary.
 func TestReject(t *testing.T) {
 	corpus, m := loadCorpus(t)
 	ran := 0
@@ -198,7 +228,7 @@ func TestReject(t *testing.T) {
 			if wantPath == "" {
 				wantPath = "$"
 			}
-			if !strings.HasPrefix(derr.Path, wantPath) {
+			if !pathExtends(derr.Path, wantPath) {
 				t.Errorf("path = %q, want prefix %q", derr.Path, wantPath)
 			}
 		})
