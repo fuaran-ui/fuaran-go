@@ -714,3 +714,44 @@ before:
 
 The island walk, the diff and the merge footprint already read the reference's reaches and are
 unchanged. It rides the current unreleased version.
+
+## Pre-emit findings and decode paths — Phase 2381
+
+The corpus gained a `validate` family (WIRE_FORMAT.md §27.8.2) and §29.3 settled how a path names
+an array element, and this host moved with both. Each move below is visible to a consumer that
+matches a finding's or a refusal's path, count or severity:
+
+- **An array element is `[i]`, in every validator path.** A finding under a list spells the index
+  bracketed — `$.kind.children[1]`, `$.kind.fields[0].rule`, `….dependsOn[2]`, `….params[0].from` —
+  where it was dotted (`children.1`, `fields.0.rule`). A dotted segment is a member name or a map
+  key, written as the key stands (`$.accessibility.aria-hidden`, `….map.On time`, `….map.404`).
+- **A defect inside an array-form `params` entry is at `params[i].from…`** (the decoder), where it
+  was `params.<name>.from…`: the entry's index is its only name in a path. The map shorthand of
+  `params` keeps the spelling it had.
+- **The validator walks a node's positions in document order**: the envelope `fallback` before the
+  kind, the kind's positions in their table order, then `state.onEmpty` and `state.onLoading`. "The
+  first occurrence" of a repeated thing is the first in that order, so an id held by a node's
+  `fallback` and by its child is now reported at the child.
+- **A repeated thing is one finding at each occurrence after the first, located there.** A repeated
+  id is one `FUARAN-DUP-ID` at each later node holding it (unchanged, and now pinned by the corpus).
+  A repeated `Switch` match value is one `FUARAN082` at each later case that repeats it, at that
+  case's `cases[i].match`, where it was one finding per repeated value at `….cases`: `x, x, x` is
+  two findings.
+- **`FUARAN083` (an empty `stateKey`) is a Warning**, as the defect vocabulary fixes it, where this
+  host reported an Error. A switch on an empty key renders its default: a stuck page, not a
+  refused one.
+
+**What the `validate` leg compares, and what it does not.** The capability manifest declares the
+family `covered`, and §27.7 gives that answer no qualifier, so the limit is stated here.
+`conformance/validate_test.go` compares each finding's code, severity, node and node path with the
+vector's: a finding of this host carries no node id, so its node is the deepest node object its
+path passes through, and that path must address the document in the §29.3 grammar. It does **not**
+compare:
+
+- a code outside `validator-coverage.json`'s `implemented` set — those rows of a vector, and any
+  such finding of this host, are left out on both sides, as §27.8.2 says;
+- the part of a finding's path below its node (`.stateKey`, `.cases[2].match`): a vector states
+  the node's path only;
+- the message, which is diagnostic prose per host.
+
+It rides the current unreleased version.
