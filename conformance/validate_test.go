@@ -7,11 +7,13 @@ package conformance
 // validator-coverage.json declares implemented, are exactly the vector's
 // defects restricted to the same codes.
 //
-// A finding of this host carries a $-rooted path and no node id, so each one
-// is compared by CODE, NODE and PATH: its path must be a §29.3 path, and the
-// deepest node object it passes through must be the stated node at the stated
-// path, so a finding below the node (its stateKey, its id) is located at that
-// node and never at another one under it.
+// A finding of this host carries a code, a severity and a $-rooted path, and
+// no node id, so each one is compared by CODE, SEVERITY, NODE and PATH: its
+// path must address the document in the §29.3 grammar, and the deepest node
+// object it passes through must be the stated node at the stated path, so a
+// finding below the node (its stateKey, its id) is located at that node and
+// never at another one under it. What the leg does NOT compare is stated in
+// README.md ("Pre-emit findings and decode paths — Phase 2381").
 
 import (
 	"encoding/json"
@@ -32,14 +34,19 @@ type validateVector struct {
 	ID       string `json:"id"`
 	Tree     string `json:"tree"`
 	Expected []struct {
-		Code string  `json:"code"`
-		Node *string `json:"node"`
-		Path string  `json:"path"`
+		Code     string  `json:"code"`
+		Severity string  `json:"severity"`
+		Node     *string `json:"node"`
+		Path     string  `json:"path"`
 	} `json:"expected"`
 }
 
-// pathSegment is one §29.3 segment: `.name`, `['…']`, or `[i]`.
-var pathSegment = regexp.MustCompile(`^(?:\.([A-Za-z_$][A-Za-z0-9_$]*)|\['((?:[^'\\]|\\.)*)'\]|\[([0-9]+)\])`)
+// pathSegment is one §29.3 segment: `[digits]` (an index), or a name — `.`
+// and then everything up to the next `.` or `[`, however the key is spelled
+// (`.aria-hidden`, `.On time`, `.404`). There is no quoted form: a bracketed
+// run that is not all digits reads as a name, bracket included, and so names
+// no member of the document.
+var pathSegment = regexp.MustCompile(`^(?:\[([0-9]+)\]|\.([^.\[]*)|(\[[^.\[]*))`)
 
 func isNodeObject(v any) bool {
 	m, ok := v.(map[string]any)
@@ -52,7 +59,10 @@ func isNodeObject(v any) bool {
 }
 
 // locatedNode is the path of the deepest node object path passes through, and
-// that node's id; an error when path is not a §29.3 path.
+// that node's id; an error when path is not a §29.3 path, or when a segment
+// other than the last names nothing in the document (a name on an array, an
+// index on an object, a member the object does not hold). The last segment may
+// name an absent member: a missing field is reported where it belongs.
 func locatedNode(tree any, path string) (string, string, error) {
 	if len(path) == 0 || path[0] != '$' {
 		return "", "", fmt.Errorf("%q is not $-rooted", path)
@@ -70,28 +80,27 @@ func locatedNode(tree any, path string) (string, string, error) {
 		}
 		step := rest[:m[1]]
 		switch {
-		case m[6] >= 0:
-			i, _ := strconv.Atoi(rest[m[6]:m[7]])
+		case m[2] >= 0:
+			i, _ := strconv.Atoi(rest[m[2]:m[3]])
 			if arr, ok := at.([]any); ok && i < len(arr) {
 				at = arr[i]
 			} else {
 				at = nil
 			}
-		default:
-			key := ""
-			if m[2] >= 0 {
-				key = rest[m[2]:m[3]]
-			} else {
-				key = rest[m[4]:m[5]]
-			}
+		case m[4] >= 0:
 			if obj, ok := at.(map[string]any); ok {
-				at = obj[key]
+				at = obj[rest[m[4]:m[5]]]
 			} else {
 				at = nil
 			}
+		default:
+			at = nil
 		}
 		consumed, rest = consumed+step, rest[m[1]:]
 		if at == nil {
+			if rest != "" {
+				return "", "", fmt.Errorf("%q names nothing in the document at %q", path, consumed)
+			}
 			break
 		}
 		if isNodeObject(at) {
@@ -154,7 +163,7 @@ func TestValidateCorpus(t *testing.T) {
 					if d.Node != nil {
 						id = *d.Node
 					}
-					want = append(want, d.Code+" "+id+" "+d.Path)
+					want = append(want, d.Code+" "+d.Severity+" "+id+" "+d.Path)
 				}
 			}
 			for _, f := range validator.ValidateNode(node) {
@@ -165,7 +174,7 @@ func TestValidateCorpus(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s: %v", f.Code, err)
 				}
-				got = append(got, f.Code+" "+id+" "+nodePath)
+				got = append(got, f.Code+" "+string(f.Severity)+" "+id+" "+nodePath)
 			}
 			sort.Strings(want)
 			sort.Strings(got)
@@ -176,18 +185,42 @@ func TestValidateCorpus(t *testing.T) {
 	}
 }
 
-// The leg's own falsifier: the spelling this host wrote before Phase 2381 is
-// not a §29.3 path, and the bracketed one names the node it sits under.
-func TestValidateLegRefusesADottedIndex(t *testing.T) {
+// The leg's own falsifiers. The spelling this host wrote before Phase 2381
+// (`children.0`) names a member an array does not have, and the quoted segment
+// §29.3 withdrew names a member no object has; the bracketed index names the
+// node it sits under, and a member is written as its key stands, digits and
+// punctuation included (§6, §29.3).
+func TestValidateLegReadsTheSection29Grammar(t *testing.T) {
 	var tree any
-	if err := json.Unmarshal([]byte(`{"id":"r","kind":{"$type":"Box","children":[{"id":"a","kind":{"$type":"Box"}}]}}`), &tree); err != nil {
+	doc := `{"id":"r","accessibility":{"aria-hidden":true},"kind":{"$type":"Box","children":[` +
+		`{"id":"a","kind":{"$type":"Box"}},` +
+		`{"id":"f","kind":{"$type":"FragmentRef","args":{"my-slot":{"tree":{"id":"s","kind":{"$type":"Box"}}},` +
+		`"404":{"tree":{"id":"n","kind":{"$type":"Box"}}}}}},` +
+		`{"id":"m","kind":{"$type":"TonedPill","map":{"On time":"Good"}}}]}}`
+	if err := json.Unmarshal([]byte(doc), &tree); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := locatedNode(tree, "$.kind.children.0.kind.stateKey"); err == nil {
-		t.Fatal("a dotted index was read as a section 29.3 path")
+	for _, refused := range []string{
+		"$.kind.children.0.kind.stateKey",
+		"$.kind.children[1].kind.args['my-slot'].tree.kind",
+		"$.kind[0].id",
+		"kind",
+	} {
+		if p, id, err := locatedNode(tree, refused); err == nil {
+			t.Errorf("%q was read as a path of the document (node %q at %q)", refused, id, p)
+		}
 	}
-	p, id, err := locatedNode(tree, "$.kind.children[0].kind.stateKey")
-	if err != nil || p != "$.kind.children[0]" || id != "a" {
-		t.Fatalf("got %q %q %v", p, id, err)
+	for path, want := range map[string]string{
+		"$.kind.children[0].kind.stateKey":                 "a $.kind.children[0]",
+		"$.accessibility.aria-hidden":                      "r $",
+		"$.kind.children[1].kind.args.my-slot.tree.kind":   "s $.kind.children[1].kind.args.my-slot.tree",
+		"$.kind.children[1].kind.args.404.tree.kind.$type": "n $.kind.children[1].kind.args.404.tree",
+		"$.kind.children[2].kind.map.On time":              "m $.kind.children[2]",
+		"$.kind.children[2].kind.absentField":              "m $.kind.children[2]",
+	} {
+		p, id, err := locatedNode(tree, path)
+		if err != nil || id+" "+p != want {
+			t.Errorf("%q: got %q %q %v, want %s", path, id, p, err, want)
+		}
 	}
 }

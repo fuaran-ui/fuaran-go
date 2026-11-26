@@ -126,6 +126,38 @@ func TestSwitchDuplicateMatchAndEmptyStateKey(t *testing.T) {
 	}
 }
 
+// A repeated match value is one FUARAN082 at each case after the first that
+// repeats it, located at that case (WIRE_FORMAT 27.8.2): `x, x, x` is two
+// findings, never one per value.
+func TestSwitchRepeatedMatchIsOneFindingPerLaterCase(t *testing.T) {
+	md := func(id string) string {
+		return `{"id":"` + id + `","kind":{"$type":"Markdown","text":"t"}}`
+	}
+	arm := func(id, match string) string { return `{"child":` + md(id) + `,"match":"` + match + `"}` }
+	tree := mustDecode(t, `{"id":"sw","kind":{"$type":"Switch","cases":[`+arm("a", "x")+`,`+arm("b", "x")+`,`+
+		arm("c", "y")+`,`+arm("e", "x")+`,`+arm("f", "y")+`],"default":`+md("d")+`,"stateKey":"k"}}`)
+	var got []string
+	for _, f := range ValidateNode(tree) {
+		if f.Code == "FUARAN082" {
+			got = append(got, f.Path+" "+string(f.Severity))
+		}
+	}
+	want := []string{"$.kind.cases[1].match Error", "$.kind.cases[3].match Error", "$.kind.cases[4].match Error"}
+	if strings.Join(got, "; ") != strings.Join(want, "; ") {
+		t.Errorf("FUARAN082 findings %v, want %v", got, want)
+	}
+}
+
+// FUARAN083 is a Warning, as the vocabulary fixes it: a switch on an empty
+// state key renders its default, which is a stuck page, not a refused one.
+func TestSwitchEmptyStateKeyIsAWarning(t *testing.T) {
+	tree := mustDecode(t, `{"id":"sw","kind":{"$type":"Switch","cases":[],"default":{"id":"d","kind":{"$type":"Markdown","text":"t"}},"stateKey":""}}`)
+	findings := ValidateNode(tree)
+	if len(findings) != 1 || findings[0].Code != "FUARAN083" || findings[0].Severity != SeverityWarning {
+		t.Errorf("expected one FUARAN083 Warning, got %v", findings)
+	}
+}
+
 func TestProgressFractionOutOfDomainIsAdvisory(t *testing.T) {
 	tree := mustDecode(t, `{"id":"p","kind":{"$type":"Progress","fraction":{"$type":"Static","value":61},"indeterminate":false,"tone":"Default"}}`)
 	findings := ValidateNode(tree)

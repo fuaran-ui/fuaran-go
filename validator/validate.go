@@ -143,7 +143,9 @@ func checkSwitch(kind wire.Obj, path string, findings *[]Finding) {
 			Code: "FUARAN083", Path: path + ".stateKey",
 			Message: "switch has an empty stateKey — it can never resolve a case and is stuck on its " +
 				"default; name the state key the switch selects on",
-			Severity: SeverityError,
+			// A Warning, as the vocabulary fixes it: the switch renders its
+			// default, so the page is stuck rather than refused.
+			Severity: SeverityWarning,
 		})
 	}
 	cases, ok := kind.Fields["cases"].(wire.Arr)
@@ -151,7 +153,6 @@ func checkSwitch(kind wire.Obj, path string, findings *[]Finding) {
 		return
 	}
 	seen := make(map[string]bool)
-	reported := make(map[string]bool)
 	for index, item := range cases {
 		caseObj, ok := item.(wire.Obj)
 		if !ok {
@@ -190,15 +191,17 @@ func checkSwitch(kind wire.Obj, path string, findings *[]Finding) {
 		if !ok {
 			continue
 		}
-		if seen[string(match)] && !reported[string(match)] {
+		// One finding at EACH case after the first that repeats the value,
+		// located at that case (WIRE_FORMAT 27.8.2): each is a dead case.
+		if seen[string(match)] {
 			*findings = append(*findings, Finding{
-				Code: "FUARAN082", Path: path + ".cases",
+				Code: "FUARAN082", Path: fmt.Sprintf("%s.cases[%d].match", path, index),
 				Message: fmt.Sprintf(
-					"switch has two or more cases matching '%s' — first-match-wins makes the later "+
-						"case dead; give each case a distinct match value", string(match)),
+					"switch case %d matches '%s', which an earlier case already matches — "+
+						"first-match-wins makes this case dead; give each case a distinct match value",
+					index, string(match)),
 				Severity: SeverityError,
 			})
-			reported[string(match)] = true
 		}
 		seen[string(match)] = true
 	}
