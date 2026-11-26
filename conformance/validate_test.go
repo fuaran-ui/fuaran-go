@@ -10,7 +10,7 @@ package conformance
 // A finding of this host carries a code, a severity and a $-rooted path, and
 // no node id, so each one is compared by CODE, SEVERITY, NODE and PATH: its
 // path must address the document in the §29.3 grammar, and the deepest node
-// object it passes through must be the stated node at the stated path, so a
+// it passes through must be the stated node at the stated path, so a
 // finding below the node (its stateKey, its id) is located at that node and
 // never at another one under it. What the leg does NOT compare is stated in
 // README.md ("Pre-emit findings and decode paths — Phase 2381").
@@ -48,17 +48,65 @@ type validateVector struct {
 // no member of the document.
 var pathSegment = regexp.MustCompile(`^(?:\[([0-9]+)\]|\.([^.\[]*)|(\[[^.\[]*))`)
 
-func isNodeObject(v any) bool {
-	m, ok := v.(map[string]any)
-	if !ok {
-		return false
+// nodePositions is every node of the document, path to id: an object at a
+// position the vocabulary (idl.json) declares to hold a node — the root; a
+// node's envelope `fallback` and its `state.onEmpty` / `state.onLoading`; and,
+// in its kind, `children[i]`, `cases[i].child`, `child`, `fallback`, `body`,
+// `default` and a slot argument's `args.<name>.tree` / `inputs.<name>.tree`.
+// An object elsewhere that happens to carry a string `id` and an object `kind`
+// (a form field, a filter chip) is not a node.
+func nodePositions(tree any) map[string]string {
+	out := map[string]string{}
+	var node func(path string, v any)
+	node = func(path string, v any) {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return
+		}
+		if id, ok := m["id"].(string); ok {
+			out[path] = id
+		}
+		if fb, ok := m["fallback"].(map[string]any); ok {
+			node(path+".fallback", fb)
+		}
+		if kind, ok := m["kind"].(map[string]any); ok {
+			at := path + ".kind"
+			if children, ok := kind["children"].([]any); ok {
+				for i, c := range children {
+					node(fmt.Sprintf("%s.children[%d]", at, i), c)
+				}
+			}
+			if cases, ok := kind["cases"].([]any); ok {
+				for i, c := range cases {
+					if cm, ok := c.(map[string]any); ok {
+						node(fmt.Sprintf("%s.cases[%d].child", at, i), cm["child"])
+					}
+				}
+			}
+			for _, member := range []string{"child", "fallback", "body", "default"} {
+				node(at+"."+member, kind[member])
+			}
+			for _, member := range []string{"args", "inputs"} {
+				if args, ok := kind[member].(map[string]any); ok {
+					for name, a := range args {
+						if am, ok := a.(map[string]any); ok {
+							node(at+"."+member+"."+name+".tree", am["tree"])
+						}
+					}
+				}
+			}
+		}
+		if st, ok := m["state"].(map[string]any); ok {
+			for _, alt := range []string{"onEmpty", "onLoading"} {
+				node(path+".state."+alt, st[alt])
+			}
+		}
 	}
-	_, idOK := m["id"].(string)
-	_, kindOK := m["kind"].(map[string]any)
-	return idOK && kindOK
+	node("$", tree)
+	return out
 }
 
-// locatedNode is the path of the deepest node object path passes through, and
+// locatedNode is the path of the deepest node path passes through, and
 // that node's id; an error when path is not a §29.3 path, or when a segment
 // other than the last names nothing in the document (a name on an array, an
 // index on an object, a member the object does not hold). The last segment may
@@ -67,11 +115,9 @@ func locatedNode(tree any, path string) (string, string, error) {
 	if len(path) == 0 || path[0] != '$' {
 		return "", "", fmt.Errorf("%q is not $-rooted", path)
 	}
+	nodes := nodePositions(tree)
 	at := tree
-	nodePath, nodeID := "$", ""
-	if isNodeObject(tree) {
-		nodeID = tree.(map[string]any)["id"].(string)
-	}
+	nodePath, nodeID := "$", nodes["$"]
 	consumed, rest := "$", path[1:]
 	for rest != "" {
 		m := pathSegment.FindStringSubmatchIndex(rest)
@@ -103,8 +149,8 @@ func locatedNode(tree any, path string) (string, string, error) {
 			}
 			break
 		}
-		if isNodeObject(at) {
-			nodePath, nodeID = consumed, at.(map[string]any)["id"].(string)
+		if id, ok := nodes[consumed]; ok {
+			nodePath, nodeID = consumed, id
 		}
 	}
 	return nodePath, nodeID, nil
@@ -196,7 +242,8 @@ func TestValidateLegReadsTheSection29Grammar(t *testing.T) {
 		`{"id":"a","kind":{"$type":"Box"}},` +
 		`{"id":"f","kind":{"$type":"FragmentRef","args":{"my-slot":{"tree":{"id":"s","kind":{"$type":"Box"}}},` +
 		`"404":{"tree":{"id":"n","kind":{"$type":"Box"}}}}}},` +
-		`{"id":"m","kind":{"$type":"TonedPill","map":{"On time":"Good"}}}]}}`
+		`{"id":"m","kind":{"$type":"TonedPill","map":{"On time":"Good"}}},` +
+		`{"id":"form","kind":{"$type":"Form","fields":[{"id":"f","kind":{"$type":"Checkbox"},"label":"x"}]}}]}}`
 	if err := json.Unmarshal([]byte(doc), &tree); err != nil {
 		t.Fatal(err)
 	}
@@ -217,6 +264,9 @@ func TestValidateLegReadsTheSection29Grammar(t *testing.T) {
 		"$.kind.children[1].kind.args.404.tree.kind.$type": "n $.kind.children[1].kind.args.404.tree",
 		"$.kind.children[2].kind.map.On time":              "m $.kind.children[2]",
 		"$.kind.children[2].kind.absentField":              "m $.kind.children[2]",
+		// A form field carries an id and a kind and is not a node: the vocabulary
+		// declares no node position in `fields[]`.
+		"$.kind.children[3].kind.fields[0].kind.$type": "form $.kind.children[3]",
 	} {
 		p, id, err := locatedNode(tree, path)
 		if err != nil || id+" "+p != want {

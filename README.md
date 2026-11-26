@@ -744,9 +744,10 @@ matches a finding's or a refusal's path, count or severity:
 **What the `validate` leg compares, and what it does not.** The capability manifest declares the
 family `covered`, and §27.7 gives that answer no qualifier, so the limit is stated here.
 `conformance/validate_test.go` compares each finding's code, severity, node and node path with the
-vector's: a finding of this host carries no node id, so its node is the deepest node object its
-path passes through, and that path must address the document in the §29.3 grammar. It does **not**
-compare:
+vector's: a finding of this host carries no node id, so its node is the deepest node its path
+passes through, and that path must address the document in the §29.3 grammar. A node is an object
+at a position the vocabulary declares to hold one (§27.8.2); a form field carries an `id` and a
+`kind` and is not one, so a finding on a field is located at its `Form`. It does **not** compare:
 
 - a code outside `validator-coverage.json`'s `implemented` set — those rows of a vector, and any
   such finding of this host, are left out on both sides, as §27.8.2 says;
