@@ -36,6 +36,7 @@ const (
 	lawUnrun          = "this host's suite does not yet run this law family's vectors"
 	noDesignSeamCodec = "this host has no codec for the design-provider seam's records for the design/ fixtures to run against yet"
 	uiVocabularyOnly  = "this host's codec is generated for the UI vocabulary alone and reads no other, so its suite does not run these vectors over the fixture vocabulary they carry; the UI vocabulary declares no presence condition or alias list until Phase 2340 (WIRE_FORMAT 3.6)"
+	noDerivationTrace = "this host does not implement the derivation trace (WIRE_FORMAT 35) yet, so its suite does not run these vectors; its evaluator already runs transformLaws, the pipelines they are drawn from"
 	hostedOpaque      = "this host's generated type model carries each hosted slot opaquely, so it holds no enumeration of the discriminators inside one (§27.5) and this host makes no claim in this family"
 )
 
@@ -82,6 +83,7 @@ var hostCorpusFamilies = map[string]any{
 	"laws/canonicalFormLaws":    familyPending(uiVocabularyOnly),
 	"laws/capabilityLaws":       "covered",
 	"laws/decimal":              "covered",
+	"laws/derivationTraceLaws":  familyPending(noDerivationTrace),
 	"laws/fieldLaws":            "covered",
 	"laws/propagationLaws":      familyPending(lawUnrun),
 	"laws/transformLaws":        "covered",
