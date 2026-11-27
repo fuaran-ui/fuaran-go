@@ -2840,6 +2840,19 @@ func (r *renderer) dataGrid(fields map[string]wire.Value) string {
 // lowers in-host so its browser renderer reaches chart parity). Demand-gated per the
 // phase: revisit if a go SSR consumer needs in-host lowering. Pinned by
 // TestChartRequiresPreLoweredPosture in render_test.go.
+//
+// THE DATA TABLE (Phase 2804) IS A DECLARED GAP ON THIS HOST. The lowering hosts
+// offer a lowered chart's values as a "View as table" disclosure the drawing names
+// in aria-details (the reference's Phase 2776). This host offers none, for a
+// structural reason rather than a deferred one: a PRE-LOWERED chart reaches it as a
+// Drawing, which carries marks and their tip text, never the rows or the plotted
+// fields a table is made of; and a raw Chart's rows reach only this placeholder,
+// where a table would need the lowering's own value formatting (each cell is the
+// hover tip's exact readout under the chart's declared format), which a
+// require-pre-lowered host does not carry. A table drawn here would be a second,
+// partial lowering. A consumer that needs the table renders the chart on a lowering
+// host. The capability manifest has no member for renderer chrome, so the gap is
+// declared here and pinned by TestChartDataTableIsADeclaredGap.
 func (r *renderer) chart(fields map[string]wire.Value) string {
 	count := seqLen(r.source(fields["source"]))
 	titleHTML := ""
