@@ -56,6 +56,9 @@
     "devtools-relay": {
       "notApplicable": "this host ships no devtools relay endpoint"
     },
+    "diff/keptMember": {
+      "pending": "the structural diff has no kept members to compare until this host keeps them (WIRE_FORMAT 15.8)"
+    },
     "diff/treeDiff": "covered",
     "elicitation-answer-accept": "covered",
     "elicitation-answer-reject": "covered",
@@ -69,6 +72,9 @@
     "grid-edit": "covered",
     "grid-window-writer": {
       "notApplicable": "this host renders a grid as static HTML and has no grid viewport, so nothing it runs measures a viewport or writes a window descriptor"
+    },
+    "kept-member": {
+      "pending": "the codec drops an undeclared member on re-encode; keeping it (WIRE_FORMAT 15.8, the ruling of 2026-11-28) is this host's own adoption, not yet made"
     },
     "laws/canonicalFormLaws": {
       "pending": "this host's codec is generated for the UI vocabulary alone and reads no other, so its suite does not run these vectors over the fixture vocabulary they carry; the UI vocabulary declares no presence condition or alias list until Phase 2340 (WIRE_FORMAT 3.6)"

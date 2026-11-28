@@ -64,6 +64,7 @@ var hostCorpusFamilies = map[string]any{
 	"teleport-reject":           familyPending(teleportUnrun),
 	"design-seam-round-trip":    familyPending(noDesignSeamCodec),
 	"design-seam-reject":        familyPending(noDesignSeamCodec),
+	"kept-member":               familyPending("the codec drops an undeclared member on re-encode; keeping it (WIRE_FORMAT 15.8, the ruling of 2026-11-28) is this host's own adoption, not yet made"),
 	"operability":               familyPending("the operability family (WIRE_FORMAT section 31: affordances, derivation, resolution) lands with fuaran#2517; this host decodes the affordance member leniently and does not yet run the family"),
 	"page-document":             familyNotApplicable("this host renders no stored page"),
 	"server-driven":             familyNotApplicable("this host neither produces nor applies a server-driven frame (WIRE_FORMAT section 33); only the reference host does today"),
@@ -87,6 +88,7 @@ var hostCorpusFamilies = map[string]any{
 	"laws/fieldLaws":            "covered",
 	"laws/propagationLaws":      familyPending(lawUnrun),
 	"laws/transformLaws":        "covered",
+	"diff/keptMember":           familyPending("the structural diff has no kept members to compare until this host keeps them (WIRE_FORMAT 15.8)"),
 	"diff/treeDiff":             "covered",
 	"grid-edit":                 "covered", // conformance/grid_edit_test.go
 	"grid-window-writer":        familyNotApplicable("this host renders a grid as static HTML and has no grid viewport, so nothing it runs measures a viewport or writes a window descriptor"),

@@ -3,7 +3,7 @@
 package idl
 
 // SourceSHA256 is the SHA-256 of the idl.json bytes this file was generated from.
-const SourceSHA256 = "eaad6e14392daebcec074a5d63b312977a484f2711eb88c6bf3340d26d8dbc6f"
+const SourceSHA256 = "845dd130d6ae7cbcbea4126d4db697ebba4864f4467ab18feaa303a2362fd7a3"
 
 // SourceVersion is the idl.json format version.
 const SourceVersion = 1
@@ -1226,6 +1226,7 @@ var NodeFields = []Field{
 	{Name: "accessibility", Optionality: Optional, Type: Type{Kind: TRecord, Name: "Accessibility"}},
 	{Name: "extraAttributes", Optionality: HostOnly, Type: Type{Kind: TFn, Wire: "<closure>"}},
 	{Name: "fallback", Optionality: Optional, Type: Type{Kind: TNode}},
+	{Name: "keptMembers", Optionality: HostOnly, Type: Type{Kind: TFn, Wire: "<closure>"}},
 	{Name: "motion", Optionality: HostOnly, Type: Type{Kind: TFn, Wire: "<closure>"}},
 	{Name: "state", Optionality: Optional, Type: Type{Kind: TRecord, Name: "StateBehaviour"}},
 	{Name: "style", Optionality: Optional, Type: Type{Kind: TRecord, Name: "SemanticStyle"}},
